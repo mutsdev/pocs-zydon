@@ -9,6 +9,7 @@ const path = require('path');
 const COMMIT = '__COMMIT__';
 const DRIVER_PY = __DRIVER__;
 const SELECAO_PY = __SELECAO__;
+const FAIXAS_JSON = __FAIXAS__;
 const RAIZ = '/tmp/zydon-pocs';
 const REPO = `${RAIZ}/repo-${COMMIT}`;
 const TRABALHO = `${RAIZ}/trabalho`;
@@ -42,6 +43,7 @@ raiz.rename(destino)
   fs.mkdirSync(`${RAIZ}/driver`, { recursive: true });
   fs.writeFileSync(`${RAIZ}/driver/driver.py`, DRIVER_PY);
   fs.writeFileSync(`${RAIZ}/driver/selecao.py`, SELECAO_PY);
+  fs.writeFileSync(`${RAIZ}/driver/faixas_preco.json`, FAIXAS_JSON);
   fs.mkdirSync(TRABALHO, { recursive: true });
 }
 
@@ -145,7 +147,7 @@ async function extrair(ev, execucao) {
   if (!['extraindo', 'falhou', 'precisa_catalogo'].includes(pedido.status)) {
     return { ok: true, ignorado: `pedido já está em ${pedido.status}` };
   }
-  await dml(`UPDATE pedidos SET status = 'extraindo', erro = NULL, commit_codigo = :c, atualizado_em = now()
+  await dml(`UPDATE pedidos SET status = 'extraindo', erro = NULL, erro_codigo = NULL, commit_codigo = :c, atualizado_em = now()
     WHERE pedido_id = :p`, { p: pedidoId, c: COMMIT });
   await marcarExecucao(pedidoId, 'extrair', execucao);
   const saida = await rodarPython('extrair', { pedido_id: pedidoId, cliente: pedido.cliente,
@@ -153,6 +155,12 @@ async function extrair(ev, execucao) {
     executivo: pedido.executivo }, registrar);
   await registrar.fim();
   if (!saida.ok) { await falhar(pedidoId, saida.erro, registrar); return saida; }
+  if (saida.sem_credito) {
+    await registrar({ etapa: 'extracao', mensagem: saida.sem_credito, nivel: 'erro' });
+    await dml(`UPDATE pedidos SET status = 'falhou', erro_codigo = 'SEM_CREDITO_IA', erro = :e, falhou_em = now(),
+      execucao_atual = NULL, atualizado_em = now() WHERE pedido_id = :p`, { p: pedidoId, e: saida.sem_credito });
+    return { ok: false, erro: 'SEM_CREDITO_IA', motivo: saida.sem_credito };
+  }
   if (saida.precisa_catalogo) {
     const custo = saida.custo || {};
     await dml(`UPDATE pedidos SET status = 'precisa_catalogo', motivo_catalogo = :m, modelo_ia = :mo,

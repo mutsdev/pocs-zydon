@@ -192,6 +192,17 @@ def montar_catalogo(entrada):
         evento("extracao", f"coleta no site falhou: {type(erro).__name__}: {erro}", "aviso")
     validos, descartes = selecao.filtrar_candidatos(candidatos)
     evento("extracao", f"{len(validos)} candidatos válidos no site, {len(descartes)} descartados")
+    if len(validos) < selecao.MAXIMO_PRODUTOS:
+        secoes, descartes_secoes = selecao.filtrar_candidatos(
+            selecao.coletar_secoes(selecao.normalizar_site(site)))
+        vistos = {v["imagem"] for v in validos} | {selecao.sem_acento(v["nome"]) for v in validos}
+        novos = [c for c in secoes if c["imagem"] not in vistos and selecao.sem_acento(c["nome"]) not in vistos]
+        if novos:
+            evento("extracao", f"páginas de seção do site: +{len(novos)} candidatos válidos")
+            validos += novos
+            descartes += descartes_secoes
+            if coleta.get("plataforma") in (None, "nenhuma"):
+                coleta["plataforma"] = "secoes"
     if len(validos) < selecao.MINIMO_PRODUTOS:
         evento("extracao", "site sem catálogo suficiente: buscando na web")
         achados, descartes_busca = selecao.filtrar_candidatos(
@@ -213,16 +224,14 @@ def montar_catalogo(entrada):
                        f"custo US$ {custo['custo_usd']:.4f}")
     segmento_modelo = str(escolha.get("segmento") or "").strip()
     try:
-        catalogo, precos, situacao, similares, regra_preco = selecao.montar_pela_selecao(
+        catalogo, precos, situacao, similares, regra_preco, descartes_modelo = selecao.montar_pela_selecao(
             coleta, validos, escolha, cliente, segmento_informado or segmento_modelo,
             entrada.get("descricao"))
     except selecao.PrecisaCatalogo as erro:
-        raise selecao.PrecisaCatalogo(str(erro), {"custo": custo, "descartes": descartes})
-    nao_produto = set()
-    for n in escolha.get("descartados_como_nao_produto") or []:
-        if isinstance(n, int) and 0 <= n < len(validos):
-            nao_produto.add(n)
-            descartes.append({"nome": validos[n]["nome"], "motivo": "modelo: não é produto"})
+        extra = erro.args[1] if len(erro.args) > 1 else {}
+        raise selecao.PrecisaCatalogo(erro.args[0], {"custo": custo, "descartes": descartes
+                                                     + extra.get("descartes_modelo", [])})
+    descartes += descartes_modelo
     return {"catalogo": catalogo, "precos": precos, "preco": situacao, "similares": similares,
             "regra_preco": regra_preco, "candidatos": validos,
             "custo": custo, "descartes": descartes, "segmento_modelo": segmento_modelo,
@@ -236,6 +245,8 @@ def extrair(entrada):
     observacoes = []
     try:
         montado = montar_catalogo(entrada)
+    except selecao.SemCreditoOpenRouter as erro:
+        return {"sem_credito": str(erro)}
     except selecao.PrecisaCatalogo as erro:
         extra = erro.args[1] if len(erro.args) > 1 else {}
         return {"precisa_catalogo": erro.args[0], "custo": extra.get("custo"),
@@ -345,7 +356,11 @@ def _motivos(novos, entregues, montado, coleta_antiga):
         if chave in descartes:
             motivo = f"descartado agora: {descartes[chave]}"
         elif chaves(p) & chaves_candidatos:
-            motivo = "coletado e válido, mas o modelo não escolheu"
+            motivo = next((d["motivo"] for d in montado.get("descartes") or []
+                           if _sem_acento(d["nome"]) == chave or
+                           any(_chave_imagem(c["imagem"]) == _chave_imagem(p["imagem"])
+                               and _sem_acento(c["nome"]) == _sem_acento(d["nome"]) for c in candidatos)),
+                          "coletado e válido, mas o modelo não escolheu")
         else:
             motivo = "não apareceu na coleta de hoje (nome/imagem diferentes ou saiu do site)"
         linhas.append(f"- {p['nome']}: {motivo}")
@@ -372,8 +387,14 @@ def avaliar(entrada):
         inicio = time.monotonic()
         try:
             montado = montar_catalogo({"cliente": cliente, "site": site})
+        except selecao.SemCreditoOpenRouter as erro:
+            linha.update(status="sem_credito", motivo=str(erro), produtos=0,
+                         segundos=round(time.monotonic() - inicio))
+            linhas.append(linha)
+            continue
         except selecao.PrecisaCatalogo as erro:
             extra = erro.args[1] if len(erro.args) > 1 else {}
+            linha["descartes"] = [f"{x['nome']}: {x['motivo']}" for x in extra.get("descartes") or []][:60]
             linha.update(status="precisa_catalogo", motivo=erro.args[0], produtos=0,
                          segundos=round(time.monotonic() - inicio),
                          custo_usd=(extra.get("custo") or {}).get("custo_usd"))
@@ -401,8 +422,10 @@ def avaliar(entrada):
                      com_imagens=montado["custo"]["com_imagens"],
                      candidatos_validos=montado["candidatos_validos"],
                      nao_bateram=_motivos(novos, entregues, montado, coleta_antiga),
-                     descartados_modelo=[d["nome"] for d in montado["descartes"]
-                                         if d["motivo"].startswith("modelo")][:20])
+                     descartados_modelo=[f"{d['nome']}: {d['motivo'][8:]}" for d in montado["descartes"]
+                                         if d["motivo"].startswith("modelo")][:60],
+                     precos=[f"{p['nome']}: R$ {p['preco']:.2f} ({p['origem']}; {p['regra']})"
+                             for p in montado["precos"]])
         linhas.append(linha)
     return {"linhas": linhas}
 

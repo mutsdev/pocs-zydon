@@ -7,4 +7,5 @@ const COMMIT = '7b3d073427e47ecf660280920bfba23c3178834a';
 process.stdout.write(ler('funcao.js')
   .replace("'__COMMIT__'", `'${COMMIT}'`)
   .replace('__DRIVER__', () => JSON.stringify(ler('driver.py')))
-  .replace('__SELECAO__', () => JSON.stringify(ler('selecao.py'))));
+  .replace('__SELECAO__', () => JSON.stringify(ler('selecao.py')))
+  .replace('__FAIXAS__', () => JSON.stringify(ler('faixas_preco.json'))));
