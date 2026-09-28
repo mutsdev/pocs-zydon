@@ -57,25 +57,27 @@ function rodarPython(acao, entrada, aoEvento) {
       { cwd: `${RAIZ}/driver`, env });
     let resto = '';
     let log = '';
+    const eventos = [];
     const tratar = (bloco) => {
       resto += bloco.toString();
       const linhas = resto.split('\n');
       resto = linhas.pop();
       for (const linha of linhas) {
         if (linha.startsWith('EVENTO ')) {
-          try { aoEvento(JSON.parse(linha.slice(7))); } catch (e) { /* linha quebrada */ }
+          try { const ev = JSON.parse(linha.slice(7)); eventos.push(ev.mensagem); aoEvento(ev); } catch (e) { /* linha quebrada */ }
         } else { log = (log + linha + '\n').slice(-6000); }
       }
     };
     filho.stdout.on('data', tratar);
     filho.stderr.on('data', (b) => { log = (log + b.toString()).slice(-6000); });
-    filho.on('close', (codigo) => {
+    filho.on('close', (codigo, sinal) => {
       let saida;
       try { saida = JSON.parse(fs.readFileSync(arqSaida, 'utf-8')); } catch (e) {
-        saida = { ok: false, erro: `driver saiu com código ${codigo} sem resultado` };
+        saida = { ok: false, erro: `driver saiu com código ${codigo} (sinal ${sinal}) sem resultado` };
       }
       for (const arq of [arqEntrada, arqSaida]) { try { fs.unlinkSync(arq); } catch (e) { /* ok */ } }
       saida.log = log.slice(-3000);
+      saida.eventos = eventos.slice(-15);
       resolve(saida);
     });
   });

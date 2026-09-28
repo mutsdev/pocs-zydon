@@ -18,6 +18,7 @@ MINIMO_PRODUTOS = 5
 MAXIMO_PRODUTOS = 12
 MAXIMO_CANDIDATOS = 60
 MAXIMO_IMAGENS_NO_PROMPT = 40
+MAXIMO_TOKENS_SAIDA = 4000
 
 NAO_E_PRODUTO = re.compile(
     r"\b(arrow|seta|previous|next|anterior|proximo|slide|slider|banner|carrossel|"
@@ -58,9 +59,64 @@ def normalizar_site(site):
     return base.rstrip("/") + "/"
 
 
-def coletar_candidatos(site):
+UA_ALTERNATIVO = {"User-Agent": "Mozilla/5.0"}
+
+
+def _get_com_retentativa(original):
+    """Loja Integrada devolve 403 ao UA "Chrome/128" do coletor e 200 ao
+    "Mozilla/5.0" (medido em 28/09/2026). Repete uma vez com o outro UA."""
+    import requests
     import coletar_site
-    coleta = coletar_site.coletar(normalizar_site(site), MAXIMO_CANDIDATOS)
+
+    def _get(url, **kw):
+        resposta = original(url, **kw)
+        if resposta is not None:
+            return resposta
+        try:
+            r = requests.get(url, headers=UA_ALTERNATIVO, timeout=coletar_site.TIMEOUT, **kw)
+            return r if r.status_code == 200 else None
+        except requests.RequestException:
+            return None
+    return _get
+
+
+def _coletar(base, limite):
+    """Mesma ordem do coletar_site.coletar, mas para na primeira sonda com itens.
+
+    O coletar() roda as quatro sondas sempre: no fise.com.br o wordpress_cpt
+    (200 posts com _embed) leva 25 s e 726 MB mesmo com o WooCommerce ja tendo
+    achado 100 produtos, e a funcao morre por memoria. E um achado vazio do
+    sitemap ("sitemap", []) impedia o fallback da home.
+    """
+    import re as _re
+    import coletar_site
+    if not getattr(coletar_site, "_retentativa", False):
+        coletar_site._get = _get_com_retentativa(coletar_site._get)
+        coletar_site._retentativa = True
+    home = coletar_site._get(base)
+    plataforma, itens = "nenhuma", []
+    sondas = (coletar_site.shopify, coletar_site.woocommerce, coletar_site.vtex,
+              coletar_site.wordpress_cpt, lambda b: coletar_site.sitemap_generico(b, limite),
+              lambda b: coletar_site.imagens_home(b, home))
+    for sonda in sondas:
+        try:
+            achado = sonda(base)
+        except Exception as erro:
+            evento("extracao", f"sonda falhou: {type(erro).__name__}: {erro}", "aviso")
+            achado = None
+        if achado and achado[1]:
+            plataforma, itens = achado
+            break
+    gerador = ""
+    if home is not None:
+        m = _re.search(r'<meta name="generator" content="([^"]+)"', home.text)
+        gerador = m.group(1) if m else ""
+    return {"site": base, "gerador": gerador, "plataforma": plataforma,
+            "total": len(itens), "itens": itens[:limite]}
+
+
+def coletar_candidatos(site):
+    coleta = _coletar(normalizar_site(site), MAXIMO_CANDIDATOS)
     candidatos = [{"nome": i.get("nome") or "", "url": i.get("url") or "",
                    "imagem": i.get("imagem") or "", "preco": i.get("preco"),
                    "categoria": i.get("categoria") or "",
@@ -166,6 +222,7 @@ def _chamar_openrouter(mensagens):
         "https://openrouter.ai/api/v1/chat/completions",
         headers={"Authorization": f"Bearer {chave}", "Content-Type": "application/json"},
         json={"model": MODELO_SELECAO, "messages": mensagens, "temperature": 0,
+              "max_tokens": MAXIMO_TOKENS_SAIDA,
               "response_format": {"type": "json_object"}, "usage": {"include": True}},
         timeout=180)
     if resposta.status_code != 200:
@@ -198,7 +255,7 @@ def selecionar(candidatos, cliente, site, segmento):
         escolha, custo = _chamar_openrouter([{"role": "user", "content": conteudo}])
         custo["com_imagens"] = True
     except (RuntimeError, ValueError) as erro:
-        if "OPENROUTER_API_KEY" in str(erro):
+        if "OPENROUTER_API_KEY" in str(erro) or "HTTP 402" in str(erro):
             raise
         evento("extracao", f"chamada com imagens falhou ({erro}); repetindo só com texto", "aviso")
         escolha, custo = _chamar_openrouter([{"role": "user", "content": texto}])
@@ -207,7 +264,7 @@ def selecionar(candidatos, cliente, site, segmento):
 
 
 def montar_pela_selecao(coleta, candidatos, escolha, cliente, segmento, descricao):
-    """(catalogo, precos, situacao_preco, produtos_similares).
+    """(catalogo, precos, situacao_preco, produtos_similares, regra_preco).
 
     Preco nunca vem do modelo: `montar_poc` usa o preco lido na pagina ou, sem
     ele, um estimado marcado com `_preco_estimado`.
@@ -248,7 +305,26 @@ def montar_pela_selecao(coleta, candidatos, escolha, cliente, segmento, descrica
                        "imagem": c["imagem"], "fonte": c["origem"],
                        "do_cliente": do_cliente[n],
                        "origem": "estimado" if req.get("_preco_estimado") else "publico"})
-    return catalogo, precos, situacao_preco(precos), not all(do_cliente[n] for n, _ in itens)
+    return (catalogo, precos, situacao_preco(precos), not all(do_cliente[n] for n, _ in itens),
+            regra_preco_estimado(candidatos, itens, precos))
+
+
+def regra_preco_estimado(candidatos, itens, precos):
+    """Descreve a regra fixa do montar_poc.py que deu o valor dos estimados.
+
+    montar_poc: estimado = mediana dos precos publicos lidos nas paginas dos
+    produtos escolhidos; sem nenhum, R$ 100,00 fixo. O modelo nunca entra aqui.
+    """
+    estimados = [p for p in precos if p["origem"] == "estimado"]
+    if not estimados:
+        return None
+    publicos = [candidatos[n]["preco"] for n, _ in itens if _tem_preco(candidatos[n])]
+    valor = f"R$ {estimados[0]['preco']:.2f}".replace(".", ",")
+    if publicos:
+        return (f"preço estimado = mediana dos {len(publicos)} preços públicos lidos no mesmo site "
+                f"({valor}), regra fixa do montar_poc.py")
+    return (f"preço estimado = valor fixo {valor} do montar_poc.py: nenhum produto escolhido "
+            f"tem preço público na página")
 
 
 def _tem_preco(candidato):

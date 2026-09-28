@@ -213,7 +213,7 @@ def montar_catalogo(entrada):
                        f"custo US$ {custo['custo_usd']:.4f}")
     segmento_modelo = str(escolha.get("segmento") or "").strip()
     try:
-        catalogo, precos, situacao, similares = selecao.montar_pela_selecao(
+        catalogo, precos, situacao, similares, regra_preco = selecao.montar_pela_selecao(
             coleta, validos, escolha, cliente, segmento_informado or segmento_modelo,
             entrada.get("descricao"))
     except selecao.PrecisaCatalogo as erro:
@@ -224,6 +224,7 @@ def montar_catalogo(entrada):
             nao_produto.add(n)
             descartes.append({"nome": validos[n]["nome"], "motivo": "modelo: não é produto"})
     return {"catalogo": catalogo, "precos": precos, "preco": situacao, "similares": similares,
+            "regra_preco": regra_preco, "candidatos": validos,
             "custo": custo, "descartes": descartes, "segmento_modelo": segmento_modelo,
             "candidatos_validos": len(validos),
             "fonte": "busca" if any(p["fonte"] == "busca" for p in precos) else "site"}
@@ -257,7 +258,8 @@ def extrair(entrada):
 
     estimados = sum(1 for p in precos if p["origem"] == "estimado")
     if estimados:
-        observacoes.append(f"{estimados} de {len(precos)} preços são ESTIMADOS (sem preço na página)")
+        observacoes.append(f"{estimados} de {len(precos)} preços são ESTIMADOS (sem preço na página); "
+                           f"{montado['regra_preco']}")
     if montado["similares"]:
         observacoes.append("há produtos SIMILARES achados na busca que NÃO são da marca do cliente")
         evento("extracao", "produtos similares de outras marcas no catálogo", "aviso")
@@ -277,6 +279,7 @@ def extrair(entrada):
               "preco": montado["preco"], "precos": precos,
               "produtos_similares": montado["similares"], "executivo": entrada.get("executivo"),
               "segmento": segmento, "segmento_origem": origem, "segmento_criterio": criterio,
+              "regra_preco_estimado": montado["regra_preco"],
               "modelo": montado["custo"]["modelo"], "custo_usd": montado["custo"]["custo_usd"],
               "tokens": montado["custo"]["tokens_entrada"] + montado["custo"]["tokens_saida"],
               "candidatos_validos": montado["candidatos_validos"],
@@ -291,12 +294,15 @@ def extrair(entrada):
 
 
 GABARITO = (
-    ("JH", "https://distribuidorajh.com.br/", "Arquivos Json/distribuidora_jh_poc.json"),
-    ("Master Foods Mix", "https://www.masterfoodsmix.com.br/", "Arquivos Json/master_foods_mix_poc.json"),
-    ("MTO", "https://loja-bio-infinity.lojaintegrada.com.br/", "Arquivos Json/mto_distribuidora_poc.json"),
-    ("Lise", "https://fise.com.br/", "Arquivos Json/lise_poc.json"),
-    ("Fise", "https://fise.com.br/", None),
-    ("Minas Couros", "https://minascourosvonixx.catalogo.com.br/", "Arquivos Json/minas_couros_poc.json"),
+    ("JH", "https://distribuidorajh.com.br/", "Arquivos Json/distribuidora_jh_poc.json", "coleta_jh.json"),
+    ("Master Foods Mix", "https://www.masterfoodsmix.com.br/", "Arquivos Json/master_foods_mix_poc.json",
+     "coleta_masterfoodsmix.json"),
+    ("MTO", "https://loja-bio-infinity.lojaintegrada.com.br/", "Arquivos Json/mto_distribuidora_poc.json",
+     "coleta_mto.json"),
+    ("Lise", "https://fise.com.br/", "Arquivos Json/lise_poc.json", "coleta_lise.json"),
+    ("Fise", "https://fise.com.br/", None, "coleta_fise.json"),
+    ("Minas Couros", "https://minascourosvonixx.catalogo.com.br/", "Arquivos Json/minas_couros_poc.json",
+     "coleta_minascouros.json"),
 )
 
 
@@ -311,11 +317,47 @@ def _chave_imagem(url):
     return re.sub(r"(-\d+x\d+|-scaled|-e\d+)(?=\.)", "", arquivo)
 
 
+def _motivos(novos, entregues, montado, coleta_antiga):
+    """Uma linha por produto que nao bateu, nos dois sentidos."""
+    def chaves(p):
+        return {_sem_acento(p["nome"]), _chave_imagem(p["imagem"])}
+    antigos = [{"nome": i.get("nome") or "", "imagem": i.get("imagem") or ""}
+               for i in coleta_antiga.get("itens") or []]
+    chaves_antigas = set().union(*[chaves(p) for p in antigos]) if antigos else set()
+    chaves_entregues = set().union(*[chaves(p) for p in entregues]) if entregues else set()
+    chaves_novas = set().union(*[chaves(p) for p in novos]) if novos else set()
+    candidatos = montado.get("candidatos") or []
+    chaves_candidatos = set().union(*[chaves(p) for p in candidatos]) if candidatos else set()
+    descartes = {_sem_acento(d["nome"]): d["motivo"] for d in montado.get("descartes") or []}
+    linhas = []
+    for p in novos:
+        if chaves(p) & chaves_entregues:
+            continue
+        if chaves(p) & chaves_antigas:
+            motivo = "estava na coleta antiga, mas a POC entregue escolheu outros"
+        else:
+            motivo = "não estava na coleta antiga (o site mudou ou a coleta nova achou mais)"
+        linhas.append(f"+ {p['nome']}: {motivo}")
+    for p in entregues:
+        if chaves(p) & chaves_novas:
+            continue
+        chave = _sem_acento(p["nome"])
+        if chave in descartes:
+            motivo = f"descartado agora: {descartes[chave]}"
+        elif chaves(p) & chaves_candidatos:
+            motivo = "coletado e válido, mas o modelo não escolheu"
+        else:
+            motivo = "não apareceu na coleta de hoje (nome/imagem diferentes ou saiu do site)"
+        linhas.append(f"- {p['nome']}: {motivo}")
+    return linhas
+
+
 def avaliar(entrada):
     """Roda a extracao nova nos clientes do gabarito e compara com o entregue."""
+    import time
     import verificar_imagens
     linhas = []
-    for cliente, site, arquivo in GABARITO:
+    for cliente, site, arquivo, arquivo_coleta in GABARITO:
         if entrada.get("clientes") and cliente not in entrada["clientes"]:
             continue
         evento("avaliacao", f"{cliente}: {site}")
@@ -323,19 +365,26 @@ def avaliar(entrada):
         entregues = []
         if arquivo and (REPO / arquivo).exists():
             entregues = _produtos_do_json(json.loads((REPO / arquivo).read_text(encoding="utf-8")))
+        coleta_antiga = {}
+        if (REPO / arquivo_coleta).exists():
+            coleta_antiga = json.loads((REPO / arquivo_coleta).read_text(encoding="utf-8"))
         linha["gabarito"] = len(entregues) if arquivo else None
+        inicio = time.monotonic()
         try:
             montado = montar_catalogo({"cliente": cliente, "site": site})
         except selecao.PrecisaCatalogo as erro:
             extra = erro.args[1] if len(erro.args) > 1 else {}
             linha.update(status="precisa_catalogo", motivo=erro.args[0], produtos=0,
+                         segundos=round(time.monotonic() - inicio),
                          custo_usd=(extra.get("custo") or {}).get("custo_usd"))
             linhas.append(linha)
             continue
         except Exception as erro:
-            linha.update(status="falhou", motivo=f"{type(erro).__name__}: {erro}"[:300], produtos=0)
+            linha.update(status="falhou", motivo=f"{type(erro).__name__}: {erro}"[:300], produtos=0,
+                         segundos=round(time.monotonic() - inicio))
             linhas.append(linha)
             continue
+        segundos = round(time.monotonic() - inicio)
         novos = _produtos_do_json(montado["catalogo"])
         nomes = {_sem_acento(p["nome"]) for p in entregues}
         imagens = {_chave_imagem(p["imagem"]) for p in entregues}
@@ -344,16 +393,16 @@ def avaliar(entrada):
         laudos = [verificar_imagens.conferir((p["nome"], p["imagem"])) for p in novos]
         lixo = [p["nome"] for p in novos if selecao.NAO_E_PRODUTO.search(_sem_acento(p["nome"]))
                 or selecao.IMAGEM_NAO_E_PRODUTO.search(p["imagem"])]
-        linha.update(status="ok", produtos=len(novos), batem=batem,
-                     imagens_validas=sum(1 for l in laudos if l[2]), lixo=lixo,
-                     preco=montado["preco"], similares=montado["similares"],
-                     fonte=montado["fonte"], modelo=montado["custo"]["modelo"],
-                     custo_usd=montado["custo"]["custo_usd"],
+        linha.update(status="ok", segundos=segundos, produtos=len(novos), batem=batem,
+                     imagens_validas=sum(1 for laudo in laudos if laudo[2]), lixo=lixo,
+                     preco=montado["preco"], regra_preco=montado["regra_preco"],
+                     similares=montado["similares"], fonte=montado["fonte"],
+                     modelo=montado["custo"]["modelo"], custo_usd=montado["custo"]["custo_usd"],
                      com_imagens=montado["custo"]["com_imagens"],
-                     nomes=[p["nome"] for p in novos],
+                     candidatos_validos=montado["candidatos_validos"],
+                     nao_bateram=_motivos(novos, entregues, montado, coleta_antiga),
                      descartados_modelo=[d["nome"] for d in montado["descartes"]
-                                         if d["motivo"].startswith("modelo")][:20],
-                     descartados_filtro=montado["descartes"][:15])
+                                         if d["motivo"].startswith("modelo")][:20])
         linhas.append(linha)
     return {"linhas": linhas}
 
