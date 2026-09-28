@@ -1,0 +1,67 @@
+{
+  "_sobre": "Faixa de preço por segmento e categoria para produto SEM preço público. O valor de cada produto é sorteado dentro da faixa com semente no nome normalizado (sha256), então é sempre o mesmo. Quando algum produto escolhido tem preço público, vale a mediana deles (montar_poc.py). O modelo de IA nunca define preço.",
+  "versao": 1,
+  "centavos": 0.9,
+  "padrao": {"nome": "distribuição B2B", "faixa": [12, 150]},
+  "segmentos": [
+    {"nome": "alimentos e bebidas",
+     "radicais": ["aliment", "bebida", "congelad", "frios", "biscoit", "pizza", "frango", "peixe", "carne", "laticin", "food"],
+     "faixa": [6, 80],
+     "categorias": [
+       {"nome": "peixes e frutos do mar", "radicais": ["peixe", "pescad", "salm", "camar", "tilap", "lula", "merluz", "marisc", "mexilh"], "faixa": [35, 140]},
+       {"nome": "aves e carnes", "radicais": ["frango", "aves", "asa", "coxa", "peito", "carne", "bovin", "suin", "linguic"], "faixa": [16, 70]},
+       {"nome": "frios e embutidos", "radicais": ["frios", "queij", "presunt", "calabres", "bacon", "mortadel", "salam"], "faixa": [18, 75]},
+       {"nome": "frutas, legumes e vegetais", "radicais": ["fruta", "legum", "vegeta", "batata", "brocol", "couve", "morango", "abacaxi", "cebola", "salsa"], "faixa": [9, 38]},
+       {"nome": "biscoitos e panificados", "radicais": ["biscoit", "bolach", "pao", "bolo", "torrad"], "faixa": [3.5, 14]},
+       {"nome": "pizzas e lanches", "radicais": ["pizza", "lanche", "salgad", "hamburg"], "faixa": [12, 45]},
+       {"nome": "bebidas", "radicais": ["bebida", "refriger", "suco", "agua", "cervej", "vinho"], "faixa": [3, 18]},
+       {"nome": "temperos e molhos", "radicais": ["tempero", "condiment", "molho", "especiar"], "faixa": [4, 22]}
+     ]},
+    {"nome": "estética automotiva",
+     "radicais": ["automot", "cera", "vonixx", "vintex", "polimento", "pretinho", "detail", "estetica"],
+     "faixa": [18, 160],
+     "categorias": [
+       {"nome": "ceras e selantes", "radicais": ["cera", "wax", "selante", "vitrific"], "faixa": [35, 160]},
+       {"nome": "shampoos", "radicais": ["shampoo", "lava", "floc"], "faixa": [22, 95]},
+       {"nome": "limpadores", "radicais": ["limpador", "apc", "estofad", "desengrax", "vidro"], "faixa": [25, 110]},
+       {"nome": "pneus e borrachas", "radicais": ["pneu", "pretinho", "renovador", "borrach"], "faixa": [20, 80]},
+       {"nome": "acessórios", "radicais": ["microfibra", "toalha", "escova", "aplicador", "pulveriz", "boina"], "faixa": [12, 120]}
+     ]},
+    {"nome": "saúde e produtos hospitalares",
+     "radicais": ["hospital", "medic", "ecg", "monitor", "oxim", "cirurg", "saude", "clinic", "reanimad"],
+     "faixa": [40, 900],
+     "categorias": [
+       {"nome": "equipamentos", "radicais": ["monitor", "eletrocardio", "ventilador", "desfibril", "cardiograf"], "faixa": [2800, 18000]},
+       {"nome": "cabos e sensores", "radicais": ["cabo", "adaptador", "sensor", "sonda"], "faixa": [60, 480]},
+       {"nome": "braçadeiras", "radicais": ["bracadeir", "manguito"], "faixa": [35, 190]},
+       {"nome": "oximetria", "radicais": ["oximetr"], "faixa": [120, 900]},
+       {"nome": "ventilação e reanimação", "radicais": ["reanimad", "balao", "valvula", "pulmao", "mascara"], "faixa": [80, 420]},
+       {"nome": "descartáveis", "radicais": ["descart", "luva", "seringa", "agulha"], "faixa": [12, 95]}
+     ]},
+    {"nome": "ferragens e esquadrias",
+     "radicais": ["esquadri", "aluminio", "ferrag", "fechadur", "roldana", "dobradi", "persiana", "cremona", "fachada"],
+     "faixa": [12, 180],
+     "categorias": [
+       {"nome": "fechaduras e maçanetas", "radicais": ["fechadur", "cremona", "macaneta", "fecho", "fec"], "faixa": [35, 240]},
+       {"nome": "roldanas", "radicais": ["roldana", "rol"], "faixa": [8, 45]},
+       {"nome": "dobradiças", "radicais": ["dobradi", "dob"], "faixa": [18, 120]},
+       {"nome": "vedação e kits", "radicais": ["vedac", "kit", "ved"], "faixa": [15, 95]},
+       {"nome": "suportes e recolhedores", "radicais": ["suporte", "recolhed", "sup", "rec"], "faixa": [10, 70]}
+     ]},
+    {"nome": "materiais de construção",
+     "radicais": ["construc", "cimento", "argamass", "tijolo", "telha", "hidraul", "tinta"],
+     "faixa": [8, 250], "categorias": []},
+    {"nome": "materiais elétricos e industriais",
+     "radicais": ["eletric", "industri", "disjunt", "tomada", "rolament", "motor", "parafus"],
+     "faixa": [6, 350], "categorias": []},
+    {"nome": "cosméticos e beleza",
+     "radicais": ["cosmet", "beleza", "cabelo", "maquiag", "perfum", "hidratant"],
+     "faixa": [12, 120], "categorias": []},
+    {"nome": "tecnologia e informática",
+     "radicais": ["informat", "notebook", "computad", "tecnolog", "impressor"],
+     "faixa": [45, 1800], "categorias": []},
+    {"nome": "segurança eletrônica",
+     "radicais": ["seguranc", "camera", "alarme", "cftv", "interfone"],
+     "faixa": [60, 1200], "categorias": []}
+  ]
+}

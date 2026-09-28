@@ -6,12 +6,15 @@ indices, a categoria e o julgamento "e da marca do cliente?". Modelo fixado por
 id exato (nunca alias "latest").
 """
 
+import hashlib
+import html
 import json
 import os
 import re
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import urlparse
+from pathlib import Path
+from urllib.parse import urljoin, urlparse
 
 MODELO_SELECAO = "google/gemini-2.5-flash"
 MINIMO_PRODUTOS = 5
@@ -26,6 +29,10 @@ NAO_E_PRODUTO = re.compile(
     r"youtube|mapa|map|avatar|placeholder|background|fundo|hero)\b", re.I)
 IMAGEM_NAO_E_PRODUTO = re.compile(
     r"(/slider/|/slides?/|/banners?/|/icons?/|logo|favicon|sprite|placeholder|\.svg($|\?))", re.I)
+
+
+class SemCreditoOpenRouter(RuntimeError):
+    """HTTP 402 do OpenRouter: a conta esta sem credito para a selecao."""
 
 
 class PrecisaCatalogo(RuntimeError):
@@ -115,12 +122,80 @@ def _coletar(base, limite):
             "total": len(itens), "itens": itens[:limite]}
 
 
+def limpar_texto(texto):
+    """Entidades HTML decodificadas ("&amp;" -> "&") e espacos normalizados."""
+    texto = str(texto or "")
+    for _ in range(2):
+        texto = html.unescape(texto)
+    return re.sub(r"\s+", " ", texto).strip()
+
+
+def candidato(nome, url, imagem, preco, categoria, descricao, origem):
+    return {"nome": limpar_texto(nome), "url": url or "", "imagem": imagem or "", "preco": preco,
+            "categoria": limpar_texto(categoria), "descricao": limpar_texto(descricao),
+            "origem": origem}
+
+
+PAGINA_NAO_E_SECAO = re.compile(
+    r"contato|quem-?somos|sobre|politica|privacidade|blog|noticia|trabalhe|login|carrinho|conta|faq", re.I)
+
+
+def _imagem_cheia(src):
+    """Wix serve miniatura borrada (/v1/fill/w_49,...,blur_2); a original e o /media/<id>."""
+    m = re.match(r"(https?://static\.wixstatic\.com/media/[^/]+?\.(?:png|jpe?g|webp))", src or "", re.I)
+    return m.group(1) if m else src
+
+
+def coletar_secoes(base, limite=60):
+    """Site institucional com uma pagina por linha de produto (Master Foods Mix, Wix):
+    cada produto e um titulo (h3/h4) colado numa imagem. A imagem tem nome de
+    arquivo ("ChatGPT Image 4 de mar...") como alt, entao o nome vem do titulo."""
+    import requests
+    from bs4 import BeautifulSoup
+    cabecalho = {"User-Agent": "Mozilla/5.0"}
+    try:
+        home = requests.get(base, headers=cabecalho, timeout=20)
+    except requests.RequestException:
+        return []
+    host = urlparse(base).hostname
+    links = []
+    for a in BeautifulSoup(home.text, "html.parser").find_all("a", href=True):
+        url = urljoin(base, a["href"]).split("#")[0].split("?")[0].rstrip("/")
+        partes = [p for p in urlparse(url).path.split("/") if p]
+        if (urlparse(url).hostname == host and len(partes) == 1 and url not in links
+                and not PAGINA_NAO_E_SECAO.search(partes[0])):
+            links.append(url)
+    itens = []
+    for url in links[:10]:
+        try:
+            pagina = requests.get(url, headers=cabecalho, timeout=20).text
+        except requests.RequestException:
+            continue
+        sopa = BeautifulSoup(pagina, "html.parser")
+        for lixo in sopa(["script", "style", "noscript"]):
+            lixo.decompose()
+        titulo_secao = sopa.find(["h1", "h2"])
+        secao = limpar_texto(titulo_secao.get_text(" ", strip=True)) if titulo_secao else ""
+        imagem_pendente = None
+        for el in sopa.find_all(["img", "h3", "h4"]):
+            if el.name == "img":
+                src = _imagem_cheia(el.get("src") or el.get("data-src") or "")
+                imagem_pendente = src if src.startswith("http") else None
+                continue
+            nome = limpar_texto(el.get_text(" ", strip=True))
+            if imagem_pendente and 3 < len(nome) < 90:
+                itens.append(candidato(nome, url, imagem_pendente, None, secao, "", "site"))
+            imagem_pendente = None
+        if len(itens) >= limite:
+            break
+    evento("extracao", f"páginas de seção: {len(itens)} candidatos em {min(len(links), 10)} páginas")
+    return itens[:limite]
+
+
 def coletar_candidatos(site):
     coleta = _coletar(normalizar_site(site), MAXIMO_CANDIDATOS)
-    candidatos = [{"nome": i.get("nome") or "", "url": i.get("url") or "",
-                   "imagem": i.get("imagem") or "", "preco": i.get("preco"),
-                   "categoria": i.get("categoria") or "",
-                   "descricao": i.get("descricao") or "", "origem": "site"}
+    candidatos = [candidato(i.get("nome"), i.get("url"), i.get("imagem"), i.get("preco"),
+                            i.get("categoria"), i.get("descricao"), "site")
                   for i in coleta.get("itens") or []]
     evento("extracao", f"site: {len(candidatos)} candidatos ({coleta.get('plataforma')})")
     return coleta, candidatos
@@ -135,9 +210,8 @@ def buscar_candidatos(cliente, segmento, limite=24):
                 urls.append(url)
     with ThreadPoolExecutor(8) as pool:
         registros = list(pool.map(_ler_pagina, urls[:limite]))
-    achados = [{"nome": r["name"], "url": r["url"], "imagem": r["image"], "preco": r.get("price"),
-                "categoria": r.get("category") or "", "descricao": r.get("description") or "",
-                "origem": "busca"} for r in registros if r]
+    achados = [candidato(r["name"], r["url"], r["image"], r.get("price"), r.get("category"),
+                         r.get("description"), "busca") for r in registros if r]
     evento("extracao", f"busca na web: {len(achados)} candidatos lidos página a página")
     return achados
 
@@ -184,7 +258,7 @@ def filtrar_candidatos(candidatos):
 
 INSTRUCAO_SELECAO = """Você monta o catálogo de demonstração de um portal B2B para o cliente abaixo.
 Recebe uma lista NUMERADA de candidatos coletados do site do cliente e de buscas na web,
-e as imagens dos primeiros candidatos.
+e as imagens dos primeiros candidatos. Todos já passaram por um filtro de URL e imagem.
 
 Cliente: {cliente}
 Site: {site}
@@ -192,22 +266,30 @@ Segmento informado: {segmento}
 
 Regras obrigatórias:
 - Escolha SOMENTE pelos números da lista. Nunca invente produto, nome, imagem ou preço.
+- Quantidade: escolha EXATAMENTE {alvo} produtos (há {total} candidatos). Só escolha menos se
+  não houver {alvo} produtos reais; nesse caso explique cada descarte.
 - Descarte o que não é produto vendável: banner, slide de carrossel, seta de navegação,
-  ícone, logo, foto institucional, foto de ambiente, categoria genérica, contato, blog.
+  ícone, logo, foto institucional, foto de ambiente, depoimento de cliente, nome de
+  categoria ou menu ("CERAS", "PNEUS"), contato, blog.
   Exemplos que NÃO são produto: "biscoito2" (slide do carrossel), "previous arrow".
-- Olhe a imagem: se ela for banner com texto promocional, arte de carrossel, ícone ou
-  foto de ambiente, descarte mesmo que o nome pareça produto.
-- Prefira produtos da marca/catálogo do próprio cliente. Candidato [busca] que não é do
-  cliente só entra se o site não tiver produtos suficientes; marque "do_cliente": false.
-- Escolha de {minimo} a {maximo} produtos, variados, em exatamente 3 categorias com nomes
-  curtos em português.
-- Se não houver ao menos {minimo} produtos reais, devolva "selecionados": [].
+- Olhe a imagem: banner com texto promocional, arte de carrossel, ícone ou foto de
+  ambiente é descarte, mesmo que o nome pareça produto.
+- Priorize produtos da marca/catálogo do próprio cliente. Candidato [busca] que não é do
+  cliente só entra se faltar produto do site; marque "do_cliente": false.
+- Espalhe a escolha entre as categorias do site (campo "categoria" dos candidatos): pegue
+  de todas antes de repetir a mesma. Não escolha dois tamanhos do mesmo produto se houver
+  outro produto disponível.
+- Agrupe os escolhidos em exatamente 3 categorias com nomes curtos em português; use os
+  nomes das categorias do site quando existirem.
+- Para CADA candidato não escolhido, devolva o número e o motivo em uma frase curta, com
+  o tipo: "nao_e_produto", "outra_marca", "repetido" (variação/tamanho de um escolhido)
+  ou "limite" (produto bom que ficou de fora pela quantidade ou pela variedade).
 - Diga o segmento do cliente em poucas palavras.
 
 Responda SOMENTE JSON:
 {{"segmento": "...", "categorias": ["A", "B", "C"],
   "selecionados": [{{"n": 3, "categoria": 0, "do_cliente": true}}],
-  "descartados_como_nao_produto": [7, 9]}}
+  "descartados": [{{"n": 7, "tipo": "nao_e_produto", "motivo": "slide do carrossel"}}]}}
 
 Candidatos:
 {lista}"""
@@ -225,6 +307,11 @@ def _chamar_openrouter(mensagens):
               "max_tokens": MAXIMO_TOKENS_SAIDA,
               "response_format": {"type": "json_object"}, "usage": {"include": True}},
         timeout=180)
+    if resposta.status_code == 402:
+        raise SemCreditoOpenRouter(
+            "OpenRouter sem crédito (HTTP 402): a conta não tem saldo para a seleção dos produtos. "
+            "Ponha crédito em openrouter.ai/settings/credits e reenvie o pedido. "
+            f"Resposta: {resposta.text[:200]}")
     if resposta.status_code != 200:
         raise RuntimeError(f"OpenRouter HTTP {resposta.status_code}: {resposta.text[:300]}")
     corpo = resposta.json()
@@ -245,8 +332,8 @@ def selecionar(candidatos, cliente, site, segmento):
                       f" | url: {c['url'][:120]} | imagem: {arquivo}"
                       f" | {(c.get('descricao') or '')[:140]}")
     texto = INSTRUCAO_SELECAO.format(cliente=cliente, site=site, segmento=segmento or "não informado",
-                                     minimo=MINIMO_PRODUTOS, maximo=MAXIMO_PRODUTOS,
-                                     lista="\n".join(linhas))
+                                     alvo=min(MAXIMO_PRODUTOS, len(candidatos)),
+                                     total=len(candidatos), lista="\n".join(linhas))
     conteudo = [{"type": "text", "text": texto}]
     for n, c in enumerate(candidatos[:MAXIMO_IMAGENS_NO_PROMPT]):
         conteudo += [{"type": "text", "text": f"Imagem do candidato {n}:"},
@@ -254,8 +341,10 @@ def selecionar(candidatos, cliente, site, segmento):
     try:
         escolha, custo = _chamar_openrouter([{"role": "user", "content": conteudo}])
         custo["com_imagens"] = True
+    except SemCreditoOpenRouter:
+        raise
     except (RuntimeError, ValueError) as erro:
-        if "OPENROUTER_API_KEY" in str(erro) or "HTTP 402" in str(erro):
+        if "OPENROUTER_API_KEY" in str(erro):
             raise
         evento("extracao", f"chamada com imagens falhou ({erro}); repetindo só com texto", "aviso")
         escolha, custo = _chamar_openrouter([{"role": "user", "content": texto}])
@@ -263,21 +352,61 @@ def selecionar(candidatos, cliente, site, segmento):
     return escolha, custo
 
 
-def montar_pela_selecao(coleta, candidatos, escolha, cliente, segmento, descricao):
-    """(catalogo, precos, situacao_preco, produtos_similares, regra_preco).
+def ler_descartes(escolha, candidatos, usados):
+    """{n: (tipo, motivo)} para cada candidato valido nao escolhido."""
+    motivos = {}
+    for d in escolha.get("descartados") or []:
+        try:
+            n = int(d.get("n"))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if 0 <= n < len(candidatos) and n not in usados:
+            motivos[n] = (str(d.get("tipo") or "limite"), limpar_texto(d.get("motivo"))[:160])
+    for n in range(len(candidatos)):
+        if n not in usados and n not in motivos:
+            motivos[n] = ("sem_motivo", "o modelo não escolheu nem explicou")
+    return motivos
 
-    Preco nunca vem do modelo: `montar_poc` usa o preco lido na pagina ou, sem
-    ele, um estimado marcado com `_preco_estimado`.
+
+def completar_ate_o_alvo(itens, candidatos, motivos, categorias):
+    """Com 12+ validos saem 12: completa com os 'limite' e 'sem_motivo', na ordem,
+    alternando categoria do site para espalhar. Nunca com 'nao_e_produto'."""
+    alvo = min(MAXIMO_PRODUTOS, len(candidatos))
+    usados = {n for n, _ in itens}
+    sobra = [n for n in range(len(candidatos)) if n not in usados
+             and motivos.get(n, ("",))[0] in ("limite", "sem_motivo")]
+    ja = {}
+    for n, _ in itens:
+        chave = sem_acento(candidatos[n]["categoria"])
+        ja[chave] = ja.get(chave, 0) + 1
+    completados = []
+    while len(itens) < alvo and sobra:
+        sobra.sort(key=lambda n: ja.get(sem_acento(candidatos[n]["categoria"]), 0))
+        n = sobra.pop(0)
+        chave = sem_acento(candidatos[n]["categoria"])
+        ja[chave] = ja.get(chave, 0) + 1
+        indice = next((i for i, c in enumerate(categorias)
+                       if sem_acento(c) and sem_acento(c) in sem_acento(candidatos[n]["categoria"])), 0)
+        itens.append((n, indice))
+        completados.append(n)
+    return completados
+
+
+def montar_pela_selecao(coleta, candidatos, escolha, cliente, segmento, descricao):
+    """(catalogo, precos, situacao_preco, produtos_similares, regra_preco, descartes_modelo).
+
+    Preco nunca vem do modelo: preco lido na pagina; sem ele, a mediana dos
+    publicos do mesmo site (montar_poc) ou a faixa fixa de faixas_preco.json.
     """
     import montar_poc
-    categorias = [str(c).strip()[:60] for c in (escolha.get("categorias") or []) if str(c).strip()][:3]
+    categorias = [limpar_texto(c)[:60] for c in (escolha.get("categorias") or []) if str(c).strip()][:3]
     if len(categorias) < 3:
         categorias += ["Produtos em Destaque", "Linha Completa", "Lançamentos"][len(categorias):]
     itens, usados, do_cliente = [], set(), {}
     for s in escolha.get("selecionados") or []:
         try:
             n, ci = int(s.get("n")), int(s.get("categoria", 0))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, AttributeError):
             continue
         if not 0 <= n < len(candidatos) or n in usados:
             continue
@@ -285,10 +414,18 @@ def montar_pela_selecao(coleta, candidatos, escolha, cliente, segmento, descrica
         itens.append((n, ci if 0 <= ci < 3 else 0))
         do_cliente[n] = s.get("do_cliente") is not False
     itens = itens[:MAXIMO_PRODUTOS]
+    motivos = ler_descartes(escolha, candidatos, usados)
+    completados = completar_ate_o_alvo(itens, candidatos, motivos, categorias)
+    for n in completados:
+        do_cliente[n] = candidatos[n]["origem"] == "site"
+        motivos.pop(n, None)
+    descartes_modelo = [{"nome": candidatos[n]["nome"], "tipo": tipo, "motivo": f"modelo: {motivo}"}
+                        for n, (tipo, motivo) in sorted(motivos.items())]
     if len(itens) < MINIMO_PRODUTOS:
         raise PrecisaCatalogo(
             f"só {len(itens)} produtos reais com URL de origem e imagem válida "
-            f"(mínimo {MINIMO_PRODUTOS}); mande o catálogo em PDF ou planilha")
+            f"(mínimo {MINIMO_PRODUTOS}); mande o catálogo em PDF ou planilha",
+            {"descartes_modelo": descartes_modelo})
     coleta_montagem = {"site": coleta.get("site"), "plataforma": coleta.get("plataforma"),
                        "itens": [{"nome": c["nome"], "preco": c["preco"] if _tem_preco(c) else None,
                                   "categoria": c["categoria"], "imagem": c["imagem"], "url": c["url"],
@@ -296,35 +433,90 @@ def montar_pela_selecao(coleta, candidatos, escolha, cliente, segmento, descrica
     catalogo = montar_poc.montar(coleta_montagem, cliente, (segmento or "Comércio B2B")[:120],
                                  descricao or f"{cliente} — catálogo B2B", categorias, itens)
     requisicoes = next(e for e in catalogo["etapas"] if e.get("endpoint") == "products")["requests"]
-    precos = []
-    for req, (n, _) in zip(requisicoes, itens):
+    publicos = [candidatos[n]["preco"] for n, _ in itens if _tem_preco(candidatos[n])]
+    faixas = FaixasPreco.carregar()
+    segmento_faixa = faixas.segmento(segmento, [candidatos[n]["nome"] for n, _ in itens])
+    precos, regras = [], set()
+    for req, (n, ci) in zip(requisicoes, itens):
         c = candidatos[n]
         req["_origem_url"] = c["url"]
-        precos.append({"sku": req["payload"]["sku"], "nome": req["payload"]["name"],
-                       "preco": req["payload"]["price"], "origem_url": c["url"],
-                       "imagem": c["imagem"], "fonte": c["origem"],
-                       "do_cliente": do_cliente[n],
-                       "origem": "estimado" if req.get("_preco_estimado") else "publico"})
+        entrada = {"sku": req["payload"]["sku"], "nome": req["payload"]["name"],
+                   "origem_url": c["url"], "imagem": c["imagem"], "fonte": c["origem"],
+                   "do_cliente": do_cliente[n], "completado": n in completados}
+        if not req.get("_preco_estimado"):
+            entrada.update(origem="publico", regra="lido na página do produto")
+        elif publicos:
+            entrada.update(origem="estimado",
+                           regra=f"mediana dos {len(publicos)} preços públicos do mesmo site")
+        else:
+            valor, regra = faixas.sortear(segmento_faixa, c["nome"],
+                                          " ".join([c["categoria"], categorias[ci], c["nome"]]))
+            req["payload"]["price"] = valor
+            for variacao in req["payload"].get("variations") or []:
+                variacao["price"] = valor
+            entrada.update(origem="estimado", regra=regra)
+        entrada["preco"] = req["payload"]["price"]
+        if entrada["origem"] == "estimado":
+            regras.add(entrada["regra"])
+        precos.append(entrada)
+    regra_preco = None
+    if regras:
+        regra_preco = ("preço estimado por regra fixa, nunca pelo modelo: "
+                       + "; ".join(sorted(regras))
+                       + (f" (tabela faixas_preco.json v{faixas.versao})" if not publicos else ""))
     return (catalogo, precos, situacao_preco(precos), not all(do_cliente[n] for n, _ in itens),
-            regra_preco_estimado(candidatos, itens, precos))
+            regra_preco, descartes_modelo)
 
 
-def regra_preco_estimado(candidatos, itens, precos):
-    """Descreve a regra fixa do montar_poc.py que deu o valor dos estimados.
+class FaixasPreco:
+    """Tabela versionada de faixas por segmento e categoria (faixas_preco.json)."""
 
-    montar_poc: estimado = mediana dos precos publicos lidos nas paginas dos
-    produtos escolhidos; sem nenhum, R$ 100,00 fixo. O modelo nunca entra aqui.
-    """
-    estimados = [p for p in precos if p["origem"] == "estimado"]
-    if not estimados:
-        return None
-    publicos = [candidatos[n]["preco"] for n, _ in itens if _tem_preco(candidatos[n])]
-    valor = f"R$ {estimados[0]['preco']:.2f}".replace(".", ",")
-    if publicos:
-        return (f"preço estimado = mediana dos {len(publicos)} preços públicos lidos no mesmo site "
-                f"({valor}), regra fixa do montar_poc.py")
-    return (f"preço estimado = valor fixo {valor} do montar_poc.py: nenhum produto escolhido "
-            f"tem preço público na página")
+    def __init__(self, dados):
+        self.dados, self.versao = dados, dados.get("versao")
+
+    @classmethod
+    def carregar(cls):
+        candidatos = [Path(os.environ.get("ZYDON_REPO", "")) / "Criar Portais" / "faixas_preco.json",
+                      Path(__file__).with_name("faixas_preco.json")]
+        for caminho in candidatos:
+            if caminho.is_file():
+                return cls(json.loads(caminho.read_text(encoding="utf-8")))
+        raise RuntimeError("faixas_preco.json não encontrado")
+
+    @staticmethod
+    def _pontos(texto, radicais):
+        base = sem_acento(texto)
+        palavras = re.findall(r"[a-z0-9]+", base)
+        return sum(1 for r in radicais if any(p.startswith(r) for p in palavras))
+
+    def segmento(self, segmento, nomes):
+        texto_segmento = segmento or ""
+        melhor, pontos = None, 0
+        for s in self.dados["segmentos"]:
+            p = 3 * self._pontos(texto_segmento, s["radicais"]) + self._pontos(" ".join(nomes), s["radicais"])
+            if p > pontos:
+                melhor, pontos = s, p
+        return melhor
+
+    def sortear(self, segmento, nome, contexto):
+        """(valor, regra). Semente = sha256 do nome normalizado: sempre o mesmo valor."""
+        faixa, origem = self.dados["padrao"]["faixa"], f"faixa padrão ({self.dados['padrao']['nome']})"
+        if segmento:
+            faixa, origem = segmento["faixa"], f"faixa do segmento {segmento['nome']}"
+            melhor, pontos = None, 0
+            for cat in segmento.get("categorias") or []:
+                p = self._pontos(contexto, cat["radicais"])
+                if p > pontos:
+                    melhor, pontos = cat, p
+            if melhor:
+                faixa, origem = melhor["faixa"], f"faixa {segmento['nome']} / {melhor['nome']}"
+        semente = int(hashlib.sha256(sem_acento(nome).encode("utf-8")).hexdigest()[:12], 16)
+        fracao = semente / float(16 ** 12)
+        baixo, alto = float(faixa[0]), float(faixa[1])
+        valor = int(baixo + fracao * (alto - baixo)) + float(self.dados.get("centavos", 0.9))
+        valor = round(min(max(valor, baixo), alto + 1), 2)
+        texto = f"R$ {baixo:.2f}–{alto:.2f}".replace(".", ",")
+        return valor, f"sorteio com semente no nome dentro da {origem} ({texto})"
 
 
 def _tem_preco(candidato):
