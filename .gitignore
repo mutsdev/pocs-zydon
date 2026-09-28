@@ -1,0 +1,16 @@
+node_modules/
+.env
+.env.local
+.env.*
+!.env.example
+dist/
+.vite/
+.DS_Store
+CLAUDE.md
+AGENTS.md
+.mcp.json
+.mitra/
+.mitra-scaffold-*/
+
+__pycache__/
+*.pyc

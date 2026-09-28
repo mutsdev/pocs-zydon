@@ -1,0 +1,9 @@
+{
+	"name": "mitra-backend",
+	"type": "module",
+	"private": true,
+	"dependencies": {
+		"@mitralab.io/functions-sdk": "0.2.4",
+		"dotenv": "*"
+	}
+}

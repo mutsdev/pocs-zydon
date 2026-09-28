@@ -1,0 +1,225 @@
+@import "tailwindcss";
+
+/* 12px não é um tamanho de corpo: `text-xs` deixa de existir e `text-meta`
+   (carimbo de data, contador, badge) é o único caminho até 12px. */
+@theme {
+  --text-xs: initial;
+  --text-xs--line-height: initial;
+  --text-meta: 0.75rem;
+  --text-meta--line-height: 1rem;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   TEMA — claro é o :root; escuro é a classe .theme-dark no <html>.
+   A cor principal é PREENCHIMENTO (botão, estado ativo, chart-1). Texto por
+   cima dela: --color-on-primary. Texto/ícone/borda no tom da marca:
+   --color-primary-text. Ao trocar a marca do projeto, troque os cinco
+   --color-primary* nos DOIS temas (primária viva → tinta escura em cima;
+   primária profunda → branco).
+   ════════════════════════════════════════════════════════════════════ */
+:root {
+  /* ── Cor principal ── */
+  --color-primary: #00e5c0;
+  --color-primary-hover: #00cfae;
+  --color-on-primary: #04211d;
+  --color-primary-text: #007564;
+  --color-primary-bg: #ebfdf9;
+  --color-primary-light: rgba(0, 229, 192, 0.60);  /* anel de foco */
+
+  /* ── Neutros ── */
+  --color-bg: #f7f8fa;
+  --color-surface: #fdfdfe;          /* não é branco puro */
+  --color-nav: #fdfdfe;
+  --color-nav-text: #5b6472;
+  --color-nav-active: var(--color-primary-text);
+  --color-nav-hover: #f1f4fa;
+  --color-border: #e3e6ec;
+  --color-text: #0d0f14;
+  --color-text-secondary: #5b6472;
+
+  /* ── Estados ── */
+  --color-success: #0f7a52; --color-success-bg: #e9f7f1; --color-success-border: #a9dfc7;
+  --color-danger:  #c62f2a; --color-danger-bg:  #fdf0ef; --color-danger-border:  #f6c3c0;
+  --color-warning: #9a6a0f; --color-warning-bg: #fdf6e7; --color-warning-border: #f0dba6;
+  --color-info:    #1f66c4; --color-info-bg:    #eef4fd; --color-info-border:    #c3d8f7;
+  --color-receita: var(--color-success);  --color-despesa: var(--color-danger);
+  --color-saldo-pos: var(--color-success); --color-saldo-neg: var(--color-danger);
+  --color-pendente: var(--color-warning); --color-atrasado: var(--color-danger); --color-pago: var(--color-success);
+
+  /* ── Gráficos e drill ── */
+  --color-tick: #6b7381;
+  --color-label-muted: #6b7381;
+  --color-label-strong: #5b6472;
+  --color-breadcrumb: var(--color-primary-text);
+  --color-breadcrumb-active: var(--color-text);
+  --color-drill-hover: var(--color-nav-hover);
+  --color-drill-text: var(--color-primary-text);
+  --kpi-bg-green: #e9f7f1; --kpi-bg-blue: #eef4fd; --kpi-bg-cyan: #e8f7f4; --kpi-bg-amber: #fdf6e7; --kpi-bg-purple: #f2eefd;
+  --chart-1: var(--color-primary);
+  --chart-2: #1f66c4; --chart-3: #0f7a52; --chart-4: #9a6a0f;
+  --chart-5: #c02a6d; --chart-6: #4257d4; --chart-7: #6f39cc; --chart-8: #c62f2a;
+
+  /* ── Forma e elevação (fora de @layer: vence o @theme do Tailwind) ── */
+  --spacing: 0.25rem;
+  --radius-sm: 9px; --radius-md: 12px; --radius-lg: 18px; --radius-xl: 24px;
+  --shadow-card: 0 1px 2px rgba(16, 18, 24, 0.04), 0 2px 8px -4px rgba(16, 18, 24, 0.07);
+  --shadow-overlay: 0 8px 24px -8px rgba(13, 15, 20, 0.16);
+  --color-scrim: rgba(13, 15, 20, 0.28);
+}
+
+.theme-dark {
+  --color-primary: #00e5c0;
+  --color-primary-hover: #2af0d0;
+  --color-on-primary: #04211d;
+  --color-primary-text: #00e5c0;      /* no escuro o texto já pode ser vivo */
+  --color-primary-bg: #06251f;
+
+  --color-bg: #0a0b0d;
+  --color-surface: #121418;
+  --color-nav: #121418;
+  --color-nav-text: #9aa3af;
+  --color-nav-hover: #0d0f12;
+  --color-border: #1e2229;
+  --color-text: #e8eaed;               /* nunca branco puro */
+  --color-text-secondary: #9aa3af;
+
+  --color-success: #34c98a; --color-success-bg: #08251a; --color-success-border: #17492f;
+  --color-danger:  #f0655f; --color-danger-bg:  #2a1315; --color-danger-border:  #5a2528;
+  --color-warning: #e0a02c; --color-warning-bg: #261c07; --color-warning-border: #54401a;
+  --color-info:    #5a9bf0; --color-info-bg:    #0d1a2e; --color-info-border:    #23456e;
+
+  --color-tick: #7d8695;
+  --color-label-muted: #7d8695;
+  --color-label-strong: #9aa3af;
+  --kpi-bg-green: #08251a; --kpi-bg-blue: #0d1a2e; --kpi-bg-cyan: #062329; --kpi-bg-amber: #261c07; --kpi-bg-purple: #1a1030;
+  --chart-2: #5a9bf0; --chart-3: #34c98a; --chart-4: #e0a02c;
+  --chart-5: #ed5a99; --chart-6: #7796ff; --chart-7: #a78bfa; --chart-8: #f0655f;
+
+  --shadow-card: 0 2px 10px -4px rgba(0, 0, 0, 0.55);
+  --shadow-overlay: 0 8px 24px -8px rgba(0, 0, 0, 0.70);
+  --color-scrim: rgba(4, 5, 7, 0.45);
+}
+
+/* ── Cor padrão de borda ──
+   O Tailwind 4 mudou o default de `border-color` para `currentColor` (no v3
+   era gray-200). Sem este bloco, qualquer `border-*`/`divide-*` escrito sem
+   cor explícita herda a cor do TEXTO — o que produz linhas pretas grossas em
+   tabelas, listas e separadores. Restaura o padrão sutil, acompanhando o tema.
+   (Recomendação do guia oficial de upgrade v3 -> v4 do Tailwind.) */
+@layer base {
+  *,
+  ::after,
+  ::before {
+    border-color: var(--color-border);
+  }
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  @apply antialiased;
+  font-family: 'Figtree', 'Inter', system-ui, sans-serif;
+  font-size: 14px;                 /* corpo: texto sem classe já sai no tamanho certo */
+}
+
+/* Scrollbar — fina nas duas direções (só `width` deixava a horizontal no padrão de ~15px) */
+* { scrollbar-width: thin; scrollbar-color: var(--color-border) transparent; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background-color: transparent; }
+::-webkit-scrollbar-thumb { background-color: var(--color-border); border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background-color: var(--color-text-secondary); }
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.animate-fadeIn { animation: fadeIn 0.2s ease-out; }
+.animate-scaleIn { animation: scaleIn 0.2s ease-out; }
+.animate-slideIn { animation: slideIn 0.3s ease-out; }
+
+/* ── Utility class for chart labels (shadcn pattern) ── */
+.fill-foreground { fill: var(--color-text); }
+
+/* ── Recharts: Eixos — garantir que ticks e axis labels apareçam ── */
+/* TW4 Preflight reseta `border: 0 solid` em `*` e `display: block` em `svg`.
+   Isso pode quebrar elementos SVG internos do Recharts. Override necessário: */
+.recharts-wrapper text,
+.recharts-wrapper tspan {
+  fill: var(--color-tick);
+  font-size: 12px;
+  border: initial;
+}
+.recharts-xAxis,
+.recharts-yAxis,
+.recharts-cartesian-axis {
+  visibility: visible !important;
+  display: initial !important;
+}
+.recharts-cartesian-axis-tick {
+  visibility: visible !important;
+}
+.recharts-cartesian-axis-tick text,
+.recharts-cartesian-axis-tick-value {
+  fill: var(--color-tick) !important;
+  font-size: 12px;
+  visibility: visible !important;
+}
+.recharts-cartesian-axis-line {
+  stroke: var(--color-border) !important;
+}
+
+/* ── Recharts: NUNCA borda/outline preta em nenhum chart ── */
+/* SVG container — matar focus ring do accessibilityLayer */
+.recharts-wrapper,
+.recharts-wrapper svg,
+.recharts-wrapper svg:focus,
+.recharts-wrapper svg:focus-visible,
+.recharts-wrapper svg:active,
+.recharts-surface,
+.recharts-surface:focus,
+.recharts-surface:focus-visible {
+  outline: none !important;
+  border: none !important;
+}
+/* Barras — nunca stroke/outline */
+.recharts-bar-rectangle path,
+.recharts-bar-rectangle rect,
+.recharts-active-bar path,
+.recharts-active-bar rect,
+.recharts-rectangle {
+  stroke: none !important;
+  outline: none !important;
+}
+.recharts-bar-rectangle,
+.recharts-bar-rectangle:focus,
+.recharts-bar-rectangle:active,
+.recharts-bar-rectangle:focus-visible,
+.recharts-active-bar,
+.recharts-active-bar:focus,
+.recharts-active-bar:active,
+.recharts-active-bar:focus-visible {
+  outline: none !important;
+}
+/* Pie — sem stroke, sem outline */
+.recharts-pie-sector,
+.recharts-pie-sector:focus,
+.recharts-pie-sector:active,
+.recharts-pie-sector:focus-visible,
+.recharts-pie-sector g {
+  outline: none !important;
+  stroke: none !important;
+}
+.recharts-pie-sector path {
+  stroke: none !important;
+  stroke-width: 0 !important;
+}
