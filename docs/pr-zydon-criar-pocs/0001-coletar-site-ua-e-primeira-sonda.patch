@@ -1,0 +1,135 @@
+From d868b8a2f7817f5daa63b43424f6874290a38fc1 Mon Sep 17 00:00:00 2001
+From: Pipeline POCs <joao.silva@zydon.com.br>
+Date: Mon, 28 Sep 2026 23:46:02 +0000
+Subject: [PATCH] fix(coletar_site): repete com outro User-Agent no 403 e para
+ na primeira sonda que acha produtos
+
+Loja Integrada (loja-bio-infinity) devolve 403 ao UA Chrome/128 e 200 a Mozilla/5.0.
+No fise.com.br o wordpress_cpt consumia 726 MB depois de o WooCommerce ja ter achado
+100 produtos. Um sitemap vazio tambem nao impede mais o fallback da home.
+---
+ Criar Portais/coletar_site.py | 23 +++++++++++---
+ tests/test_coletar_site.py    | 57 +++++++++++++++++++++++++++++++++++
+ 2 files changed, 75 insertions(+), 5 deletions(-)
+
+diff --git a/Criar Portais/coletar_site.py b/Criar Portais/coletar_site.py
+index c23403c..2e369a9 100644
+--- a/Criar Portais/coletar_site.py	
++++ b/Criar Portais/coletar_site.py	
+@@ -29,12 +29,17 @@ from urllib.parse import urljoin, urlparse
+ import requests
+ 
+ UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/128 Safari/537.36"}
++# Loja Integrada devolve 403 ao UA acima e 200 a este (medido em 28/09/2026 na
++# loja-bio-infinity). So entra quando o primeiro recebe 403.
++UA_ALTERNATIVO = {"User-Agent": "Mozilla/5.0"}
+ TIMEOUT = 20
+ 
+ 
+ def _get(url, **kw):
+     try:
+         r = requests.get(url, headers=UA, timeout=TIMEOUT, **kw)
++        if r.status_code == 403:
++            r = requests.get(url, headers=UA_ALTERNATIVO, timeout=TIMEOUT, **kw)
+         return r if r.status_code == 200 else None
+     except requests.RequestException:
+         return None
+@@ -226,17 +231,25 @@ def _item(nome, preco, categoria, imagem, url, variantes=None):
+ 
+ # ------------------------------------------------------------------- main
+ 
++SONDAS = (shopify, woocommerce, vtex, wordpress_cpt)
++
++
+ def coletar(base, limite):
+     home = _get(base)
+     gerador = ""
+     if home:
+         m = re.search(r'<meta name="generator" content="([^"]+)"', home.text)
+         gerador = m.group(1) if m else ""
+-    with ThreadPoolExecutor(4) as ex:
+-        sondas = list(ex.map(lambda f: f(base), (shopify, woocommerce, vtex, wordpress_cpt)))
+-    achado = (next((s for s in sondas if s), None) or sitemap_generico(base, limite)
+-              or imagens_home(base, home))
+-    plataforma, itens = achado if achado else ("nenhuma", [])
++    # Uma sonda por vez, parando na primeira que acha itens. Rodar as quatro
++    # sempre custava caro: no fise.com.br o wordpress_cpt (200 posts com _embed)
++    # levava 25 s e 726 MB depois de o WooCommerce ja ter achado 100 produtos.
++    # E um ("sitemap", []) vazio nao pode mais impedir o fallback da home.
++    plataforma, itens = "nenhuma", []
++    for sonda in SONDAS + (lambda b: sitemap_generico(b, limite), lambda b: imagens_home(b, home)):
++        achado = sonda(base)
++        if achado and achado[1]:
++            plataforma, itens = achado
++            break
+     lojas = sorted(set(re.findall(
+         r'href="(https?://(?:lista\.mercadolivre|www\.mercadolivre|[^"/]+\.lojaintegrada|[^"/]+\.nuvemshop|loja\.[^"/]+)[^"]*)"',
+         home.text))) if home else []
+diff --git a/tests/test_coletar_site.py b/tests/test_coletar_site.py
+index a258fdb..ece8411 100644
+--- a/tests/test_coletar_site.py
++++ b/tests/test_coletar_site.py
+@@ -23,3 +23,60 @@ def test_pagina_produto(monkeypatch):
+     assert i["imagem"] == "https://img.irroba.com.br/fit-in/1000x1000/a.jpg"
+     assert i["preco"] == 1234.5
+     assert i["variantes"] == ["ESCOLHA O TAMANHO"]
++
++
++class _Resposta:
++    def __init__(self, status, texto=""):
++        self.status_code, self.text = status, texto
++
++
++def test_get_repete_com_outro_user_agent_no_403(monkeypatch):
++    vistos = []
++
++    def falso(url, headers=None, **k):
++        vistos.append(headers["User-Agent"])
++        return _Resposta(403 if headers is coletar_site.UA else 200, "ok")
++
++    monkeypatch.setattr(coletar_site.requests, "get", falso)
++    r = coletar_site._get("https://loja.lojaintegrada.com.br/sitemap.xml")
++    assert r is not None and r.text == "ok"
++    assert vistos == [coletar_site.UA["User-Agent"], coletar_site.UA_ALTERNATIVO["User-Agent"]]
++
++
++def test_get_nao_repete_quando_nao_e_403(monkeypatch):
++    vistos = []
++
++    def falso(url, headers=None, **k):
++        vistos.append(headers)
++        return _Resposta(404)
++
++    monkeypatch.setattr(coletar_site.requests, "get", falso)
++    assert coletar_site._get("https://x/nada") is None
++    assert len(vistos) == 1
++
++
++def test_coletar_para_na_primeira_sonda_que_acha(monkeypatch):
++    chamadas = []
++
++    def sonda(nome, itens):
++        def f(base):
++            chamadas.append(nome)
++            return (nome, itens) if itens else None
++        return f
++
++    item = coletar_site._item("Produto A", None, None, "https://x/a.jpg", "https://x/p/a")
++    monkeypatch.setattr(coletar_site, "_get", lambda url, **k: None)
++    monkeypatch.setattr(coletar_site, "SONDAS", (sonda("shopify", []), sonda("woocommerce", [item]),
++                                                 sonda("vtex", [item]), sonda("wordpress-cpt", [item])))
++    d = coletar_site.coletar("https://x/", 60)
++    assert d["plataforma"] == "woocommerce" and d["total"] == 1
++    assert chamadas == ["shopify", "woocommerce"]
++
++
++def test_sitemap_vazio_nao_impede_a_home(monkeypatch):
++    item = coletar_site._item("Produto B", None, None, "https://x/b.jpg", "https://x/")
++    monkeypatch.setattr(coletar_site, "_get", lambda url, **k: None)
++    monkeypatch.setattr(coletar_site, "SONDAS", ())
++    monkeypatch.setattr(coletar_site, "sitemap_generico", lambda base, limite: ("sitemap", []))
++    monkeypatch.setattr(coletar_site, "imagens_home", lambda base, home: ("home", [item]))
++    assert coletar_site.coletar("https://x/", 60)["plataforma"] == "home"
+-- 
+2.39.5
+
