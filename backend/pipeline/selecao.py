@@ -68,7 +68,8 @@ def nome_valido(nome, url=""):
 
 
 def normalizar_site(site):
-    base = site if site.startswith(("http://", "https://")) else "https://" + site
+    base = site.strip() if site.strip().startswith(("http://", "https://")) else "https://" + site.strip()
+    base = re.split(r"[?#]", base, maxsplit=1)[0]
     return base.rstrip("/") + "/"
 
 
@@ -130,7 +131,7 @@ def _coletar(base, limite, foco=""):
         coletar_site._retentativa = True
     home = coletar_site._get(base)
     plataforma, itens = "nenhuma", []
-    sondas = (coletar_site.shopify, coletar_site.woocommerce, coletar_site.vtex,
+    sondas = (_shopify_com_foto, coletar_site.woocommerce, coletar_site.vtex,
               coletar_site.wordpress_cpt, lambda b: _sitemap_pelo_foco(coletar_site, b, limite, foco),
               lambda b: coletar_site.imagens_home(b, home))
     for sonda in sondas:
@@ -141,6 +142,7 @@ def _coletar(base, limite, foco=""):
             achado = None
         if achado and achado[1]:
             plataforma, itens = achado
+            itens = [i for i in itens if i.get("imagem")] + [i for i in itens if not i.get("imagem")]
             break
     gerador = ""
     if home is not None:
@@ -148,6 +150,40 @@ def _coletar(base, limite, foco=""):
         gerador = m.group(1) if m else ""
     return {"site": base, "gerador": gerador, "plataforma": plataforma,
             "total": len(itens), "itens": itens[:limite]}
+
+
+def _shopify_com_foto(base):
+    """Loja Shopify: lê até 4 páginas de /products.json (250 por página) e guarda
+    os produtos com foto primeiro. Antes o corte nos 60 primeiros pegava só itens
+    sem foto (Ricambi: 250 produtos, 28 com foto, nenhum entre os 60 primeiros)."""
+    import coletar_site
+    from urllib.parse import urljoin as _junta
+    saida, vistos = [], set()
+    for pagina in range(1, 5):
+        dados = coletar_site._json(_junta(base, f"/products.json?limit=250&page={pagina}"))
+        produtos = (dados or {}).get("products") or []
+        if not produtos:
+            break
+        for p in produtos:
+            v = (p.get("variants") or [{}])[0]
+            img = (p.get("images") or [{}])[0].get("src")
+            chave = (p.get("title"), img)
+            if chave in vistos:
+                continue
+            vistos.add(chave)
+            try:
+                preco = float(v.get("price") or 0) or None
+            except (TypeError, ValueError):
+                preco = None
+            saida.append(coletar_site._item(p["title"], preco, p.get("product_type"), img,
+                                            _junta(base, f"/products/{p['handle']}")))
+        if len(produtos) < 250 or sum(1 for i in saida if i.get("imagem")) >= 60:
+            break
+    if not saida:
+        return None
+    com_foto = sum(1 for i in saida if i.get("imagem"))
+    evento("extracao", f"loja Shopify: {len(saida)} produtos, {com_foto} com foto")
+    return "shopify", saida
 
 
 def _sitemap_pelo_foco(coletar_site, base, limite, foco):
