@@ -6,7 +6,6 @@ import Badge from '../components/ui/Badge'
 import Button from '../components/ui/Button'
 import Checkbox from '../components/ui/Checkbox'
 import Input from '../components/ui/Input'
-import ConfirmDialog from '../components/ui/ConfirmDialog'
 import { ToastContainer } from '../components/ui/Toast'
 import { useToast } from '../hooks/useToast'
 import { Aviso, Esqueleto, Pagina } from '../components/app/Pagina'
@@ -63,7 +62,6 @@ export default function PedidoDetalhe() {
   const [ocupado, setOcupado] = useState<string | null>(null)
   const [excluidos, setExcluidos] = useState<Set<string>>(new Set())
   const [edicoes, setEdicoes] = useState<Record<string, { nome?: string; preco?: string }>>({})
-  const [confirmar, setConfirmar] = useState(false)
   const [feedback, setFeedback] = useState('')
 
   const local = useLocation()
@@ -223,8 +221,27 @@ export default function PedidoDetalhe() {
 
   async function criarPortal(simular: boolean) {
     if (alterado && !(await salvarCuradoria())) return
-    await executar(simular ? 'simular' : 'criar', { acao: 'criar', simular },
-      simular ? 'Simulação enviada. Veja o resultado na linha do tempo.' : 'Criação do portal na fila. Atualize em alguns minutos.')
+    if (simular) {
+      await executar('simular', { acao: 'criar', simular: true }, 'Simulação enviada. Veja o resultado na linha do tempo.')
+      return
+    }
+    const anterior = pedido
+    const agora = new Date().toISOString()
+    if (pedido) setPedido({ ...pedido, status: 'criando', acao_desde: agora, criacao_inicio: agora })
+    setOcupado('criar')
+    try {
+      await acionar('pedido_acao', { pedido_id: id, acao: 'criar', simular: false })
+      await carregar(true)
+    } catch (e) {
+      if (e instanceof ErroApi && e.codigo === 'STATUS_NAO_PERMITE') {
+        await carregar(true)
+      } else {
+        if (anterior) setPedido(anterior)
+        addToast('error', e instanceof ErroApi ? e.message : 'Não foi possível criar o portal.')
+      }
+    } finally {
+      setOcupado(null)
+    }
   }
 
   if (erro && !pedido) return <Pagina titulo="Pedido"><Aviso tipo="danger" titulo={erro} /></Pagina>
@@ -334,7 +351,7 @@ export default function PedidoDetalhe() {
                 <Button variant="secondary" disabled={!!ocupado || pedido.em_execucao} onClick={() => criarPortal(true)}>
                   {ocupado === 'simular' ? <Loader2 size={16} className="animate-spin" /> : <FlaskConical size={16} />} Simular
                 </Button>
-                <Button disabled={!!ocupado || pedido.em_execucao || restantes < MINIMO} onClick={() => setConfirmar(true)}>
+                <Button disabled={!!ocupado || pedido.em_execucao || restantes < MINIMO} onClick={() => criarPortal(false)}>
                   {ocupado === 'criar' ? <Loader2 size={16} className="animate-spin" /> : <Rocket size={16} />} Aprovar e criar portal
                 </Button>
               </div>
@@ -443,8 +460,8 @@ export default function PedidoDetalhe() {
                   <Button disabled={!!ocupado || pedido.em_execucao} onClick={() => executar('aplicar', {
                     acao: 'banner', acao_banner: 'aplicar',
                     escolhas: Object.fromEntries(pecasAtuais.filter((x) => x.file_id).map((x) => [x.peca, x.file_id])),
-                  }, 'Aplicação dos banners enviada; a conferência é feita lendo o portal.')}>
-                    {ocupado === 'aplicar' ? <Loader2 size={16} className="animate-spin" /> : <Rocket size={16} />} Aplicar no portal
+                  }, 'Trocando os banners do portal; a conferência é feita lendo o portal.')}>
+                    {ocupado === 'aplicar' ? <Loader2 size={16} className="animate-spin" /> : <Rocket size={16} />} {pecas.some((x) => x.aplicada) ? 'Alterar os do portal' : 'Aplicar no portal'}
                   </Button>
                 )}
               </div>
@@ -509,11 +526,6 @@ export default function PedidoDetalhe() {
         </Card>
       </div>
 
-      <ConfirmDialog isOpen={confirmar} onClose={() => setConfirmar(false)}
-        onConfirm={() => { setConfirmar(false); criarPortal(false) }}
-        title="Criar o portal na Zydon?"
-        message={`O portal será criado na org de POCs com ${restantes} produtos. Esta ação cria dados reais e não é desfeita por aqui.`}
-        confirmLabel="Criar portal" />
     </Pagina>
   )
 }
