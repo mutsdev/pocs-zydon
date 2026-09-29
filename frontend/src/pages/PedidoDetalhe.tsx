@@ -169,7 +169,8 @@ export default function PedidoDetalhe() {
     try {
       await acionar('pedido_acao', { pedido_id: id, ...entrada })
       addToast('success', sucesso)
-      await carregar()
+      if (entrada.acao === 'extrair') setPedido((atual) => (atual ? { ...atual, status: 'extraindo', acao_desde: new Date().toISOString() } : atual))
+      await carregar(true)
     } catch (e) {
       addToast('error', e instanceof ErroApi ? e.message : 'Não foi possível executar a ação.')
     } finally {

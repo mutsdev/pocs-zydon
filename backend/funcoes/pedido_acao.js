@@ -91,6 +91,11 @@ module.exports = async (event, context) => {
       WHERE pedido_id = :p AND status = 'curadoria' AND portal_id IS NULL RETURNING pedido_id`, { p: pedidoId });
     if (!tomado.length) return { ok: false, erro: 'STATUS_NAO_PERMITE', status: 'criando', acao };
   }
+  if (acao === 'extrair') {
+    const tomado = await sql(`UPDATE pedidos SET status = 'extraindo', erro = NULL, erro_codigo = NULL, atualizado_em = now()
+      WHERE pedido_id = :p AND status IN ('falhou', 'precisa_catalogo', 'aguardando_anexo') RETURNING pedido_id`, { p: pedidoId });
+    if (!tomado.length) return { ok: false, erro: 'STATUS_NAO_PERMITE', status: 'extraindo', acao };
+  }
   let execucao;
   try {
     execucao = await mitra.functions.executeAsync(pipeline.id, entrada);
@@ -98,6 +103,10 @@ module.exports = async (event, context) => {
     if (criarDeVerdade) {
       await mitra.sql.executeDml([{ sql: `UPDATE pedidos SET status = 'curadoria', criacao_inicio = NULL
         WHERE pedido_id = :p AND status = 'criando' AND portal_id IS NULL`, parameters: { p: pedidoId } }]);
+    }
+    if (acao === 'extrair') {
+      await mitra.sql.executeDml([{ sql: `UPDATE pedidos SET status = :s WHERE pedido_id = :p AND status = 'extraindo'`,
+        parameters: { p: pedidoId, s: pedido.status } }]);
     }
     return { ok: false, erro: 'PIPELINE_AUSENTE', mensagem: String(erro && erro.message || erro) };
   }
