@@ -900,7 +900,7 @@ def completar_ate_o_alvo(itens, candidatos, motivos, categorias):
     return completados
 
 
-def montar_pela_selecao(coleta, candidatos, escolha, cliente, segmento, descricao):
+def montar_pela_selecao(coleta, candidatos, escolha, cliente, segmento, descricao, com_variacoes=False):
     """(catalogo, precos, situacao_preco, produtos_similares, regra_preco, descartes_modelo).
 
     Preco nunca vem do modelo: preco lido na pagina; sem ele, a mediana dos
@@ -942,7 +942,7 @@ def montar_pela_selecao(coleta, candidatos, escolha, cliente, segmento, descrica
                                   "descricao": c.get("descricao") or ""} for c in candidatos]}
     paleta = _paleta_de_cores()
     grade, grade_info = {}, {}
-    for n, _ in itens:
+    for n, _ in (itens if com_variacoes else []):
         if len(grade) >= MAXIMO_PRODUTOS_COM_GRADE:
             break
         achada = grade_do_candidato(candidatos[n], paleta)

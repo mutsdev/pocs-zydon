@@ -641,7 +641,7 @@ def montar_catalogo(entrada):
     try:
         catalogo, precos, situacao, similares, regra_preco, descartes_modelo = selecao.montar_pela_selecao(
             coleta, validos, escolha, cliente, segmento_informado or segmento_modelo,
-            entrada.get("descricao"))
+            entrada.get("descricao"), com_variacoes=bool(entrada.get("variacoes")))
         fora = next((x["_fora_do_foco"] for x in descartes_modelo if "_fora_do_foco" in x), 0)
         descartes_modelo = [x for x in descartes_modelo if "_fora_do_foco" not in x]
         if foco and fora:

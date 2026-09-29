@@ -4,6 +4,7 @@ import { Globe, Loader2 } from 'lucide-react'
 import { Card } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
+import RadioGroup from '../components/ui/Radio'
 import CampoAnexo from '../components/app/CampoAnexo'
 import { Pagina } from '../components/app/Pagina'
 import { acionar, ErroApi } from '../lib/mitra-api'
@@ -16,6 +17,7 @@ export default function NovoPedido() {
   const [cliente, setCliente] = useState('')
   const [site, setSite] = useState('')
   const [foco, setFoco] = useState('')
+  const [variacoes, setVariacoes] = useState('nao')
   const [arquivo, setArquivo] = useState<File | null>(null)
   const [progresso, setProgresso] = useState<number | null>(null)
   const [enviando, setEnviando] = useState(false)
@@ -33,7 +35,7 @@ export default function NovoPedido() {
     setEnviando(true)
     let pedidoId = ''
     try {
-      const r = await acionar('pedido_abrir', { cliente: cliente.trim(), site: site.trim(), foco: foco.trim(), anexo_nome: arquivo?.name || '' })
+      const r = await acionar('pedido_abrir', { cliente: cliente.trim(), site: site.trim(), foco: foco.trim(), variacoes: variacoes === 'sim', anexo_nome: arquivo?.name || '' })
       pedidoId = String(r.pedido_id)
       if (arquivo) {
         setProgresso(0)
@@ -61,6 +63,8 @@ export default function NovoPedido() {
           <Input label="Cliente" placeholder="Ex.: Distribuidora JH" value={cliente} onChange={(e) => setCliente(e.target.value)} />
           <Input label="Site do cliente" placeholder={arquivo ? 'Opcional com anexo' : 'www.cliente.com.br'} value={site} onChange={(e) => setSite(e.target.value)} />
           <Input label="Foco dos produtos (opcional)" placeholder="Ex.: peças e acessórios, não a bicicleta" value={foco} onChange={(e) => setFoco(e.target.value)} />
+          <RadioGroup label="Criar variações (cor, tamanho, voltagem…)" direction="horizontal" value={variacoes} onChange={setVariacoes} disabled={enviando}
+            options={[{ value: 'nao', label: 'Não' }, { value: 'sim', label: 'Sim, quando o site ou o anexo informar' }]} />
           <CampoAnexo arquivo={arquivo} onChange={setArquivo} desativado={enviando}
             ajuda="Sem site, ou com um site sem produtos? Anexe o catálogo: o sistema lê nome, preço e foto de cada produto." />
           {erro && <p className="text-sm" style={{ color: 'var(--color-danger)' }}>{erro}</p>}
