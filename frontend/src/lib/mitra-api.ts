@@ -59,6 +59,9 @@ const MENSAGENS: Record<string, string> = {
   PORTAL_AUSENTE: 'O portal ainda não foi criado.',
   PIPELINE_AUSENTE: 'O serviço de criação está indisponível.',
   ACAO_INVALIDA: 'Ação inválida.',
+  ANEXO_INVALIDO: 'Envie PDF, planilha (xlsx, xls, csv) ou Word (docx).',
+  ANEXO_AUSENTE: 'O arquivo chegou incompleto. Envie de novo.',
+  EXECUTIVO_NAO_CADASTRADO: 'Peça ao João Pedro para te cadastrar.',
 }
 
 function mensagemDeErro(saida: Record<string, unknown>) {
@@ -68,9 +71,9 @@ function mensagemDeErro(saida: Record<string, unknown>) {
   return base
 }
 
-export type Status = 'extraindo' | 'curadoria' | 'precisa_catalogo' | 'criando' | 'concluido' | 'falhou'
+export type Status = 'extraindo' | 'aguardando_anexo' | 'curadoria' | 'precisa_catalogo' | 'criando' | 'concluido' | 'falhou'
 
-export interface Executivo { id: number; nome: string; email: string | null; ativo: boolean; pedidos: number }
+export interface Executivo { id: number; nome: string; email: string | null; cargo: string | null; ativo: boolean; pedidos: number }
 
 export interface PedidoLinha {
   pedido_id: string; cliente: string; site: string; status: Status; segmento: string | null
@@ -85,7 +88,8 @@ export interface Pedido extends PedidoLinha {
   catalogo: string | null; resumo: string | null; portal_id: string | null; banner_cor: string | null
   observacoes: string | null; erro: string | null; motivo_catalogo: string | null; modelo_ia: string | null
   custo_ia_usd: number | string; tokens_ia: number; extracao_fim: string | null; curadoria_fim: string | null
-  criacao_inicio: string | null; falhou_em: string | null
+  criacao_inicio: string | null; falhou_em: string | null; execucao_desde: string | null
+  anexo_nome: string | null; nomes_lidos_na_imagem: number | null
 }
 
 export interface Evento { id: number; etapa: string; mensagem: string; nivel: string; criado_em: string }

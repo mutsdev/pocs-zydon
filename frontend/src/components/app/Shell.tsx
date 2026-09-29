@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { BarChart3, LayoutList, LogOut, Menu, PlusCircle, Users, X } from 'lucide-react'
+import { BarChart3, LayoutDashboard, LayoutList, LogOut, Menu, PlusCircle, Users, X } from 'lucide-react'
 import { clearSession } from '../../lib/mitra-auth'
 import { useSessao } from '../../lib/sessao'
 import LogoZydon from './LogoZydon'
 
 const ITENS = [
+  { para: '/painel', rotulo: 'Painel', icone: LayoutDashboard, admin: true },
   { para: '/novo', rotulo: 'Novo pedido', icone: PlusCircle },
   { para: '/pedidos', rotulo: 'Pedidos', icone: LayoutList },
   { para: '/relatorios', rotulo: 'Relatórios', icone: BarChart3 },
@@ -51,7 +52,7 @@ function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
       </div>
       <div className="mt-auto px-3 py-2 leading-tight">
         <div className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>{sessao.executivo || sessao.email}</div>
-        <div className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>{sessao.admin ? 'Administrador' : 'Usuário'}</div>
+        <div className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>{[sessao.cargo, sessao.admin ? 'Administrador' : null].filter(Boolean).join(' · ') || 'Usuário'}</div>
       </div>
       <button
         onClick={() => { clearSession(); navegar('/login', { replace: true }) }}

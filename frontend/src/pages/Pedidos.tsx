@@ -55,6 +55,24 @@ export default function Pedidos() {
 
   useEffect(() => { carregar(0) }, [carregar])
 
+  const andamento = (linhas || []).some((p) => ['extraindo', 'criando', 'aguardando_anexo'].includes(p.status) || p.em_execucao)
+  useEffect(() => {
+    if (!andamento || carregando) return
+    const t = setTimeout(async () => {
+      if (document.visibilityState !== 'visible' || !linhas) return
+      const v = versao.current
+      try {
+        const { desde, ate } = intervalo(filtros.periodo)
+        const r = await consultar<PedidoLinha>('pedidos_listar', {
+          executivo: filtros.executivo, segmento: filtros.segmento, status: filtros.status, desde, ate,
+          busca: buscaAtiva, limite: String(Math.max(PAGINA, linhas.length)), offset: '0',
+        })
+        if (v === versao.current) setLinhas(r)
+      } catch { /* mantém a lista atual; tenta de novo no próximo ciclo */ }
+    }, 5000)
+    return () => clearTimeout(t)
+  }, [andamento, carregando, linhas, filtros, buscaAtiva])
+
   useEffect(() => {
     const alvo = sentinela.current
     if (!alvo) return

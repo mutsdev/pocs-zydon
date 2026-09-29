@@ -8,6 +8,7 @@ import Pedidos from './pages/Pedidos'
 import PedidoDetalhe from './pages/PedidoDetalhe'
 import Relatorios from './pages/Relatorios'
 import Executivos from './pages/Executivos'
+import Painel from './pages/Painel'
 import Barrado from './components/app/Barrado'
 import { SessaoContexto } from './lib/sessao'
 import type { Sessao } from './lib/sessao'
@@ -66,11 +67,12 @@ function App() {
     <Routes>
       {configured ? (
         <>
-          <Route path="/" element={<Navigate to={s?.executivo_id ? '/novo' : '/pedidos'} replace />} />
+          <Route path="/" element={<Navigate to={s?.admin ? '/painel' : s?.executivo_id ? '/novo' : '/pedidos'} replace />} />
           <Route path="/novo" element={<Shell><NovoPedido /></Shell>} />
           <Route path="/pedidos" element={<Shell><Pedidos /></Shell>} />
           <Route path="/pedidos/:id" element={<Shell><PedidoDetalhe /></Shell>} />
           <Route path="/relatorios" element={<Shell><Relatorios /></Shell>} />
+          {s?.admin && <Route path="/painel" element={<Shell><Painel /></Shell>} />}
           {s?.admin && <Route path="/usuarios" element={<Shell><Executivos /></Shell>} />}
         </>
       ) : <Route path="/" element={<Navigate to="/login" replace />} />}

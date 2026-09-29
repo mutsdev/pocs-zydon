@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Link, useLocation, useParams } from 'react-router-dom'
 import { ArrowLeft, ExternalLink, FlaskConical, ImageOff, Loader2, RefreshCw, Rocket, Save, Wand2 } from 'lucide-react'
 import { Card } from '../components/ui/Card'
 import Badge from '../components/ui/Badge'
@@ -10,6 +10,9 @@ import ConfirmDialog from '../components/ui/ConfirmDialog'
 import { ToastContainer } from '../components/ui/Toast'
 import { useToast } from '../hooks/useToast'
 import { Aviso, Esqueleto, Pagina } from '../components/app/Pagina'
+import Espera from '../components/app/Espera'
+import CampoAnexo from '../components/app/CampoAnexo'
+import { enviarAnexo, validarArquivo } from '../lib/anexo'
 import { acionar, consultar, ErroApi } from '../lib/mitra-api'
 import type { Evento, Pedido, Peca } from '../lib/mitra-api'
 import { BANNERS, dataHora, dolares, FONTE, PRECO, reais, STATUS } from '../lib/formatos'
@@ -41,8 +44,13 @@ export default function PedidoDetalhe() {
   const [confirmar, setConfirmar] = useState(false)
   const [feedback, setFeedback] = useState('')
 
-  const carregar = useCallback(async () => {
-    setAtualizando(true)
+  const local = useLocation()
+  const [arquivo, setArquivo] = useState<File | null>(null)
+  const [progresso, setProgresso] = useState<number | null>(null)
+  const statusAnterior = useRef<string | null>(null)
+
+  const carregar = useCallback(async (silencioso = false) => {
+    if (!silencioso) setAtualizando(true)
     const [p, e, b] = await Promise.allSettled([
       consultar<Pedido>('pedido_ler', { pedido_id: id }),
       consultar<Evento>('pedido_eventos', { pedido_id: id }),
@@ -58,6 +66,53 @@ export default function PedidoDetalhe() {
   }, [id])
 
   useEffect(() => { carregar() }, [carregar])
+
+  useEffect(() => {
+    const aviso = (local.state as { aviso?: string } | null)?.aviso
+    if (aviso) addToast('error', aviso)
+  }, [local.state, addToast])
+
+  const emAndamento = !!pedido && (['extraindo', 'criando', 'aguardando_anexo'].includes(pedido.status) || pedido.em_execucao
+    || ['gerando', 'regerando', 'aplicando'].includes(pedido.banners_situacao || ''))
+  useEffect(() => {
+    if (!emAndamento) return
+    const relogio = setTimeout(() => { if (document.visibilityState === 'visible') carregar(true); else setAtualizando(false) }, 4000)
+    return () => clearTimeout(relogio)
+  }, [emAndamento, pedido, carregar])
+
+  useEffect(() => {
+    if (!pedido) return
+    const antes = statusAnterior.current
+    statusAnterior.current = pedido.status
+    if (!antes || antes === pedido.status) return
+    const rotulos: Record<string, ['success' | 'error', string]> = {
+      curadoria: ['success', 'Produtos prontos para a curadoria.'],
+      concluido: ['success', 'Portal criado. O link já está no card Portal.'],
+      falhou: ['error', 'O pedido falhou. Veja o motivo abaixo.'],
+      precisa_catalogo: ['error', 'O site não teve produtos suficientes: anexe o catálogo.'],
+    }
+    const r = rotulos[pedido.status]
+    if (r) addToast(r[0], r[1])
+  }, [pedido, addToast])
+
+  async function enviarCatalogo() {
+    if (!arquivo) return
+    const problema = validarArquivo(arquivo)
+    if (problema) { addToast('error', problema); return }
+    setOcupado('anexo')
+    setProgresso(0)
+    try {
+      await enviarAnexo(id, arquivo, setProgresso)
+      setArquivo(null)
+      addToast('success', 'Catálogo recebido. Lendo os produtos…')
+      await carregar(true)
+    } catch (e) {
+      addToast('error', e instanceof ErroApi ? e.message : 'Não foi possível enviar o arquivo.')
+    } finally {
+      setOcupado(null)
+      setProgresso(null)
+    }
+  }
 
   const catalogo = useMemo(() => json<Catalogo>(pedido?.catalogo ?? null), [pedido?.catalogo])
   const resumo = useMemo(() => json<Resumo>(pedido?.resumo ?? null) || {}, [pedido?.resumo])
@@ -138,7 +193,7 @@ export default function PedidoDetalhe() {
     <Pagina titulo={pedido.cliente} subtitulo={`${pedido.pedido_id} · ${pedido.executivo} · aberto em ${dataHora(pedido.criado_em)}`}
       acao={<>
         <Link to="/pedidos"><Button variant="ghost"><ArrowLeft size={16} /> Pedidos</Button></Link>
-        <Button variant="secondary" onClick={carregar} disabled={atualizando}>
+        <Button variant="secondary" onClick={() => carregar()} disabled={atualizando}>
           {atualizando ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />} Atualizar
         </Button>
       </>}>
@@ -178,13 +233,42 @@ export default function PedidoDetalhe() {
         </Aviso>
       )}
       {pedido.status === 'precisa_catalogo' && (
-        <Aviso titulo="Precisamos do catálogo do cliente em PDF ou planilha">
+        <Aviso titulo="Precisamos do catálogo do cliente em PDF, planilha ou Word">
           {pedido.motivo_catalogo}
-          <div className="mt-2"><Button size="sm" variant="secondary" disabled={!!ocupado} onClick={() => executar('extrair', { acao: 'extrair' }, 'Nova busca iniciada.')}>Buscar de novo no site</Button></div>
+          <div className="mt-3 flex flex-col gap-3 max-w-xl">
+            <CampoAnexo arquivo={arquivo} onChange={setArquivo} rotulo="Catálogo do cliente" desativado={!!ocupado} />
+            <div className="flex flex-wrap items-center gap-3">
+              <Button size="sm" disabled={!arquivo || !!ocupado} onClick={enviarCatalogo}>
+                {progresso !== null ? <><Loader2 size={16} className="animate-spin" /> Enviando {Math.round(progresso * 100)}%</> : 'Enviar e ler o catálogo'}
+              </Button>
+              <Button size="sm" variant="secondary" disabled={!!ocupado} onClick={() => executar('extrair', { acao: 'extrair' }, 'Nova busca iniciada.')}>Buscar de novo no site</Button>
+            </div>
+          </div>
         </Aviso>
       )}
-      {pedido.status === 'extraindo' && <Aviso tipo="info" titulo="Buscando os produtos no site do cliente">Leva de 10 s a 1 min. Clique em Atualizar para ver o andamento.</Aviso>}
-      {pedido.status === 'criando' && <Aviso tipo="info" titulo="Criando o portal na Zydon">Um portal por vez; se houver outro na fila, este espera a vez.</Aviso>}
+      {pedido.status === 'aguardando_anexo' && !pedido.em_execucao && (
+        <Aviso titulo="O anexo não terminou de chegar">
+          Envie o arquivo de novo para o sistema ler o catálogo.
+          <div className="mt-3 flex flex-col gap-3 max-w-xl">
+            <CampoAnexo arquivo={arquivo} onChange={setArquivo} rotulo="Catálogo do cliente" desativado={!!ocupado} />
+            <div><Button size="sm" disabled={!arquivo || !!ocupado} onClick={enviarCatalogo}>
+              {progresso !== null ? `Enviando ${Math.round(progresso * 100)}%` : 'Enviar e ler o catálogo'}
+            </Button></div>
+          </div>
+        </Aviso>
+      )}
+      {(pedido.status === 'extraindo' || pedido.status === 'criando' || (pedido.status === 'aguardando_anexo' && pedido.em_execucao)) && (
+        <Espera
+          titulo={pedido.status === 'criando' ? 'Criando o portal na Zydon' : pedido.anexo_nome ? `Lendo o catálogo ${pedido.anexo_nome}` : 'Buscando os produtos do cliente'}
+          mensagem={eventos[0]?.mensagem || (pedido.status === 'criando' ? 'Um portal por vez; se houver outro na fila, este espera a vez.' : 'Leva de 20 s a 2 min. A tela se atualiza sozinha.')}
+          desde={pedido.execucao_desde || pedido.criacao_inicio || pedido.criado_em} />
+      )}
+      {pedido.status !== 'extraindo' && pedido.status !== 'criando' && ['gerando', 'regerando', 'aplicando'].includes(pedido.banners_situacao || '') && (
+        <Aviso tipo="info" titulo="Gerando os banners de identidade visual">{eventos[0]?.mensagem || 'A tela se atualiza sozinha quando terminar.'}</Aviso>
+      )}
+      {(pedido.nomes_lidos_na_imagem || 0) > 0 && (
+        <Aviso titulo={`${pedido.nomes_lidos_na_imagem} nomes de produto foram lidos nas fotos do site`}>O site não tinha o nome em texto; o sistema leu o que está escrito na foto. Confira cada nome antes de criar o portal.</Aviso>
+      )}
       {pedido.produtos_similares && <Aviso titulo="Há produtos que NÃO são da marca do cliente">A busca trouxe produtos similares do segmento. Eles estão marcados na lista; confirme com o cliente antes de mostrar.</Aviso>}
       {pedido.preco && pedido.preco !== 'publico' && (
         <Aviso titulo={pedido.preco === 'ausente' ? 'Nenhum produto tem preço' : 'Há preços estimados neste catálogo'}>

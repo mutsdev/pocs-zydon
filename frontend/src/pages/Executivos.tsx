@@ -4,6 +4,7 @@ import { Card } from '../components/ui/Card'
 import Badge from '../components/ui/Badge'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
+import Select from '../components/ui/Select'
 import { ToastContainer } from '../components/ui/Toast'
 import { useToast } from '../hooks/useToast'
 import { Aviso, Pagina, Vazio } from '../components/app/Pagina'
@@ -18,6 +19,7 @@ export default function Executivos() {
   const admin = useSessao()
   const [nome, setNome] = useState('')
   const [email, setEmail] = useState('')
+  const [cargo, setCargo] = useState('Executivo comercial')
 
   async function incluir(ev: React.FormEvent) {
     ev.preventDefault()
@@ -30,7 +32,7 @@ export default function Executivos() {
     const parecido = executivos.find((e) => e.nome.localeCompare(limpo, 'pt-BR', { sensitivity: 'base' }) === 0)
     if (parecido && parecido.nome !== limpo) { addToast('error', `Já existe "${parecido.nome}".`); return }
     try {
-      const r = await consultar<Executivo>('executivo_salvar', { nome: limpo, email: correio })
+      const r = await consultar<Executivo>('executivo_salvar', { nome: limpo, email: correio, cargo })
       if (!r.length) throw new Error()
       const novo = { ...r[0], pedidos: parecido?.pedidos || 0 }
       setExecutivos((l) => [...l.filter((e) => e.id !== novo.id), novo].sort((a, b) => a.nome.localeCompare(b.nome)))
@@ -59,6 +61,7 @@ export default function Executivos() {
           <form onSubmit={incluir} className="flex flex-wrap items-end gap-3">
             <div className="w-full sm:w-64"><Input label="Nome" value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Nome e sobrenome" /></div>
             <div className="w-full sm:w-64"><Input label="E-mail @zydon.com.br" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="nome@zydon.com.br" /></div>
+            <div className="w-full sm:w-56"><Select label="Cargo" value={cargo} onChange={setCargo} options={['Executivo comercial', 'Pré-vendas', 'Arquiteto de soluções', 'Gestor comercial'].map((c) => ({ value: c, label: c }))} /></div>
             <Button type="submit" className="h-10"><UserPlus size={16} /> Incluir</Button>
           </form>
         </Card>
@@ -80,7 +83,7 @@ export default function Executivos() {
               <tbody>
                 {executivos.map((e) => (
                   <tr key={e.id} style={{ borderTop: '1px solid var(--color-border)' }}>
-                    <td className="px-3 py-3"><div className="leading-tight"><div className="font-medium">{e.nome}</div>{e.email && <div className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>{e.email}</div>}</div></td>
+                    <td className="px-3 py-3"><div className="leading-tight"><div className="font-medium">{e.nome}</div><div className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>{[e.cargo, e.email].filter(Boolean).join(' · ')}</div></div></td>
                     <td className="px-3 py-3 text-right tabular-nums">{e.pedidos}</td>
                     <td className="px-3 py-3"><Badge variant={e.ativo ? 'success' : 'neutral'}>{e.ativo ? 'Ativo' : 'Inativo'}</Badge></td>
                     {admin?.admin && <td className="px-3 py-3 text-right"><Button size="sm" variant="ghost" onClick={() => alternar(e)}>{e.ativo ? 'Desativar' : 'Reativar'}</Button></td>}
