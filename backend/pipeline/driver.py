@@ -234,6 +234,7 @@ def conferir_logo(logo):
         caminho = Path(logo)
         if caminho.suffix.lower() == ".svg":
             caminho = svg_para_png(caminho)
+        caminho = Path(recortar_circulo_de_perfil(caminho))
         limiares = mod_regua.carregar()
         regua_logo = {**limiares["logo"], **limiares.get("logo_portal", {})}
         try:
@@ -252,6 +253,47 @@ def conferir_logo(logo):
         return str(caminho), None
     except Exception as erro:
         return None, (f"a logo achada ({Path(str(logo)).name}) não foi usada: {type(erro).__name__}: {erro}")
+
+
+def recortar_circulo_de_perfil(caminho):
+    """Foto de perfil redonda salva com cantos pretos (ou de outra cor sólida): tudo fora do
+    círculo vira transparente, senão os cantos entram no banner e a logo sai preta.
+    Devolve o caminho novo (PNG) ou o mesmo caminho quando não é esse caso."""
+    from PIL import Image, ImageDraw
+    try:
+        img = Image.open(caminho).convert("RGBA")
+    except Exception:
+        return caminho
+    w, h = img.size
+    if abs(w - h) > max(2, w * 0.03):
+        return caminho
+    cantos = [img.getpixel(p)[:3] for p in [(1, 1), (w - 2, 1), (1, h - 2), (w - 2, h - 2)]]
+    base = cantos[0]
+    iguais = all(max(abs(a - b) for a, b in zip(c, base)) < 30 for c in cantos)
+    dentro = img.getpixel((w // 2, max(2, h // 12)))[:3]
+    if not iguais or max(abs(a - b) for a, b in zip(dentro, base)) < 60:
+        return caminho
+    mascara = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(mascara).ellipse((1, 1, w - 2, h - 2), fill=255)
+    alfa = Image.composite(img.getchannel("A"), Image.new("L", (w, h), 0), mascara)
+    img.putalpha(alfa)
+    alvo = Path(caminho).with_name(Path(caminho).stem + "_circulo.png")
+    img.save(alvo, "PNG")
+    evento("extracao", "foto de perfil redonda: cantos fora do círculo removidos")
+    return alvo
+
+
+def foto_de_perfil_como_logo(caminho, lado=600):
+    """Foto de perfil do Instagram usada como está: só ampliada para PNG quadrado.
+    É a logo real do cliente; inventar logo de texto é pior que usar a foto pequena."""
+    from PIL import Image
+    img = Image.open(recortar_circulo_de_perfil(caminho)).convert("RGBA")
+    if max(img.size) < lado:
+        fator = lado / max(img.size)
+        img = img.resize((round(img.width * fator), round(img.height * fator)), Image.LANCZOS)
+    alvo = Path(caminho).with_name(Path(caminho).stem + "_perfil.png")
+    img.save(alvo, "PNG")
+    return alvo
 
 
 def miniatura_logo(caminho, lado=360):
@@ -655,8 +697,13 @@ def extrair(entrada):
 
     logo_url = _logo_da_home(entrada["site"]) if entrada.get("site") else None
     logo = atendimento.baixar_logo(logo_url, atendimento.prefixo(caminho.name)) if logo_url else None
+    bruta = logo
     logo, aviso_logo = conferir_logo(logo)
     logo_origem = "site" if logo else None
+    if not logo and bruta and re.search(r"instagram\.com/", entrada.get("site") or ""):
+        logo = str(foto_de_perfil_como_logo(bruta))
+        logo_origem, aviso_logo = "instagram", None
+        evento("extracao", "logo = foto de perfil do Instagram, usada mesmo pequena (não passou na régua)")
     if not logo:
         site_achado, logo_web = logo_pela_web(entrada.get("cliente"), entrada.get("site"),
                                                   [p["nome"] for p in precos])
