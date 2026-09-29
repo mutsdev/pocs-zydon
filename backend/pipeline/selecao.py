@@ -1026,7 +1026,7 @@ def montar_pela_selecao(coleta, candidatos, escolha, cliente, segmento, descrica
         motivos.pop(n, None)
     descartes_modelo = [{"nome": candidatos[n]["nome"], "tipo": tipo, "motivo": f"modelo: {motivo}"}
                         for n, (tipo, motivo) in sorted(motivos.items())]
-    if len(itens) < MINIMO_PRODUTOS:
+    if not itens:
         raise PrecisaCatalogo(
             f"só {len(itens)} produtos reais com URL de origem e imagem válida "
             f"(mínimo {MINIMO_PRODUTOS}); mande o catálogo em PDF ou planilha",

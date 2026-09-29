@@ -24,6 +24,7 @@ interface Catalogo { etapas: { endpoint: string; requests: (Requisicao & { paylo
 interface Resumo { precos?: PrecoResumo[]; regra_preco_estimado?: string | null; produtos_similares?: boolean; descartes?: { nome: string; motivo: string }[]; [k: string]: unknown }
 
 const MINIMO = 5
+const minimoPara = (total: number) => Math.max(1, Math.min(MINIMO, total))
 const ORIGEM_LOGO: Record<string, string> = { site: 'Achada no site do cliente.', web: 'Achada na web, fora do site informado: confira.', texto: 'Gerada a partir do nome do cliente (texto), porque nenhuma logo foi achada.', enviada: 'Enviada pelo usuário.' }
 const json = <T,>(t: string | null): T | null => { try { return t ? JSON.parse(t) as T : null } catch { return null } }
 
@@ -200,7 +201,7 @@ export default function PedidoDetalhe() {
 
   async function salvarCuradoria(): Promise<boolean> {
     if (!catalogo || !pedido) return false
-    if (restantes < MINIMO) { addToast('error', `Mantenha pelo menos ${MINIMO} produtos.`); return false }
+    if (restantes < minimoPara(produtos.length)) { addToast('error', `Mantenha pelo menos ${minimoPara(produtos.length)} produtos.`); return false }
     const novo: Catalogo = JSON.parse(JSON.stringify(catalogo))
     const etapa = novo.etapas.find((e) => e.endpoint === 'products')!
     const precos: PrecoResumo[] = []
@@ -424,7 +425,7 @@ export default function PedidoDetalhe() {
                 <Button variant="secondary" disabled={!!ocupado || pedido.em_execucao} onClick={() => criarPortal(true)}>
                   {ocupado === 'simular' ? <Loader2 size={16} className="animate-spin" /> : <FlaskConical size={16} />} Simular
                 </Button>
-                <Button disabled={!!ocupado || pedido.em_execucao || restantes < MINIMO} onClick={() => criarPortal(false)}>
+                <Button disabled={!!ocupado || pedido.em_execucao || restantes < minimoPara(produtos.length)} onClick={() => criarPortal(false)}>
                   {ocupado === 'criar' ? <Loader2 size={16} className="animate-spin" /> : <Rocket size={16} />} Aprovar e criar portal
                 </Button>
               </div>

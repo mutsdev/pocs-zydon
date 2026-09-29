@@ -615,8 +615,11 @@ def montar_catalogo(entrada):
         tipos_da_empresa = selecao.descobrir_empresa(cliente, site).get("tipos") or []
         if tipos_da_empresa:
             evento("extracao", "produtos que a empresa vende, segundo o Google: " + ", ".join(tipos_da_empresa))
-    if len(validos) < selecao.MINIMO_PRODUTOS or foco:
-        evento("extracao", f"site com só {len(validos)} produtos: buscando na web produtos do mesmo tipo")
+    ja_buscou = {"web": False}
+
+    def buscar_pela_web(validos, motivo):
+        ja_buscou["web"] = True
+        evento("extracao", f"{motivo}: buscando na web produtos do mesmo tipo")
         categorias_site = []
         for v in validos:
             if v.get("categoria") and v["categoria"] not in categorias_site:
@@ -628,33 +631,56 @@ def montar_catalogo(entrada):
         brutos = selecao.buscar_candidatos_web(cliente, segmento_informado, categorias_site,
                                                site or "https://sem-site.invalid/", nomes_conhecidos,
                                                foco=foco, tipos=tipos_da_empresa)
-        if len(brutos) < selecao.MINIMO_PRODUTOS and selecao.restante() > 40:
+        if len(brutos) < selecao.MINIMO_PRODUTOS * 2:
             brutos += selecao.buscar_candidatos(cliente, segmento_informado)
         achados, descartes_busca = selecao.filtrar_candidatos(brutos)
         vistos = {v["imagem"] for v in validos} | {selecao.sem_acento(v["nome"]) for v in validos}
-        validos += [a for a in achados if a["imagem"] not in vistos
-                    and selecao.sem_acento(a["nome"]) not in vistos]
+        novos = [a for a in achados if a["imagem"] not in vistos and selecao.sem_acento(a["nome"]) not in vistos]
+        evento("extracao", f"busca na web: +{len(novos)} candidatos válidos")
+        return novos, descartes_busca
+
+    if len(validos) < selecao.MINIMO_PRODUTOS or foco:
+        novos, descartes_busca = buscar_pela_web(validos, f"site com só {len(validos)} produtos")
+        validos += novos
         descartes += descartes_busca
     if foco:
         da_busca = [v for v in validos if v["origem"] == "busca"]
         validos = da_busca[:24] + [v for v in validos if v["origem"] != "busca"]
     validos = validos[:selecao.MAXIMO_CANDIDATOS]
-    if validos:
+
+    def conferir(lista):
+        if not lista:
+            return []
         evento("extracao", "IA (fila gratuita) conferindo se cada foto mostra o produto do nome")
-        validos, descartes_fotos, custo_fotos = selecao.conferir_fotos(validos, cliente)
+        aprovados, descartes_fotos, custo_fotos = selecao.conferir_fotos(lista, cliente)
         for k in ("custo_usd", "tokens_entrada", "tokens_saida"):
             custo[k] += custo_fotos.get(k) or 0
-        descartes += descartes_fotos
+        descartes.extend(descartes_fotos)
+        return aprovados
+
+    def sem_repetidos(lista):
         unicos, nomes = [], set()
-        for v in validos:
+        for v in lista:
             chave = selecao.sem_acento(v["nome"])
             if chave in nomes:
                 descartes.append({"nome": v["nome"], "motivo": "duplicado (mesmo produto em outra loja)"})
                 continue
             nomes.add(chave)
             unicos.append(v)
-        validos = unicos
+        return unicos
+
+    validos = sem_repetidos(conferir(validos))
+    if len(validos) < selecao.MINIMO_PRODUTOS and not ja_buscou["web"]:
+        novos, descartes_busca = buscar_pela_web(
+            validos, f"só {len(validos)} produtos passaram na conferência das fotos")
+        descartes += descartes_busca
+        validos = sem_repetidos(validos + conferir(novos[:selecao.MAXIMO_CANDIDATOS]))
     if len(validos) < selecao.MINIMO_PRODUTOS:
+        evento("extracao", f"só {len(validos)} produtos confirmados no site e na web; o portal segue com eles "
+                           "e o pedido registra que o catálogo ficou curto", "aviso")
+        entrada["_aviso_curto"] = (f"catálogo curto: só {len(validos)} produtos confirmados no site e na web; "
+                                   "anexe um PDF ou planilha se quiser mais")
+    if not validos:
         raise selecao.PrecisaCatalogo(
             f"só {len(validos)} produtos com URL de origem e imagem válida "
             f"{'no anexo, ' if fonte_anexo else ''}no site e na busca "
@@ -735,6 +761,8 @@ def extrair(entrada):
                            "(o site não tinha o nome em texto); confira na curadoria")
     if entrada.get("_aviso_foco"):
         observacoes.append(entrada["_aviso_foco"])
+    if entrada.get("_aviso_curto"):
+        observacoes.append(entrada["_aviso_curto"])
     if montado["similares"]:
         observacoes.append("há produtos SIMILARES achados na busca que NÃO são da marca do cliente")
         evento("extracao", "produtos similares de outras marcas no catálogo", "aviso")
