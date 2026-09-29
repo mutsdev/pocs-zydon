@@ -10,7 +10,7 @@ const COMMIT = '__COMMIT__';
 const DRIVER_PY = __DRIVER__;
 const SELECAO_PY = __SELECAO__;
 const ANEXO_PY = __ANEXO__;
-const PACOTES_EXTRAS = ['pypdfium2', 'openpyxl', 'python-docx', 'xlrd'];
+const PACOTES_EXTRAS = ['pypdfium2', 'openpyxl', 'python-docx', 'xlrd', 'cairosvg'];
 const FAIXAS_JSON = __FAIXAS__;
 const RAIZ = '/tmp/zydon-pocs';
 const REPO = `${RAIZ}/repo-${COMMIT}`;
@@ -191,6 +191,8 @@ async function extrair(ev, execucao) {
     await salvarArquivo(pedidoId, 'logo', saida.logo.conteudo_base64);
     await salvarArquivo(pedidoId, 'logo_nome', saida.logo.nome);
   }
+  await salvarArquivo(pedidoId, 'logo_previa', saida.logo_previa || null);
+  await dml('UPDATE pedidos SET logo_origem = :o, logo_aviso = :a WHERE pedido_id = :p', { p: pedidoId, o: saida.logo_origem || null, a: saida.logo_aviso || null });
   await dml(`UPDATE pedidos SET status = 'curadoria', catalogo = CAST(:cat AS JSONB), resumo = CAST(:r AS JSONB),
       produtos = CAST(:np AS INTEGER), categorias = CAST(:nc AS INTEGER), fonte = :f, preco = :pr,
       segmento = :s, segmento_origem = :so, logo_url = :l, modelo_ia = :mo,
@@ -374,7 +376,44 @@ async function avaliar(ev) {
   return saida;
 }
 
-const ACOES = { extrair, previa, criar, banner, avaliar, miniaturas };
+async function trocarLogo(ev, execucao) {
+  const pedidoId = ev.pedido_id;
+  const registrar = registrador(pedidoId);
+  const pedido = await lerPedido(pedidoId);
+  await marcarExecucao(pedidoId, 'trocar_logo', execucao);
+  const conteudo = await lerArquivo(pedidoId, 'logo_envio');
+  const nome = await lerArquivo(pedidoId, 'logo_envio_nome');
+  if (!conteudo || !nome) {
+    await dml('UPDATE pedidos SET execucao_atual = NULL WHERE pedido_id = :p', { p: pedidoId });
+    return { ok: false, erro: 'LOGO_AUSENTE' };
+  }
+  await registrar({ etapa: 'logo', mensagem: `logo enviada pelo usuário: ${nome}` });
+  const saida = await rodarPython('trocar_logo', { pedido_id: pedidoId, cliente: pedido.cliente,
+    portal_id: pedido.portal_id, logo: { nome, conteudo_base64: conteudo } }, registrar);
+  await registrar.fim();
+  if (!saida.ok || saida.recusada) {
+    const motivo = saida.recusada || saida.erro;
+    await registrar({ etapa: 'logo', mensagem: `logo enviada recusada: ${motivo}`, nivel: 'erro' });
+    await dml('UPDATE pedidos SET execucao_atual = NULL, logo_aviso = :m, atualizado_em = now() WHERE pedido_id = :p', { p: pedidoId, m: String(motivo).slice(0, 800) });
+    return { ok: false, erro: 'LOGO_RECUSADA', motivo };
+  }
+  await salvarArquivo(pedidoId, 'logo', saida.logo.conteudo_base64);
+  await salvarArquivo(pedidoId, 'logo_nome', saida.logo.nome);
+  await salvarArquivo(pedidoId, 'logo_previa', saida.logo_previa);
+  await salvarArquivo(pedidoId, 'logo_envio', null);
+  await salvarArquivo(pedidoId, 'logo_envio_nome', null);
+  const obs = saida.portal_logo ? ` · logo trocada pelo usuário; no portal: ${saida.portal_logo}` : ' · logo trocada pelo usuário';
+  await dml(`UPDATE pedidos SET logo_origem = 'enviada', logo_url = NULL, logo_aviso = NULL, banners_situacao = 'gerando',
+      observacoes = TRIM(COALESCE(observacoes, '') || :o), atualizado_em = now() WHERE pedido_id = :p`, { p: pedidoId, o: obs });
+  if (saida.portal_logo) {
+    await registrar({ etapa: 'logo', mensagem: `logo no portal: ${saida.portal_logo}`, nivel: saida.portal_logo === 'conferida' ? 'info' : 'erro' });
+  }
+  await previa({ pedido_id: pedidoId }, execucao);
+  await dml('UPDATE pedidos SET execucao_atual = NULL WHERE pedido_id = :p', { p: pedidoId });
+  return { ok: true, logo: 'trocada', portal_logo: saida.portal_logo || null };
+}
+
+const ACOES = { extrair, previa, criar, banner, avaliar, miniaturas, trocar_logo: trocarLogo };
 
 module.exports = async (event, context) => {
   const ev = (event && event.input) ? event.input : (event || {});
@@ -404,7 +443,7 @@ module.exports = async (event, context) => {
     const texto = `${erro.name || 'Erro'}: ${erro.message}`;
     if (ev.pedido_id) {
       try {
-        if (acao === 'previa' || acao === 'banner') {
+        if (acao === 'previa' || acao === 'banner' || acao === 'trocar_logo') {
           await registrador(ev.pedido_id)({ etapa: 'banners', mensagem: texto, nivel: 'erro' });
           await dml(`UPDATE pedidos SET banners_situacao = 'falhou', execucao_atual = NULL, atualizado_em = now()
             WHERE pedido_id = :p`, { p: ev.pedido_id });

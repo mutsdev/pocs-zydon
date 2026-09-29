@@ -175,17 +175,79 @@ def segmento_do_modelo(texto):
     return texto, "descrito pelo modelo a partir dos produtos escolhidos"
 
 
+def svg_para_png(caminho_svg, lado=1024):
+    """SVG -> PNG com alfa de verdade. O rasterizador do repo pinta sobre branco e
+    depois tira o fundo branco: logo branca (Fast Shop) some inteira. Aqui o alfa sai
+    do próprio desenho (cairosvg, que entende máscara e recorte rotacionado; svglib
+    renderizado em fundo branco e preto como reserva)."""
+    import numpy as np
+    from PIL import Image
+    destino = Path(caminho_svg).with_suffix(".png")
+    try:
+        import cairosvg
+        cairosvg.svg2png(url=str(caminho_svg), write_to=str(destino), output_width=lado)
+        img = Image.open(destino).convert("RGBA")
+    except Exception as erro_cairo:
+        from reportlab.graphics import renderPM
+        from svglib.svglib import svg2rlg
+
+        def render(fundo):
+            desenho = svg2rlg(str(caminho_svg))
+            if desenho is None or not desenho.width or not desenho.height:
+                raise ValueError(f"SVG vazio ou inválido (cairosvg: {erro_cairo})")
+            fator = lado / max(desenho.width, desenho.height)
+            desenho.width *= fator
+            desenho.height *= fator
+            desenho.scale(fator, fator)
+            return np.asarray(renderPM.drawToPIL(desenho, dpi=72, bg=fundo).convert("RGB"), dtype=np.float32)
+        branco, preto = render(0xFFFFFF), render(0x000000)
+        alfa = np.clip(1 - (branco - preto).mean(axis=2) / 255.0, 0, 1)
+        cor = np.clip(np.where(alfa[..., None] > 0.01, preto / np.maximum(alfa[..., None], 1e-3), 0), 0, 255)
+        img = Image.fromarray(np.dstack([cor, alfa * 255]).astype(np.uint8), "RGBA")
+    if img.getchannel("A").getbbox() is None:
+        raise ValueError("o SVG não desenha nada visível")
+    img.save(destino, "PNG")
+    return destino
+
+
+def logo_clara(caminho):
+    """True quando a parte visível da logo é quase toda branca (some no fundo branco)."""
+    import numpy as np
+    from PIL import Image
+    img = np.asarray(Image.open(caminho).convert("RGBA"), dtype=np.float32)
+    visivel = img[..., 3] > 128
+    if not visivel.any():
+        return False
+    return float((img[..., :3][visivel] @ np.array([0.299, 0.587, 0.114])).mean()) > 215
+
+
 def conferir_logo(logo):
-    """(logo_utilizavel, observacao). SVG que nao rasteriza nao passa calado."""
-    if not logo or not str(logo).lower().endswith(".svg"):
-        return logo, None
+    """(logo_utilizavel, observacao). Toda logo passa pela régua do repo
+    (logo.normalizar com a régua do portal); SVG vira PNG com alfa antes.
+    Logo que não passa não segue calada: volta o motivo para as observações."""
+    if not logo:
+        return None, None
     try:
         import logo as mod_logo
-        mod_logo._rasterizar_svg(logo)
-        return logo, None
+        import regua as mod_regua
+        caminho = Path(logo)
+        if caminho.suffix.lower() == ".svg":
+            caminho = svg_para_png(caminho)
+        limiares = mod_regua.carregar()
+        mod_logo.normalizar(caminho, {**limiares["logo"], **limiares.get("logo_portal", {})})
+        return str(caminho), None
     except Exception as erro:
-        return None, (f"a logo SVG do site não foi usada ({type(erro).__name__}: {erro}); "
-                      f"os banners caem no fallback sem logo")
+        return None, (f"a logo achada ({Path(str(logo)).name}) não foi usada: {type(erro).__name__}: {erro}")
+
+
+def miniatura_logo(caminho, lado=360):
+    """PNG pequeno em base64 para a tela mostrar a logo que o sistema achou."""
+    from PIL import Image
+    img = Image.open(caminho).convert("RGBA")
+    img.thumbnail((lado, lado))
+    saida = io.BytesIO()
+    img.save(saida, "PNG", optimize=True)
+    return base64.b64encode(saida.getvalue()).decode()
 
 
 def _logo_da_home(site):
@@ -512,14 +574,17 @@ def extrair(entrada):
     logo_url = _logo_da_home(entrada["site"]) if entrada.get("site") else None
     logo = atendimento.baixar_logo(logo_url, atendimento.prefixo(caminho.name)) if logo_url else None
     logo, aviso_logo = conferir_logo(logo)
+    logo_origem = "site" if logo else None
     if not logo:
         site_achado, logo_web = logo_pela_web(entrada.get("cliente"), entrada.get("site"),
                                                   [p["nome"] for p in precos])
         if logo_web:
             baixada = atendimento.baixar_logo(logo_web, atendimento.prefixo(caminho.name))
             baixada, aviso_web = conferir_logo(baixada)
+            if aviso_web:
+                observacoes.append(aviso_web)
             if baixada:
-                logo, logo_url, aviso_logo = baixada, logo_web, None
+                logo, logo_url, logo_origem = baixada, logo_web, "web"
                 observacoes.append(f"logo achada na web, no site {site_achado}; confira se é a do cliente")
                 evento("extracao", f"logo achada na web em {site_achado}")
     if aviso_logo:
@@ -529,6 +594,7 @@ def extrair(entrada):
         logo_url = None
         try:
             logo = str(logo_tipografica(entrada.get("cliente"), pasta_pedido(pedido_id)))
+            logo_origem = "texto"
             observacoes.append(("nenhuma logo identificável foi encontrada no site" if entrada.get("site")
                                 else "pedido sem site") + ": a logo dos banners foi GERADA a partir do nome do "
                                "cliente (texto); troque pela logo real se o cliente mandar")
@@ -556,6 +622,36 @@ def extrair(entrada):
     if logo:
         saida["logo"] = {"nome": Path(logo).name,
                          "conteudo_base64": base64.b64encode(Path(logo).read_bytes()).decode()}
+        saida["logo_previa"] = miniatura_logo(logo)
+        saida["logo_clara"] = logo_clara(logo)
+    saida["logo_origem"] = logo_origem
+    avisos_logo = [o for o in observacoes if "logo" in o]
+    saida["logo_aviso"] = " · ".join(avisos_logo)[:800] or None
+    return saida
+
+
+def trocar_logo(entrada):
+    """Logo enviada pelo usuário: valida na régua, gera a miniatura e, com o
+    portal já criado, sobe logo e favicon pelo subir_identidade (confere o byte
+    servido por GET). Os banners são refeitos depois pela ação previa."""
+    pedido_id = entrada["pedido_id"]
+    pasta = pasta_pedido(pedido_id) / "logo_enviada"
+    pasta.mkdir(parents=True, exist_ok=True)
+    nome = re.sub(r"[^a-zA-Z0-9._-]", "_", entrada["logo"]["nome"]) or "logo.png"
+    alvo = pasta / nome
+    alvo.write_bytes(base64.b64decode(entrada["logo"]["conteudo_base64"]))
+    usada, aviso = conferir_logo(str(alvo))
+    if not usada:
+        return {"recusada": aviso}
+    saida = {"logo": {"nome": Path(usada).name,
+                      "conteudo_base64": base64.b64encode(Path(usada).read_bytes()).decode()},
+             "logo_previa": miniatura_logo(usada), "logo_clara": logo_clara(usada)}
+    if entrada.get("portal_id"):
+        import subir_identidade
+        evento("logo", "subindo a logo nova no portal e conferindo por GET")
+        codigo = subir_identidade.main(["--org", ORG, "--portal", entrada["portal_id"], "--logo", str(usada),
+                                        "--nome", entrada.get("cliente") or "", "--gravar"])
+        saida["portal_logo"] = "conferida" if codigo == 0 else f"falhou (código {codigo})"
     return saida
 
 
@@ -685,7 +781,10 @@ def avaliar(entrada):
     return {"linhas": linhas}
 
 
-def gerar_pecas_simples(caminho, logo, cliente, segmento):
+COR_LOGO_CLARA = "#1C1C1E"
+
+
+def gerar_pecas_simples(caminho, logo, cliente, segmento, cor=None):
     """Banner no estilo da JH: painel com a logo e a paleta do cliente, sem cena
     desenhada por IA (a cena gerada deformava produto: bicicleta sem guidão).
     --candidatas 0 não gera cena nenhuma; --so-fallback monta só o piso."""
@@ -695,6 +794,8 @@ def gerar_pecas_simples(caminho, logo, cliente, segmento):
                "--segmento", segmento or atendimento.SEGMENTO_PADRAO,
                "--catalogo", str(caminho), "--regua-logo", "portal",
                "--candidatas", "0", "--so-fallback"]
+    if cor:
+        comando += ["--cor", cor]
     return atendimento._rodar_gerador(comando, atendimento.prefixo(Path(caminho).name))
 
 
@@ -711,7 +812,11 @@ def previa(entrada):
             return {"sem_banner": f"sem logo e a logo de texto falhou ({type(erro).__name__}: {erro})"}
     caminho = gravar_catalogo(entrada["catalogo"], pedido_id)
     evento("banners", "gerando as peças (login e cabeçalho)")
-    gerada, saida = gerar_pecas_simples(caminho, logo, entrada["cliente"], entrada.get("segmento"))
+    cor = None
+    if logo_clara(logo):
+        cor = COR_LOGO_CLARA
+        evento("banners", f"logo clara (quase toda branca): painel dos banners em {cor} para a logo aparecer")
+    gerada, saida = gerar_pecas_simples(caminho, logo, entrada["cliente"], entrada.get("segmento"), cor)
     if not gerada:
         return {"sem_banner": str(saida)[-800:]}
     return {"pecas": pecas_para_tela(gerada), "cor": cor_da_pasta(gerada),
@@ -804,7 +909,7 @@ def banner(entrada):
     return resposta
 
 
-ACOES = {"miniaturas": miniaturas, "extrair": extrair, "avaliar": avaliar, "previa": previa, "criar": criar, "banner": banner}
+ACOES = {"trocar_logo": trocar_logo, "miniaturas": miniaturas, "extrair": extrair, "avaliar": avaliar, "previa": previa, "criar": criar, "banner": banner}
 
 
 def main():
