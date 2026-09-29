@@ -16,7 +16,10 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
-MODELO_SELECAO = "google/gemini-2.5-flash"
+MODELO_SELECAO = "gemini-3.5-flash-lite"
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent"
+CONFERENCIA_POR_CHAMADA = 20
+MODELO_OPENROUTER = "google/gemini-2.5-flash"
 MINIMO_PRODUTOS = 5
 MAXIMO_PRODUTOS = 12
 MAXIMO_CANDIDATOS = 60
@@ -32,7 +35,7 @@ IMAGEM_NAO_E_PRODUTO = re.compile(
 
 
 class SemCreditoOpenRouter(RuntimeError):
-    """HTTP 402 do OpenRouter: a conta esta sem credito para a selecao."""
+    """Cota do modelo esgotada (HTTP 402/429): a selecao nao pode rodar agora."""
 
 
 class PrecisaCatalogo(RuntimeError):
@@ -295,7 +298,7 @@ Candidatos:
 {lista}"""
 
 
-def _chamar_openrouter(mensagens):
+def _chamar_openrouter_pago(mensagens):
     import requests
     chave = os.environ.get("OPENROUTER_API_KEY")
     if not chave:
@@ -303,7 +306,7 @@ def _chamar_openrouter(mensagens):
     resposta = requests.post(
         "https://openrouter.ai/api/v1/chat/completions",
         headers={"Authorization": f"Bearer {chave}", "Content-Type": "application/json"},
-        json={"model": MODELO_SELECAO, "messages": mensagens, "temperature": 0,
+        json={"model": MODELO_OPENROUTER, "messages": mensagens, "temperature": 0,
               "max_tokens": MAXIMO_TOKENS_SAIDA,
               "response_format": {"type": "json_object"}, "usage": {"include": True}},
         timeout=180)
@@ -318,10 +321,140 @@ def _chamar_openrouter(mensagens):
     texto = corpo["choices"][0]["message"]["content"] or ""
     texto = re.sub(r"^```(?:json)?|```$", "", texto.strip()).strip()
     uso = corpo.get("usage") or {}
-    return json.loads(texto), {"modelo": corpo.get("model") or MODELO_SELECAO,
+    return json.loads(texto), {"modelo": corpo.get("model") or MODELO_OPENROUTER,
                                "custo_usd": uso.get("cost") or 0.0,
                                "tokens_entrada": uso.get("prompt_tokens") or 0,
                                "tokens_saida": uso.get("completion_tokens") or 0}
+
+
+def _imagem_inline(url):
+    """Baixa a imagem e devolve (mime, base64) reduzida a 512 px; None se falhar."""
+    import base64
+    import io
+    import requests
+    from PIL import Image
+    try:
+        r = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                                   "AppleWebKit/537.36 Chrome/128.0 Safari/537.36"})
+        if r.status_code != 200:
+            return None
+        imagem = Image.open(io.BytesIO(r.content)).convert("RGB")
+        imagem.thumbnail((512, 512))
+        saida = io.BytesIO()
+        imagem.save(saida, "JPEG", quality=80)
+        return "image/jpeg", base64.b64encode(saida.getvalue()).decode()
+    except Exception:
+        return None
+
+
+def _chamar_openrouter(mensagens):
+    """Chama o Gemini (plano gratuito) com o mesmo formato de mensagens de antes.
+    Imagens por URL sao baixadas e enviadas inline; a que nao baixa vira texto."""
+    import requests
+    chave = os.environ.get("GEMINI_API_KEY")
+    if not chave:
+        return _chamar_openrouter_pago(mensagens)
+    partes = []
+    for mensagem in mensagens:
+        conteudo = mensagem["content"]
+        if isinstance(conteudo, str):
+            partes.append({"text": conteudo})
+            continue
+        urls = [c["image_url"]["url"] for c in conteudo if c.get("type") == "image_url"]
+        with ThreadPoolExecutor(8) as pool:
+            baixadas = dict(zip(urls, pool.map(_imagem_inline, urls)))
+        for c in conteudo:
+            if c.get("type") == "text":
+                partes.append({"text": c["text"]})
+            elif baixadas.get(c["image_url"]["url"]):
+                mime, dados = baixadas[c["image_url"]["url"]]
+                partes.append({"inline_data": {"mime_type": mime, "data": dados}})
+            else:
+                partes.append({"text": "(imagem não pôde ser baixada)"})
+    corpo_pedido = {"contents": [{"role": "user", "parts": partes}],
+                    "generationConfig": {"temperature": 0, "maxOutputTokens": MAXIMO_TOKENS_SAIDA,
+                                         "responseMimeType": "application/json"}}
+    resposta = None
+    for tentativa in range(3):
+        resposta = requests.post(GEMINI_URL.format(modelo=MODELO_SELECAO), json=corpo_pedido,
+                                 headers={"x-goog-api-key": chave}, timeout=180)
+        if resposta.status_code not in (429, 503) or tentativa == 2:
+            break
+        import time
+        time.sleep(20 * (tentativa + 1))
+    if resposta.status_code in (402, 429):
+        raise SemCreditoOpenRouter(
+            f"cota gratuita do Gemini esgotada (HTTP {resposta.status_code}): o modelo não pôde "
+            "escolher nem conferir os produtos agora. Reenvie o pedido mais tarde. "
+            f"Resposta: {resposta.text[:200]}")
+    if resposta.status_code != 200:
+        raise RuntimeError(f"Gemini HTTP {resposta.status_code}: {resposta.text[:300]}")
+    corpo = resposta.json()
+    candidato_resposta = (corpo.get("candidates") or [{}])[0]
+    texto = "".join(p.get("text", "") for p in (candidato_resposta.get("content") or {}).get("parts") or []
+                    if not p.get("thought"))
+    texto = re.sub(r"^```(?:json)?|```$", "", texto.strip()).strip()
+    uso = corpo.get("usageMetadata") or {}
+    return json.loads(texto), {"modelo": MODELO_SELECAO, "custo_usd": 0.0,
+                               "tokens_entrada": uso.get("promptTokenCount") or 0,
+                               "tokens_saida": (uso.get("candidatesTokenCount") or 0)
+                               + (uso.get("thoughtsTokenCount") or 0)}
+
+
+INSTRUCAO_CONFERIR_FOTO = """Você confere fotos de produtos de um catálogo B2B do cliente "{cliente}".
+Para cada item abaixo há o NOME anunciado e a FOTO. Diga se a foto mostra de fato aquele produto
+(o mesmo tipo de item do nome; embalagem do produto vale). NÃO confere quando a foto é: logo,
+banner, slide de carrossel, seta, ícone, foto de loja/fachada/pessoas, texto sem produto, ou um
+produto de outro tipo (ex.: nome diz "disco de corte" e a foto é uma bicicleta).
+Não invente: descreva só o que aparece na foto.
+Responda só JSON: {{"itens": [{{"n": 0, "confere": true, "o_que_aparece": "disco de desbaste amarelo"}}]}}
+
+Itens:
+{lista}"""
+
+
+def conferir_fotos(candidatos, cliente):
+    """(aprovados, descartes, custo). O modelo olha cada foto e diz se é o produto do nome.
+    Sem resposta para um item, ele passa (a conferência nunca inventa nem apaga em silêncio)."""
+    custo = {"custo_usd": 0.0, "tokens_entrada": 0, "tokens_saida": 0}
+    aprovados, descartes = [], []
+    for inicio in range(0, len(candidatos), CONFERENCIA_POR_CHAMADA):
+        lote = candidatos[inicio:inicio + CONFERENCIA_POR_CHAMADA]
+        lista = "\n".join(f"{n}. {c['nome'][:110]}" for n, c in enumerate(lote))
+        conteudo = [{"type": "text", "text": INSTRUCAO_CONFERIR_FOTO.format(cliente=cliente, lista=lista)}]
+        for n, c in enumerate(lote):
+            conteudo += [{"type": "text", "text": f"Foto do item {n} ({c['nome'][:80]}):"},
+                         {"type": "image_url", "image_url": {"url": c["imagem"]}}]
+        try:
+            resposta, custo_lote = _chamar_openrouter([{"role": "user", "content": conteudo}])
+        except SemCreditoOpenRouter:
+            raise
+        except Exception as erro:
+            evento("extracao", f"conferência das fotos falhou ({erro}); itens seguem sem conferência", "aviso")
+            aprovados += [dict(c, foto_conferida=False) for c in lote]
+            continue
+        for k in custo:
+            custo[k] += custo_lote.get(k) or 0
+        laudos = {}
+        for item in resposta.get("itens") or []:
+            try:
+                laudos[int(item.get("n"))] = item
+            except (TypeError, ValueError, AttributeError):
+                continue
+        for n, c in enumerate(lote):
+            laudo = laudos.get(n)
+            if laudo is None:
+                aprovados.append(dict(c, foto_conferida=False))
+            elif laudo.get("confere") is False:
+                descartes.append({"nome": c["nome"], "tipo": "foto_errada",
+                                  "motivo": "a foto não mostra o produto: "
+                                  + limpar_texto(laudo.get("o_que_aparece") or "outro item")[:120]})
+            else:
+                aprovados.append(dict(c, foto_conferida=True,
+                                      foto_mostra=limpar_texto(laudo.get("o_que_aparece") or "")[:120]))
+    evento("extracao", f"fotos conferidas pelo modelo: {len(aprovados)} aprovadas, "
+                       f"{len(descartes)} recusadas")
+    return aprovados, descartes, custo
 
 
 def selecionar(candidatos, cliente, site, segmento):
@@ -344,7 +477,7 @@ def selecionar(candidatos, cliente, site, segmento):
     except SemCreditoOpenRouter:
         raise
     except (RuntimeError, ValueError) as erro:
-        if "OPENROUTER_API_KEY" in str(erro):
+        if "GEMINI_API_KEY" in str(erro):
             raise
         evento("extracao", f"chamada com imagens falhou ({erro}); repetindo só com texto", "aviso")
         escolha, custo = _chamar_openrouter([{"role": "user", "content": texto}])
@@ -621,7 +754,7 @@ def nomear_pela_imagem(fotos, cliente):
 
 
 MARKETPLACES = re.compile(
-    r"mercadolivre|mercadolibre|shopee|amazon\.|magazineluiza|magalu|americanas|aliexpress|"
+    r"shopee|amazon\.|magazineluiza|magalu|americanas|aliexpress|"
     r"casasbahia|submarino|olx\.|wikipedia|youtube|facebook|instagram|letras\.mus|reclameaqui|"
     r"linkedin|tiktok|pinterest|google\.", re.I)
 CAPTCHA = re.compile(r"confirme seu acesso|captcha|are you a robot|access denied", re.I)
@@ -639,14 +772,51 @@ def buscar_duckduckgo(consulta, limite=10):
                                   "Referer": "https://html.duckduckgo.com/"}, timeout=20)
     except requests.RequestException:
         return []
+    if "anomaly" in r.text and "result__a" not in r.text:
+        evento("extracao", "DuckDuckGo pediu verificação anti-robô; usando o Bing nesta busca", "aviso")
+        return []
     urls = []
     for a in BeautifulSoup(r.text, "html.parser").select("a.result__a"):
         href = a.get("href") or ""
         if "uddg=" in href:
             href = unquote(parse_qs(urlparse(href).query).get("uddg", [""])[0])
+        if "duckduckgo.com/y.js" in href or "/y.js?" in href:
+            continue
         if href.startswith("http") and not MARKETPLACES.search(href) and href not in urls:
             urls.append(href)
     return urls[:limite]
+
+
+MERCADO_LIVRE = re.compile(r"mercadoli[vb]re\.com", re.I)
+
+
+def ler_mercado_livre(url):
+    """O Mercado Livre manda o navegador comum para a verificação de conta; com o
+    agente de prévia de link ele entrega og:title, og:image e o preço da página."""
+    import requests
+    from bs4 import BeautifulSoup
+    try:
+        r = requests.get(url, headers={"User-Agent": "facebookexternalhit/1.1"}, timeout=20)
+    except requests.RequestException:
+        return None
+    if r.status_code != 200:
+        return None
+    sopa = BeautifulSoup(r.text, "html.parser")
+
+    def meta(nome):
+        tag = sopa.find("meta", attrs={"property": nome}) or sopa.find("meta", attrs={"name": nome})
+        return (tag.get("content") or "").strip() if tag else ""
+    nome, imagem = meta("og:title"), meta("og:image")
+    if not nome or not imagem or CAPTCHA.search(nome):
+        return None
+    nome = re.sub(r"\s*[|-]\s*Mercado Livre.*$", "", nome).strip()
+    nome = re.sub(r"\s+-\s+R\$\s*[\d.,]+\s*$", "", nome).strip()
+    preco = None
+    achado = re.search(r'"price"\s*:\s*([0-9]+(?:\.[0-9]+)?)', r.text)
+    if achado:
+        preco = float(achado.group(1))
+    return {"name": nome, "url": meta("og:url") or url, "image": imagem, "price": preco,
+            "category": "", "description": meta("og:description")}
 
 
 def singular(texto):
@@ -705,8 +875,12 @@ def variacoes_da_consulta(consulta):
 
 
 def buscar_na_web(consulta, limite=10):
+    """DuckDuckGo primeiro; o Bing só entra quando o DuckDuckGo traz menos de 3 links."""
     import time
-    melhor = []
+    urls = buscar_duckduckgo(consulta, limite)
+    if len(urls) >= 3:
+        return urls
+    melhor = urls
     for variacao in variacoes_da_consulta(consulta):
         urls = buscar_bing(variacao, limite)
         if len(urls) > len(melhor):
@@ -714,7 +888,7 @@ def buscar_na_web(consulta, limite=10):
         if len(urls) >= 3:
             return urls
         time.sleep(0.5)
-    return melhor if len(melhor) >= 3 else (buscar_duckduckgo(consulta, limite) or melhor)
+    return melhor
 
 
 PALAVRAS_VAZIAS = {"preco", "comprar", "produto", "produtos", "linha", "nossa", "conheca", "tambem",
@@ -763,7 +937,7 @@ def relevante(nome, termo, cliente, url=""):
 
 
 def _ler_pagina_busca(url):
-    registro = _ler_pagina(url)
+    registro = ler_mercado_livre(url) if MERCADO_LIVRE.search(url) else _ler_pagina(url)
     if not registro or CAPTCHA.search(registro.get("name") or "") or CAPTCHA.search(registro.get("description") or ""):
         return None
     return registro

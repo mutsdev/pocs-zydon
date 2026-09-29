@@ -314,7 +314,8 @@ def montar_catalogo(entrada):
             descartes += descartes_secoes
             if coleta.get("plataforma") in (None, "nenhuma"):
                 coleta["plataforma"] = "secoes"
-    custo = {"modelo": selecao.MODELO_SELECAO, "custo_usd": 0.0, "tokens_entrada": 0,
+    custo = {"modelo": (selecao.MODELO_SELECAO if os.environ.get("GEMINI_API_KEY")
+                        else selecao.MODELO_OPENROUTER), "custo_usd": 0.0, "tokens_entrada": 0,
              "tokens_saida": 0, "com_imagens": False}
     if site and len(validos) < selecao.MAXIMO_PRODUTOS:
         fotos = selecao.coletar_fotos_sem_nome(selecao.normalizar_site(site))
@@ -348,6 +349,12 @@ def montar_catalogo(entrada):
                     and selecao.sem_acento(a["nome"]) not in vistos]
         descartes += descartes_busca
     validos = validos[:selecao.MAXIMO_CANDIDATOS]
+    if validos:
+        evento("extracao", f"{selecao.MODELO_SELECAO} conferindo se cada foto mostra o produto do nome")
+        validos, descartes_fotos, custo_fotos = selecao.conferir_fotos(validos, cliente)
+        for k in ("custo_usd", "tokens_entrada", "tokens_saida"):
+            custo[k] += custo_fotos.get(k) or 0
+        descartes += descartes_fotos
     if len(validos) < selecao.MINIMO_PRODUTOS:
         raise selecao.PrecisaCatalogo(
             f"só {len(validos)} produtos com URL de origem e imagem válida "
