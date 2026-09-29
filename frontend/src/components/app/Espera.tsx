@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { SkipForward } from 'lucide-react'
 import PenduloTriplo from './PenduloTriplo'
+import NuvensMatematica from './NuvensMatematica'
 
-type Cena = 'pendulo' | 'caos' | 'galton'
-const CENAS: Cena[] = ['pendulo', 'caos', 'galton']
-const NOMES: Record<Cena, string> = { pendulo: 'pêndulo triplo', caos: 'caos dos pêndulos', galton: 'máquina de Galton' }
+type Cena = 'pendulo' | 'nuvens' | 'caos' | 'galton'
+const CENAS: Cena[] = ['pendulo', 'nuvens', 'galton', 'caos']
+const NOMES: Record<Cena, string> = { pendulo: 'pêndulo triplo', nuvens: 'pulo nas nuvens', caos: 'caos dos pêndulos', galton: 'máquina de Galton' }
 
 interface Props { titulo: string; mensagem?: string | null; desde?: string | null }
 
@@ -76,61 +77,90 @@ function cenaCaos(ctx: CanvasRenderingContext2D, largura: number, altura: number
 
 function cenaGalton(ctx: CanvasRenderingContext2D, largura: number, altura: number) {
   const primaria = cor('--color-primary', '#cdeb00')
-  const texto = rgb(cor('--color-text-secondary', '#a9ad9b'))
+  const curva = cor('--color-danger', '#ef4444')
+  const cinza = rgb(cor('--color-text-secondary', '#a9ad9b'))
   const fundo = cor('--color-surface', '#19181a')
-  const linhas = 13
-  const espaco = Math.min(largura / (linhas + 5), altura / (linhas + 9))
-  const topo = espaco * 2.2
+  const tom = (a: number) => `rgba(${cinza[0]},${cinza[1]},${cinza[2]},${a})`
+  const linhas = 9
+  const caixasN = linhas + 1
+  const espaco = Math.min(largura * 0.8 / caixasN, altura / 11.5)
+  const cx = largura / 2
+  const raioPino = espaco * 0.2
+  const raioBola = Math.max(2.2, espaco * 0.085)
+  const funilTopo = espaco * 0.3
+  const funilBoca = espaco * 1.7
+  const funilLargura = espaco * 3.2
+  const pinosTopo = funilBoca + espaco * 0.8
+  const passoY = espaco * 0.62
   const pinos: { x: number; y: number }[] = []
-  for (let r = 0; r < linhas; r++) for (let c = 0; c <= r; c++) pinos.push({ x: largura / 2 + (c - r / 2) * espaco, y: topo + r * espaco * 0.9 })
-  const raioPino = Math.max(1.6, espaco * 0.08)
-  const raioBola = Math.max(2, espaco * 0.16)
-  const baseY = altura - 6
-  const inicioCaixas = topo + linhas * espaco * 0.9 + espaco * 0.4
-  const caixas = new Array(linhas + 1).fill(0)
+  for (let r = 0; r < linhas; r++) for (let c = 0; c <= r; c++) pinos.push({ x: cx + (c - r / 2) * espaco, y: pinosTopo + r * passoY })
+  const caixasTopo = pinosTopo + linhas * passoY + espaco * 0.2
+  const chao = altura - 8
+  const esquerda = cx - (caixasN / 2) * espaco
+  const pilhas: number[] = new Array(caixasN).fill(0)
+  const porLinha = Math.max(1, Math.floor(espaco / (raioBola * 2.1)))
+  const capacidade = porLinha * Math.floor((chao - caixasTopo) / (raioBola * 1.85))
   let bolas: { x: number; y: number; vx: number; vy: number }[] = []
+  const reserva = Array.from({ length: 70 }, () => ({ x: cx + (Math.random() - 0.5) * funilLargura * 1.5, y: funilTopo + Math.random() * (funilBoca - funilTopo) * 0.7 }))
   let total = 0
   let quadro = 0
-  const gravidade = espaco * 0.018
+  const gravidade = espaco * 0.012
+  function paredeFunil(y: number) {
+    const p = Math.min(1, Math.max(0, (y - funilTopo) / (funilBoca - funilTopo)))
+    return funilLargura * (1 - p) + raioBola * 1.4 * p
+  }
   return () => {
     quadro++
-    if (quadro % 3 === 0 && bolas.length < 260) bolas.push({ x: largura / 2 + (Math.random() - 0.5) * 0.6, y: topo - espaco, vx: 0, vy: 0 })
+    if (quadro % 5 === 0 && bolas.length < 90) bolas.push({ x: cx + (Math.random() - 0.5) * 0.4, y: funilBoca, vx: 0, vy: 0.5 })
+    if (pilhas.some((n) => n >= capacidade)) { pilhas.fill(0); total = 0 }
     ctx.fillStyle = fundo
     ctx.fillRect(0, 0, largura, altura)
-    const maximo = Math.max(1, ...caixas)
-    const alturaUtil = baseY - inicioCaixas
-    caixas.forEach((n, i) => {
-      const x = largura / 2 + (i - linhas / 2) * espaco
-      const h = (n / maximo) * alturaUtil
-      const grad = ctx.createLinearGradient(0, baseY - h, 0, baseY)
-      grad.addColorStop(0, primaria)
-      grad.addColorStop(1, `rgba(${texto[0]},${texto[1]},${texto[2]},0.15)`)
-      ctx.fillStyle = grad
-      ctx.fillRect(x - espaco * 0.42, baseY - h, espaco * 0.84, h)
-    })
-    const media = linhas / 2
-    const desvio = Math.sqrt(linhas / 4)
-    ctx.strokeStyle = `rgba(${texto[0]},${texto[1]},${texto[2]},0.8)`
-    ctx.setLineDash([4, 4])
+
+    ctx.strokeStyle = tom(0.55)
+    ctx.lineWidth = 3
+    ctx.lineCap = 'round'
     ctx.beginPath()
-    for (let k = 0; k <= 200; k++) {
-      const i = (k / 200) * linhas
-      const densidade = Math.exp(-((i - media) ** 2) / (2 * desvio * desvio))
-      const x = largura / 2 + (i - linhas / 2) * espaco
-      const y = baseY - densidade * alturaUtil
-      if (k === 0) ctx.moveTo(x, y)
-      else ctx.lineTo(x, y)
-    }
+    ctx.moveTo(cx - funilLargura - espaco * 0.3, funilTopo - espaco * 0.2)
+    ctx.quadraticCurveTo(cx - funilLargura, funilTopo + espaco * 0.4, cx - raioBola * 1.4, funilBoca)
+    ctx.moveTo(cx + funilLargura + espaco * 0.3, funilTopo - espaco * 0.2)
+    ctx.quadraticCurveTo(cx + funilLargura, funilTopo + espaco * 0.4, cx + raioBola * 1.4, funilBoca)
     ctx.stroke()
-    ctx.setLineDash([])
-    ctx.fillStyle = `rgba(${texto[0]},${texto[1]},${texto[2]},0.9)`
-    pinos.forEach((p) => { ctx.beginPath(); ctx.arc(p.x, p.y, raioPino, 0, Math.PI * 2); ctx.fill() })
+    ctx.fillStyle = primaria
+    for (const r of reserva) {
+      const limite = paredeFunil(r.y) - raioBola
+      const x = Math.max(cx - limite, Math.min(cx + limite, r.x))
+      ctx.beginPath(); ctx.arc(x, r.y, raioBola, 0, Math.PI * 2); ctx.fill()
+    }
+
+    ctx.fillStyle = tom(0.35)
+    for (const p of pinos) { ctx.beginPath(); ctx.arc(p.x, p.y, raioPino, 0, Math.PI * 2); ctx.fill() }
+
+    ctx.strokeStyle = tom(0.5)
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    for (let i = 0; i <= caixasN; i++) { const x = esquerda + i * espaco; ctx.moveTo(x, caixasTopo); ctx.lineTo(x, chao) }
+    ctx.moveTo(esquerda, chao); ctx.lineTo(esquerda + caixasN * espaco, chao)
+    ctx.stroke()
+
+    ctx.fillStyle = primaria
+    pilhas.forEach((n, i) => {
+      for (let k = 0; k < n; k++) {
+        const linha = Math.floor(k / porLinha)
+        const coluna = k % porLinha
+        const desloc = linha % 2 ? raioBola : 0
+        const x = esquerda + i * espaco + raioBola * 1.2 + desloc + coluna * raioBola * 2.05
+        const y = chao - raioBola - 1 - linha * raioBola * 1.8
+        if (x > esquerda + (i + 1) * espaco - raioBola) continue
+        ctx.beginPath(); ctx.arc(x, y, raioBola, 0, Math.PI * 2); ctx.fill()
+      }
+    })
+
     const vivas: typeof bolas = []
     for (const b of bolas) {
-      for (let sub = 0; sub < 2; sub++) {
-        b.vy += gravidade / 2
-        b.x += b.vx / 2
-        b.y += b.vy / 2
+      for (let sub = 0; sub < 3; sub++) {
+        b.vy += gravidade / 3
+        b.x += b.vx / 3
+        b.y += b.vy / 3
         for (const p of pinos) {
           const dx = b.x - p.x
           const dy = b.y - p.y
@@ -142,32 +172,44 @@ function cenaGalton(ctx: CanvasRenderingContext2D, largura: number, altura: numb
             b.x = p.x + nx * minimo
             b.y = p.y + ny * minimo
             const vn = b.vx * nx + b.vy * ny
-            if (vn < 0) {
-              b.vx -= 1.55 * vn * nx
-              b.vy -= 1.55 * vn * ny
-              b.vx += (Math.random() - 0.5) * 0.25
-            }
+            if (vn < 0) { b.vx -= 1.4 * vn * nx; b.vy -= 1.4 * vn * ny }
+            if (Math.abs(dx) < raioBola * 0.4) b.vx += (Math.random() < 0.5 ? -1 : 1) * espaco * 0.03
           }
         }
-        b.vx *= 0.995
+        b.vx *= 0.985
       }
-      if (b.y >= inicioCaixas) {
-        const i = Math.round((b.x - largura / 2) / espaco + linhas / 2)
-        caixas[Math.min(linhas, Math.max(0, i))]++
-        total++
-        continue
+      if (b.y >= caixasTopo) {
+        const i = Math.min(caixasN - 1, Math.max(0, Math.floor((b.x - esquerda) / espaco)))
+        const alvoY = chao - raioBola - Math.floor(pilhas[i] / porLinha) * raioBola * 1.8
+        b.x = Math.max(esquerda + i * espaco + raioBola + 1, Math.min(esquerda + (i + 1) * espaco - raioBola - 1, b.x))
+        b.vx = 0
+        if (b.y >= alvoY) { pilhas[i]++; total++; continue }
       }
       vivas.push(b)
       ctx.fillStyle = primaria
-      ctx.shadowColor = primaria
-      ctx.shadowBlur = 8
-      ctx.beginPath()
-      ctx.arc(b.x, b.y, raioBola, 0, Math.PI * 2)
-      ctx.fill()
-      ctx.shadowBlur = 0
+      ctx.beginPath(); ctx.arc(b.x, b.y, raioBola, 0, Math.PI * 2); ctx.fill()
     }
     bolas = vivas
-    return { legenda: 'Máquina de Galton: cada bolinha quica ao acaso e, juntas, desenham a curva normal', extra: `${total} bolinhas` }
+
+    if (total > 20) {
+      const media = linhas / 2
+      const desvio = Math.sqrt(linhas / 4)
+      const pico = total / (desvio * Math.sqrt(2 * Math.PI))
+      const alturaLinha = (raioBola * 1.8) / porLinha
+      ctx.strokeStyle = curva
+      ctx.lineWidth = 4
+      ctx.beginPath()
+      for (let k = 0; k <= 200; k++) {
+        const i = -0.5 + (k / 200) * caixasN
+        const dens = pico * Math.exp(-((i - media) ** 2) / (2 * desvio * desvio))
+        const x = esquerda + (i + 0.5) * espaco
+        const y = Math.max(caixasTopo, chao - dens * alturaLinha)
+        if (k === 0) ctx.moveTo(x, y)
+        else ctx.lineTo(x, y)
+      }
+      ctx.stroke()
+    }
+    return { legenda: 'Máquina de Galton: cada bolinha escolhe esquerda ou direita ao acaso e, juntas, desenham a curva normal', extra: `${total} bolinhas` }
   }
 }
 
@@ -201,7 +243,7 @@ function CenaCanvas({ cena }: { cena: 'caos' | 'galton' }) {
 
   return (
     <>
-      <canvas ref={tela} className="w-full h-80 md:h-96 block" />
+      <canvas ref={tela} className="w-full h-96 md:h-[32rem] block" />
       <div className="flex flex-wrap items-center gap-3 px-5 pb-5">
         <span className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>{info.legenda}</span>
         <span className="ml-auto text-sm tabular-nums font-medium" style={{ color: 'var(--color-primary-text)' }}>{info.extra}</span>
@@ -249,7 +291,7 @@ export default function Espera({ titulo, mensagem, desde }: Props) {
         </button>
       </div>
       {mensagem && <p className="px-5 text-sm" style={{ color: 'var(--color-text-secondary)' }}>{mensagem}</p>}
-      {cena === 'pendulo' ? <PenduloTriplo /> : <CenaCanvas key={cena} cena={cena} />}
+      {cena === 'pendulo' ? <PenduloTriplo /> : cena === 'nuvens' ? <NuvensMatematica /> : <CenaCanvas key={cena} cena={cena} />}
     </div>
   )
 }
