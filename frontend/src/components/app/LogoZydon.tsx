@@ -5,10 +5,13 @@ export const POLIGONOS_Z = [
   '76.83 55.01 76.83 72.52 15.55 72.52 24.3 55.01',
 ]
 
-export default function LogoZydon({ tamanho = 28, cor = 'var(--color-primary)' }: { tamanho?: number; cor?: string }) {
+export default function LogoZydon({ tamanho = 28, cor = '#000000', fundo = '#2b2b2b' }: { tamanho?: number; cor?: string; fundo?: string }) {
   return (
-    <svg width={tamanho} height={tamanho * 75 / 83.61} viewBox="0 0 83.61 75" aria-hidden="true">
-      {POLIGONOS_Z.map((p) => <polygon key={p} points={p} fill={cor} />)}
+    <svg width={tamanho} height={tamanho} viewBox="0 0 152 152" aria-hidden="true" className="shrink-0">
+      <rect width="152" height="152" fill={fundo} />
+      <g transform="translate(34.21 38.52)">
+        {POLIGONOS_Z.map((p) => <polygon key={p} points={p} fill={cor} />)}
+      </g>
     </svg>
   )
 }
