@@ -62,6 +62,8 @@ def nome_valido(nome, url=""):
     pagina_propria = len([p for p in urlparse(url or "").path.split("/") if p]) >= 1
     if " " not in nome and re.search(r"\d", nome) and not pagina_propria:
         return False
+    if re.search(r"voce buscou|resultados? (da busca|para)|busca por", sem_acento(nome).lower()):
+        return False
     return not NAO_E_PRODUTO.search(sem_acento(nome))
 
 
@@ -255,8 +257,77 @@ def buscar_candidatos(cliente, segmento, limite=24):
     return achados
 
 
+def valor_preco(bruto):
+    """Preço como número. Número do JSON-LD (21.98) vale como está; texto com um só
+    separador e 1-2 casas ("21.98", "21,98") é decimal; "1.234,56" tem milhar."""
+    if isinstance(bruto, bool) or bruto is None:
+        return None
+    if isinstance(bruto, (int, float)):
+        return round(float(bruto), 2) if bruto > 0 else None
+    texto = re.sub(r"[^0-9.,]", "", str(bruto))
+    if not texto:
+        return None
+    if re.fullmatch(r"\d+[.,]\d{1,2}", texto):
+        texto = texto.replace(",", ".")
+    elif "," in texto:
+        texto = texto.replace(".", "").replace(",", ".")
+    else:
+        texto = texto.replace(".", "")
+    try:
+        valor = float(texto)
+    except ValueError:
+        return None
+    return round(valor, 2) if valor > 0 else None
+
+
+def _corrigir_preco_do_repo():
+    """extracao._price do repo tira o ponto de "21.98" e grava 2198 (Sam's Club,
+    29/09/2026). Troca só a leitura do número; o resto do _price continua o do repo."""
+    import extracao
+    if getattr(extracao, "_preco_corrigido", False):
+        return
+    original = extracao._price
+
+    def _price(product, soup):
+        if isinstance(product, dict):
+            offers = product.get("offers") or {}
+            if isinstance(offers, list):
+                offers = offers[0] if offers else {}
+            bruto = offers.get("price") if isinstance(offers, dict) else None
+            if bruto is None and isinstance(offers, dict):
+                bruto = offers.get("lowPrice")
+            if bruto is None:
+                bruto = product.get("price")
+            valor = valor_preco(bruto)
+            if valor:
+                return valor
+        for attrs in ({"property": "product:price:amount"}, {"itemprop": "price"}):
+            node = soup.find("meta", attrs=attrs)
+            valor = valor_preco(node.get("content") if node else None)
+            if valor:
+                return valor
+        return original(None, soup)
+
+    extracao._price = _price
+    candidatas_originais = extracao._image_candidates
+
+    def _image_candidates(soup, base_url, product=None):
+        """Mesma lista do repo, sem SVG/logo/banner na frente e com a miniatura
+        (-150-150, width=150) depois da versão grande: o repo usa a primeira."""
+        todas = candidatas_originais(soup, base_url, product)
+        boas = [u for u in todas if not IMAGEM_NAO_E_PRODUTO.search(u)]
+        pequena = re.compile(r"(-\d{2,3}-\d{2,3}[?/]|[?&]width=\d{2,3}(&|$)|/w_\d{2,3},)")
+        da_loja = re.compile(r"(file-manager|/assets/|/static/|/themes?/)", re.I)
+        ordem = lambda u: (bool(da_loja.search(u)), bool(pequena.search(u)))
+        return sorted(boas, key=ordem)
+
+    extracao._image_candidates = _image_candidates
+    extracao._preco_corrigido = True
+
+
 def _ler_pagina(url):
     import extracao
+    _corrigir_preco_do_repo()
     try:
         return extracao._record_from_page(url)
     except Exception:
@@ -277,12 +348,14 @@ def filtrar_candidatos(candidatos):
             motivo = "nome não parece produto"
         elif IMAGEM_NAO_E_PRODUTO.search(c["imagem"]):
             motivo = "imagem de banner, ícone ou carrossel"
-        elif sem_acento(c["nome"]) in vistos or c["imagem"] in vistos:
+        elif c["imagem"] in vistos or (c.get("origem") != "busca" and sem_acento(c["nome"]) in vistos):
             motivo = "duplicado"
         if motivo:
             descartes.append({"nome": c.get("nome"), "motivo": motivo})
             continue
-        vistos.update({sem_acento(c["nome"]), c["imagem"]})
+        vistos.add(c["imagem"])
+        if c.get("origem") != "busca":
+            vistos.add(sem_acento(c["nome"]))
         antes.append(c)
     with ThreadPoolExecutor(12) as pool:
         laudos = list(pool.map(verificar_imagens.conferir, [(c["nome"], c["imagem"]) for c in antes]))
@@ -461,6 +534,9 @@ Para cada item abaixo há o NOME anunciado e a FOTO. Diga se a foto mostra de fa
 (o mesmo tipo de item do nome; embalagem do produto vale). NÃO confere quando a foto é: logo,
 banner, slide de carrossel, seta, ícone, foto de loja/fachada/pessoas, texto sem produto, ou um
 produto de outro tipo (ex.: nome diz "disco de corte" e a foto é uma bicicleta).
+Diferença de peso, tamanho, gramatura ou texto da embalagem (ex.: "210g líquido / 130g drenado")
+NÃO é motivo para recusar: confere quando é o mesmo produto. Recuse sabor ou variação claramente
+diferente do nome (ex.: nome diz "tradicional" e a foto é "cereja").
 Não invente: descreva só o que aparece na foto.
 Responda só JSON: {{"itens": [{{"n": 0, "confere": true, "o_que_aparece": "disco de desbaste amarelo"}}]}}
 
@@ -1021,6 +1097,99 @@ def _ler_pagina_busca(url):
     return registro
 
 
+def buscar_google_gemini(consulta, limite=12):
+    """Links de páginas vindos da busca do Google feita pelo Gemini (ferramenta google_search).
+    O modelo só devolve ENDEREÇOS de resultado; cada página é lida e conferida depois,
+    como qualquer outro resultado de busca. Sem chave ou com erro, devolve []."""
+    import requests
+    chave = os.environ.get("GEMINI_API_KEY")
+    if not chave:
+        return []
+    pedido = {"contents": [{"role": "user", "parts": [{"text":
+              f"Pesquise no Google páginas de lojas online brasileiras que vendem produtos de: {consulta}. "
+              "Quero páginas de PRODUTO (uma por produto), não notícias nem redes sociais. "
+              "Liste os endereços encontrados."}]}],
+              "tools": [{"google_search": {}}],
+              "generationConfig": {"temperature": 0}}
+    for modelo in (MODELO_SELECAO,) + MODELOS_RESERVA:
+        try:
+            r = requests.post(GEMINI_URL.format(modelo=modelo), json=pedido,
+                              headers={"x-goog-api-key": chave}, timeout=90)
+        except requests.RequestException:
+            continue
+        if r.status_code in (429, 500, 503):
+            continue
+        if r.status_code != 200:
+            evento("extracao", f"busca Google via {modelo} recusada (HTTP {r.status_code})", "aviso")
+            return []
+        break
+    else:
+        evento("extracao", "busca Google via Gemini sem cota agora (HTTP 429); seguindo sem ela", "aviso")
+        return []
+    dados = r.json()
+    brutos = []
+    for cand in dados.get("candidates") or []:
+        meta = cand.get("groundingMetadata") or {}
+        for bloco in meta.get("groundingChunks") or []:
+            uri = (bloco.get("web") or {}).get("uri")
+            if uri and uri not in brutos:
+                brutos.append(uri)
+        texto = " ".join(p.get("text", "") for p in (cand.get("content") or {}).get("parts") or [])
+        for uri in re.findall(r"https?://[^\s)\]>\"']+", texto):
+            if uri not in brutos and "vertexaisearch" not in uri:
+                brutos.append(uri.rstrip(".,;"))
+
+    def resolver(uri):
+        if "grounding-api-redirect" not in uri:
+            return uri
+        try:
+            return requests.get(uri, headers={"User-Agent": "Mozilla/5.0"}, timeout=20,
+                                allow_redirects=True, stream=True).url
+        except requests.RequestException:
+            return None
+    with ThreadPoolExecutor(8) as pool:
+        urls = [u for u in pool.map(resolver, brutos[:limite * 2]) if u]
+    saida = []
+    for u in urls:
+        if u not in saida and not re.search(r"instagram|facebook|youtube|tiktok|wikipedia|linkedin", u, re.I):
+            saida.append(u)
+    return saida[:limite]
+
+
+def links_da_marca(url, marca, limite=12):
+    """Página de loja que lista vários produtos da marca (super.angeloni.com.br/bonfiore):
+    devolve os links de produto que citam a marca no endereço."""
+    import requests
+    from urllib.parse import urljoin
+    try:
+        html = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=20).text
+    except requests.RequestException:
+        return []
+    saida, vistos = [], {url}
+    for href in re.findall(r'href="([^"#?]+)"', html):
+        completo = urljoin(url, href)
+        caminho = sem_acento(urlparse(completo).path)
+        if completo in vistos or not any(m in caminho for m in marca):
+            continue
+        if len(caminho.strip("/").split("/")[-1]) < 12 and not caminho.endswith("/p"):
+            continue
+        vistos.add(completo)
+        saida.append(completo)
+        if len(saida) >= limite:
+            break
+    return saida
+
+
+def assunto_dos_achados(achados, marca):
+    """Palavra que mais aparece nos nomes achados, fora a marca ("queijo")."""
+    contagem = {}
+    for c in achados:
+        for palavra in set(palavras_chave(c.get("nome") or "")):
+            if len(palavra) >= 4 and palavra not in marca and not palavra.isdigit():
+                contagem[palavra] = contagem.get(palavra, 0) + 1
+    return max(contagem.items(), key=lambda kv: kv[1])[0] if contagem else ""
+
+
 def buscar_candidatos_web(cliente, segmento, categorias, site, nomes=(), limite=24, foco=""):
     """Busca na web por termos do próprio site. Página de outra marca vira candidato
     [busca]; o modelo marca do_cliente e o pedido fica com produtos_similares."""
@@ -1034,18 +1203,76 @@ def buscar_candidatos_web(cliente, segmento, categorias, site, nomes=(), limite=
                 vistos.add(url)
                 pares.append((url, termo))
     pares = pares[:limite]
-    with ThreadPoolExecutor(8) as pool:
-        registros = list(pool.map(_ler_pagina_busca, [u for u, _ in pares]))
-    achados, fora = [], 0
-    for (url, termo), r in zip(pares, registros):
-        if not r:
-            continue
-        if not relevante(r["name"], termo, cliente, r.get("url") or url):
-            fora += 1
-            continue
-        achados.append(candidato(r["name"], r["url"], r["image"], r.get("price"), r.get("category"),
-                                 r.get("description"), "busca"))
-    evento("extracao", f"busca na web: {len(achados)} produtos em {len(pares)} páginas "
+    marca = [p for p in palavras_chave(cliente) if len(p) >= 4]
+    achados, fora, lidas = [], 0, set()
+
+    def ler(lista):
+        nonlocal fora
+        lista = [(u, t) for u, t in lista if u not in lidas]
+        lidas.update(u for u, _ in lista)
+        with ThreadPoolExecutor(8) as pool:
+            registros = list(pool.map(_ler_pagina_busca, [u for u, _ in lista]))
+        nomes_vistos = {(sem_acento(c["nome"]), c["imagem"]) for c in achados}
+        for (url, termo), r in zip(lista, registros):
+            if not r:
+                continue
+            if not relevante(r["name"], termo, cliente, r.get("url") or url):
+                fora += 1
+                continue
+            chave = (sem_acento(r["name"]), r.get("image"))
+            if chave in nomes_vistos:
+                continue
+            nomes_vistos.add(chave)
+            achados.append(candidato(r["name"], r["url"], r["image"], r.get("price"), r.get("category"),
+                                     r.get("description"), "busca"))
+
+    ler(pares)
+    if len(achados) < 12 and marca:
+        listas = [(u, t) for u, t in pares if any(m in sem_acento(urlparse(u).path) for m in marca)]
+        extras = []
+        for url, termo in listas[:4]:
+            extras += [(link, termo) for link in links_da_marca(url, marca) if host not in link]
+        if extras:
+            evento("extracao", f"busca na web: {len(extras)} links de produto da marca em páginas de loja")
+            ler(extras[:24])
+    if len(achados) < 12 and marca:
+        assunto = assunto_dos_achados(achados, marca)
+        if assunto:
+            termo = f"{assunto} {cliente.split()[0]}"
+            evento("extracao", f"busca na web: nova busca por {termo}")
+            novos = [(u, f"{cliente}") for u in buscar_na_web(termo) if host not in u and u not in lidas]
+            ler(novos[:12])
+            listas = [(u, t) for u, t in novos if any(m in sem_acento(urlparse(u).path) for m in marca)]
+            extras = []
+            for url, t in listas[:3]:
+                extras += [(link, t) for link in links_da_marca(url, marca) if host not in link]
+            ler(extras[:24])
+    if len(achados) < 12 and marca:
+        lojas = []
+        for c in list(achados) + [{"url": u} for u, _ in pares]:
+            h = urlparse(c.get("url") or "").hostname or ""
+            if h and h != host and h not in lojas and "mercadolivre" not in h:
+                lojas.append(h)
+        slugs = list(dict.fromkeys(["-".join(marca)] + marca))
+        extras = []
+        for h in lojas[:6]:
+            for pagina in [f"https://{h}/{sl}" for sl in slugs] + [f"https://{h}/busca?q={sl}" for sl in slugs]:
+                extras += [(link, cliente) for link in links_da_marca(pagina, marca) if host not in link]
+        extras = [e for e in dict.fromkeys(extras) if e[0] not in lidas]
+        if extras:
+            evento("extracao", f"busca na web: {len(extras)} links da marca nas lojas {', '.join(lojas[:6])}")
+            ler(extras[:30])
+    if len(achados) < 12 and marca:
+        termo = f"{cliente} {assunto_dos_achados(achados, marca) or segmento or ''}".strip()
+        google = [u for u in buscar_google_gemini(termo) if host not in u and u not in lidas]
+        evento("extracao", f"busca no Google (via {MODELO_SELECAO}): {len(google)} páginas para {termo}")
+        ler([(u, cliente) for u in google])
+        listas = [u for u in google if any(m in sem_acento(urlparse(u).path) for m in marca)]
+        extras = []
+        for url in listas[:3]:
+            extras += [(link, cliente) for link in links_da_marca(url, marca) if host not in link]
+        ler(extras[:24])
+    evento("extracao", f"busca na web: {len(achados)} produtos em {len(lidas)} páginas "
                        f"({fora} páginas fora do assunto descartadas)")
     return achados
 
