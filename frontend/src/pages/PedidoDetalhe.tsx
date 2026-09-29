@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useParams } from 'react-router-dom'
-import { ArrowLeft, ExternalLink, FlaskConical, ImageOff, Loader2, RefreshCw, Rocket, Save, Wand2 } from 'lucide-react'
+import { ArrowLeft, ExternalLink, FileText, FlaskConical, ImageOff, Loader2, RefreshCw, Rocket, Save, Wand2 } from 'lucide-react'
 import { Card } from '../components/ui/Card'
 import Badge from '../components/ui/Badge'
 import Button from '../components/ui/Button'
@@ -15,10 +15,11 @@ import CampoAnexo from '../components/app/CampoAnexo'
 import { enviarAnexo, validarArquivo } from '../lib/anexo'
 import { acionar, consultar, ErroApi } from '../lib/mitra-api'
 import type { Evento, Pedido, Peca } from '../lib/mitra-api'
+import { useSessao } from '../lib/sessao'
 import { BANNERS, dataHora, dolares, FONTE, PRECO, reais, STATUS } from '../lib/formatos'
 
 interface PrecoResumo { sku: string; nome: string; origem: string; regra: string; preco: number | null; origem_url?: string; imagem?: string; do_cliente?: boolean }
-interface Requisicao { label: string; temp_image_url?: string; _origem_url?: string; _preco_estimado?: boolean; payload: { sku: string; name: string; price: number | null; description?: string } }
+interface Requisicao { label: string; temp_image_url?: string; _origem_url?: string; _miniatura?: string; _preco_estimado?: boolean; payload: { sku: string; name: string; price: number | null; description?: string } }
 interface Catalogo { etapas: { endpoint: string; requests: Requisicao[] }[]; [k: string]: unknown }
 interface Resumo { precos?: PrecoResumo[]; regra_preco_estimado?: string | null; produtos_similares?: boolean; descartes?: { nome: string; motivo: string }[]; [k: string]: unknown }
 
@@ -30,9 +31,29 @@ function situacao(precos: PrecoResumo[]) {
   return precos.every((p) => p.origem === 'publico') ? 'publico' : 'estimado'
 }
 
+function Miniatura({ src }: { src?: string }) {
+  const [falhou, setFalhou] = useState(false)
+  if (!src || falhou) {
+    return <div className="h-12 w-12 rounded-md flex items-center justify-center shrink-0" title="Imagem indisponível" style={{ backgroundColor: 'var(--color-bg)', color: 'var(--color-text-secondary)' }}><ImageOff size={18} /></div>
+  }
+  return <img src={src} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setFalhou(true)} className="h-12 w-12 rounded-md object-contain shrink-0" style={{ backgroundColor: 'var(--color-bg)' }} />
+}
+
+function Origem({ url }: { url?: string }) {
+  if (!url) return null
+  if (url.startsWith('anexo:')) {
+    const [arquivo, trecho = ''] = url.slice(6).split('#')
+    const onde = trecho.replace('pagina=', 'página ').replace('linha=', 'linha ').replace('tabela=', 'tabela ').replace('&', ', ').replace('paragrafo=', 'parágrafo ')
+    return <span className="inline-flex items-center gap-1" title={arquivo}><FileText size={12} /> anexo{onde ? ` · ${onde}` : ''}</span>
+  }
+  if (!/^https?:\/\//i.test(url)) return null
+  return <a href={url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 cursor-pointer" style={{ color: 'var(--color-primary-text)' }}>origem <ExternalLink size={12} /></a>
+}
+
 export default function PedidoDetalhe() {
   const { id = '' } = useParams()
   const { toasts, addToast, removeToast } = useToast()
+  const sessao = useSessao()
   const [pedido, setPedido] = useState<Pedido | null>(null)
   const [eventos, setEventos] = useState<Evento[]>([])
   const [pecas, setPecas] = useState<Peca[]>([])
@@ -322,15 +343,14 @@ export default function PedidoDetalhe() {
                       )}
                       <td className="px-3 py-3">
                         <div className="flex items-center gap-3 min-w-64">
-                          {r.temp_image_url ? <img src={r.temp_image_url} alt="" className="h-12 w-12 rounded-md object-contain shrink-0" style={{ backgroundColor: 'var(--color-bg)' }} />
-                            : <div className="h-12 w-12 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: 'var(--color-bg)' }}><ImageOff size={18} /></div>}
+                          <Miniatura src={r._miniatura || r.temp_image_url} />
                           <div className="flex flex-col gap-1 w-full">
                             {emCuradoria ? (
                               <Input value={edicoes[sku]?.nome ?? r.payload.name} onChange={(e) => setEdicoes((s) => ({ ...s, [sku]: { ...s[sku], nome: e.target.value } }))} />
                             ) : <span className="font-medium">{r.payload.name}</span>}
                             <div className="flex flex-wrap items-center gap-2 text-sm" style={{ color: 'var(--color-text-secondary)' }}>
                               <span>{sku}</span>
-                              {(r._origem_url || info?.origem_url) && <a href={r._origem_url || info?.origem_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 cursor-pointer" style={{ color: 'var(--color-primary-text)' }}>origem <ExternalLink size={12} /></a>}
+                              <Origem url={r._origem_url || info?.origem_url} />
                               {info?.do_cliente === false && <Badge variant="warning">outra marca</Badge>}
                             </div>
                           </div>
@@ -406,7 +426,7 @@ export default function PedidoDetalhe() {
       )}
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        <Card className="p-5 flex flex-col gap-3 xl:col-span-2">
+        {sessao.admin && <Card className="p-5 flex flex-col gap-3 xl:col-span-2">
           <h2 className="text-base font-semibold">Linha do tempo</h2>
           {eventos.length === 0 ? <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>Sem eventos ainda.</p> : (
             <ul className="flex flex-col">
@@ -420,7 +440,7 @@ export default function PedidoDetalhe() {
               ))}
             </ul>
           )}
-        </Card>
+        </Card>}
         <Card className="p-5 flex flex-col gap-3">
           <h2 className="text-base font-semibold">Rastreio</h2>
           <dl className="grid grid-cols-1 gap-2 text-sm">
