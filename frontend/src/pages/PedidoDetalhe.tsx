@@ -99,7 +99,7 @@ export default function PedidoDetalhe() {
           r.payload.price = valor
           entrada.preco = valor
           entrada.origem = 'estimado'
-          entrada.regra = 'informado pelo executivo na curadoria'
+          entrada.regra = 'informado pelo usuário na curadoria'
           r._preco_estimado = true
         }
       }
@@ -158,7 +158,7 @@ export default function PedidoDetalhe() {
         <Card className="p-5 flex flex-col gap-2">
           <span className="text-meta" style={{ color: 'var(--color-text-secondary)' }}>Segmento</span>
           <span className="text-base font-semibold">{pedido.segmento || '—'}</span>
-          <span className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>{pedido.segmento_origem === 'inferido' ? 'inferido pelo sistema' : pedido.segmento_origem === 'informado' ? 'informado pelo executivo' : '—'}</span>
+          <span className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>{pedido.segmento_origem === 'inferido' ? 'inferido pelo sistema' : pedido.segmento_origem === 'informado' ? 'informado pelo usuário' : '—'}</span>
         </Card>
         <Card className="p-5 flex flex-col gap-2">
           <span className="text-meta" style={{ color: 'var(--color-text-secondary)' }}>Portal</span>

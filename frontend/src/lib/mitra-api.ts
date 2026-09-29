@@ -52,7 +52,7 @@ export async function acionar(nome: SfNome, entrada: Record<string, unknown>): P
 const MENSAGENS: Record<string, string> = {
   CAMPOS_FALTANDO: 'Preencha os campos obrigatórios',
   SITE_INVALIDO: 'O endereço do site não é válido.',
-  EXECUTIVO_DESCONHECIDO: 'Executivo não encontrado ou inativo.',
+  EXECUTIVO_DESCONHECIDO: 'Usuário não encontrado ou inativo.',
   PEDIDO_DESCONHECIDO: 'Pedido não encontrado.',
   STATUS_NAO_PERMITE: 'O status atual do pedido não permite esta ação.',
   EM_EXECUCAO: 'Este pedido já tem uma etapa em andamento. Aguarde terminar.',

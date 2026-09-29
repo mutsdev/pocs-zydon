@@ -308,7 +308,7 @@ async function banner(ev, execucao) {
   const pedido = await lerPedido(pedidoId);
   if (acao === 'dispensar') {
     await dml("UPDATE pedidos SET banners_situacao = 'dispensado', atualizado_em = now() WHERE pedido_id = :p", { p: pedidoId });
-    await registrar({ etapa: 'banners', mensagem: 'banners dispensados pelo executivo' });
+    await registrar({ etapa: 'banners', mensagem: 'banners dispensados pelo usuário' });
     return { ok: true, banners: 'dispensado' };
   }
   if (acao === 'aplicar' && !pedido.portal_id) return { ok: false, erro: 'o portal ainda não existe' };

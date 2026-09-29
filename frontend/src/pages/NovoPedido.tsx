@@ -44,7 +44,7 @@ export default function NovoPedido() {
       <Card className="p-5 max-w-2xl">
         <form onSubmit={enviar} className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
-            <span className="text-sm font-medium" style={{ color: 'var(--color-text-secondary)' }}>Executivo</span>
+            <span className="text-sm font-medium" style={{ color: 'var(--color-text-secondary)' }}>Usuário</span>
             <span className="text-sm" style={{ color: 'var(--color-text)' }}>{sessao.executivo} · {sessao.email}</span>
           </div>
           <Input label="Cliente" placeholder="Ex.: Distribuidora JH" value={cliente} onChange={(e) => setCliente(e.target.value)} />

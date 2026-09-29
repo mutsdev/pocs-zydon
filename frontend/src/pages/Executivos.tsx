@@ -24,7 +24,7 @@ export default function Executivos() {
     const limpo = nome.trim().replace(/\s+/g, ' ')
     const correio = email.trim().toLowerCase()
     if (!limpo) { addToast('error', 'Informe o nome.'); return }
-    if (!/^[^@\s]+@zydon\.com\.br$/.test(correio)) { addToast('error', 'Use o e-mail @zydon.com.br do executivo.'); return }
+    if (!/^[^@\s]+@zydon\.com\.br$/.test(correio)) { addToast('error', 'Use o e-mail @zydon.com.br do usuário.'); return }
     const mesmoEmail = executivos.find((e) => (e.email || '').toLowerCase() === correio && e.nome !== limpo)
     if (mesmoEmail) { addToast('error', `Este e-mail já é de ${mesmoEmail.nome}.`); return }
     const parecido = executivos.find((e) => e.nome.localeCompare(limpo, 'pt-BR', { sensitivity: 'base' }) === 0)
@@ -51,7 +51,7 @@ export default function Executivos() {
   }
 
   return (
-    <Pagina titulo="Executivos" subtitulo="Quem pode abrir pedidos. O executivo entra com a conta Google do e-mail cadastrado aqui.">
+    <Pagina titulo="Usuários" subtitulo="Quem pode abrir pedidos. O usuário entra com a conta Google do e-mail cadastrado aqui.">
       <ToastContainer toasts={toasts} onRemove={removeToast} />
       {erro && <Aviso tipo="danger" titulo={erro} />}
       {admin?.admin && (
@@ -65,7 +65,7 @@ export default function Executivos() {
       )}
       <Card>
         {executivos.length === 0 ? (
-          <Vazio titulo="Nenhum executivo cadastrado" texto={admin?.admin ? 'Inclua os nomes acima.' : 'Peça ao administrador para cadastrar os nomes.'} />
+          <Vazio titulo="Nenhum usuário cadastrado" texto={admin?.admin ? 'Inclua os nomes acima.' : 'Peça ao administrador para cadastrar os nomes.'} />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full">

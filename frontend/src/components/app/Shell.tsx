@@ -9,7 +9,7 @@ const ITENS = [
   { para: '/novo', rotulo: 'Novo pedido', icone: PlusCircle },
   { para: '/pedidos', rotulo: 'Pedidos', icone: LayoutList },
   { para: '/relatorios', rotulo: 'Relatórios', icone: BarChart3 },
-  { para: '/executivos', rotulo: 'Executivos', icone: Users, admin: true },
+  { para: '/usuarios', rotulo: 'Usuários', icone: Users, admin: true },
 ]
 
 function Marca() {
@@ -53,7 +53,7 @@ function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
       </div>
       <div className="mt-auto px-3 py-2 leading-tight">
         <div className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>{sessao.executivo || sessao.email}</div>
-        <div className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>{sessao.admin ? 'Administrador' : 'Executivo'}</div>
+        <div className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>{sessao.admin ? 'Administrador' : 'Usuário'}</div>
       </div>
       <button
         onClick={() => { clearSession(); navegar('/login', { replace: true }) }}

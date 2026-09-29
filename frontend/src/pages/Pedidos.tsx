@@ -87,7 +87,7 @@ export default function Pedidos() {
               <thead>
                 <tr className="text-meta text-left" style={{ color: 'var(--color-text-secondary)' }}>
                   <th className="px-3 py-3 font-medium">Cliente</th>
-                  <th className="px-3 py-3 font-medium">Executivo</th>
+                  <th className="px-3 py-3 font-medium">Usuário</th>
                   <th className="px-3 py-3 font-medium">Segmento</th>
                   <th className="px-3 py-3 font-medium text-right">Produtos</th>
                   <th className="px-3 py-3 font-medium">Preço</th>

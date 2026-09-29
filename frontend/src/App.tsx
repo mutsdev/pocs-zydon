@@ -71,7 +71,7 @@ function App() {
           <Route path="/pedidos" element={<Shell><Pedidos /></Shell>} />
           <Route path="/pedidos/:id" element={<Shell><PedidoDetalhe /></Shell>} />
           <Route path="/relatorios" element={<Shell><Relatorios /></Shell>} />
-          {s?.admin && <Route path="/executivos" element={<Shell><Executivos /></Shell>} />}
+          {s?.admin && <Route path="/usuarios" element={<Shell><Executivos /></Shell>} />}
         </>
       ) : <Route path="/" element={<Navigate to="/login" replace />} />}
       <Route path="/login" element={<LoginPage onLogin={() => setConfigured(true)} />} />

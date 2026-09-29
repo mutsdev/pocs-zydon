@@ -16,7 +16,7 @@ export default function BarraFiltros({ filtros, mudar, executivos, segmentos }: 
   return (
     <>
       {admin && <div className="w-full sm:w-44">
-        <Select label="Executivo" value={filtros.executivo} onChange={(v) => mudar({ ...filtros, executivo: v })}
+        <Select label="Usuário" value={filtros.executivo} onChange={(v) => mudar({ ...filtros, executivo: v })}
           options={[{ value: '', label: 'Todos' }, ...executivos.map((e) => ({ value: String(e.id), label: e.nome }))]} />
       </div>}
       <div className="w-full sm:w-44">

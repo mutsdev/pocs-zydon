@@ -14,7 +14,7 @@ export function useApoio() {
     ]).then(([e, s]) => {
       if (!ativo) return
       if (e.status === 'fulfilled') setExecutivos(e.value)
-      else setErro('Não foi possível carregar os executivos.')
+      else setErro('Não foi possível carregar os usuários.')
       if (s.status === 'fulfilled') setSegmentos(s.value.map((x) => x.segmento))
     })
     return () => { ativo = false }

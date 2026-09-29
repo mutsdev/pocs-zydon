@@ -83,7 +83,7 @@ export default function Relatorios() {
   const num = (v: unknown) => Number(v || 0)
 
   return (
-    <Pagina titulo="Relatórios" subtitulo="Portais criados por executivo, segmento, período, status, fonte do catálogo e situação do preço.">
+    <Pagina titulo="Relatórios" subtitulo="Portais criados por usuário, segmento, período, status, fonte do catálogo e situação do preço.">
       <div className="flex flex-wrap items-end gap-3">
         <BarraFiltros filtros={filtros} mudar={setFiltros} executivos={executivos} segmentos={segmentos} />
       </div>
@@ -114,7 +114,7 @@ export default function Relatorios() {
               <ShadcnPieChart data={(por.preco || []).map((l) => ({ name: ROTULOS.preco(l.valor), value: num(l.pedidos) }))} />
             </ChartContainer>
           </div>
-          <Tabela titulo="Executivo" dim="executivo" linhas={por.executivo || []} />
+          <Tabela titulo="Usuário" dim="executivo" linhas={por.executivo || []} />
           <Tabela titulo="Segmento" dim="segmento" linhas={por.segmento || []} />
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
             <Tabela titulo="Status" dim="status" linhas={por.status || []} />
