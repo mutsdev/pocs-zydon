@@ -197,6 +197,83 @@ def _logo_pelo_arquivo(soup, base):
     return ""
 
 
+CORES_LOGO = ((17, 58, 110), (122, 31, 61), (22, 92, 70), (92, 45, 145), (150, 70, 20), (30, 30, 30))
+
+
+def logo_tipografica(cliente, pasta):
+    """Pedido sem logo (sem site ou site sem logo): logo de texto com o nome do cliente,
+    para os banners terem marca e paleta. Cor fixa pelo nome, sempre a mesma."""
+    import hashlib
+    from PIL import Image, ImageDraw, ImageFont
+    nome = " ".join(str(cliente or "Cliente").split()) or "Cliente"
+    cor = CORES_LOGO[int(hashlib.sha256(nome.lower().encode()).hexdigest(), 16) % len(CORES_LOGO)]
+    fonte = None
+    for arquivo in ("DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                    "LiberationSans-Bold.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"):
+        try:
+            fonte = ImageFont.truetype(arquivo, 120)
+            break
+        except OSError:
+            continue
+    if fonte is None:
+        try:
+            fonte = ImageFont.load_default(size=120)
+        except TypeError:
+            fonte = ImageFont.load_default()
+    rascunho = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    palavras = nome.upper().split()
+
+    def medir(texto):
+        caixa = rascunho.textbbox((0, 0), texto, font=fonte)
+        return caixa[2] - caixa[0], caixa[3] - caixa[1], caixa
+
+    def dividir(qtd):
+        if qtd <= 1 or len(palavras) < qtd:
+            return [" ".join(palavras)]
+        melhor = None
+        import itertools
+        for cortes in itertools.combinations(range(1, len(palavras)), qtd - 1):
+            limites = (0,) + cortes + (len(palavras),)
+            linhas = [" ".join(palavras[a:b]) for a, b in zip(limites, limites[1:])]
+            maior = max(medir(linha)[0] for linha in linhas)
+            if melhor is None or maior < melhor[0]:
+                melhor = (maior, linhas)
+        return melhor[1]
+
+    altura_linha = medir("AGJ")[1]
+    entrelinha = int(altura_linha * 0.35)
+    margem = 40
+    linhas = [" ".join(palavras)]
+    for qtd in range(1, min(len(palavras), 4) + 1):
+        linhas = dividir(qtd)
+        largura = max(medir(linha)[0] for linha in linhas) + 2 * margem
+        altura = len(linhas) * altura_linha + (len(linhas) - 1) * entrelinha + 2 * margem + 24
+        if largura / altura <= 4:
+            break
+    largura = max(medir(linha)[0] for linha in linhas)
+    altura_total = len(linhas) * altura_linha + (len(linhas) - 1) * entrelinha
+    img = Image.new("RGBA", (largura + 2 * margem, altura_total + 2 * margem + 24), (0, 0, 0, 0))
+    desenho = ImageDraw.Draw(img)
+    topo = margem
+    for linha in linhas:
+        _, _, caixa = medir(linha)
+        desenho.text((margem - caixa[0], topo - rascunho.textbbox((0, 0), "AGJ", font=fonte)[1]),
+                     linha, font=fonte, fill=cor + (255,))
+        topo += altura_linha + entrelinha
+    if img.width / img.height > 5.5:
+        nova_altura = int(img.width / 5.5)
+        maior = Image.new("RGBA", (img.width, nova_altura), (0, 0, 0, 0))
+        maior.paste(img, (0, (nova_altura - img.height) // 2))
+        img = maior
+    desenho = ImageDraw.Draw(img)
+    desenho.rectangle((margem, img.height - margem + 4, margem + max(largura // 4, 60), img.height - margem + 16),
+                      fill=cor + (255,))
+    pasta.mkdir(parents=True, exist_ok=True)
+    alvo = pasta / "logo_texto.png"
+    img.save(alvo, "PNG")
+    return alvo
+
+
 def montar_catalogo(entrada):
     """Coleta, filtra, seleciona por IA e monta. Levanta PrecisaCatalogo."""
     cliente, site = entrada["cliente"], str(entrada.get("site") or "").strip()
@@ -352,9 +429,18 @@ def extrair(entrada):
         observacoes.append(aviso_logo)
         evento("extracao", aviso_logo, "aviso")
     if not logo:
-        observacoes.append("nenhuma logo identificável foi encontrada no site" if entrada.get("site")
-                           else "pedido sem site: sem logo, portal sai sem banner de identidade")
         logo_url = None
+        try:
+            logo = str(logo_tipografica(entrada.get("cliente"), pasta_pedido(pedido_id)))
+            observacoes.append(("nenhuma logo identificável foi encontrada no site" if entrada.get("site")
+                                else "pedido sem site") + ": a logo dos banners foi GERADA a partir do nome do "
+                               "cliente (texto); troque pela logo real se o cliente mandar")
+            evento("extracao", "sem logo: banners com logo de texto gerada pelo nome do cliente", "aviso")
+        except Exception as erro:
+            logo = None
+            observacoes.append(f"sem logo e a logo de texto falhou ({type(erro).__name__}: {erro}); "
+                               "portal sai sem banner de identidade")
+            evento("extracao", "sem logo: portal sai sem banner", "aviso")
 
     categorias = next(e for e in catalogo["etapas"] if e.get("endpoint") == "categories")["requests"]
     resumo = {"produtos": len(precos), "categorias": len(categorias), "fonte": montado["fonte"],
@@ -508,7 +594,11 @@ def previa(entrada):
     pasta = pasta_pedido(pedido_id)
     logo = restaurar_logo(entrada, pasta)
     if not logo:
-        return {"sem_banner": "sem logo: não há de onde tirar a paleta nem a marca"}
+        try:
+            logo = logo_tipografica(entrada.get("cliente"), pasta)
+            evento("banners", "sem logo: usando logo de texto gerada pelo nome do cliente", "aviso")
+        except Exception as erro:
+            return {"sem_banner": f"sem logo e a logo de texto falhou ({type(erro).__name__}: {erro})"}
     caminho = gravar_catalogo(entrada["catalogo"], pedido_id)
     evento("banners", "gerando as peças (login e cabeçalho)")
     gerada, saida = atendimento.gerar_pecas(caminho, logo, entrada["cliente"],
@@ -531,6 +621,21 @@ def renovar_imagens_do_anexo(catalogo):
     for r in pedidos:
         r["temp_image_url"] = hospedagem.renovar(r["_file_id"])
     evento("criacao", f"{len(pedidos)} imagens do anexo com URL renovada")
+
+
+def miniaturas(entrada):
+    """Pedido antigo sem miniatura: renova a URL pelo file_id e grava a miniatura no catálogo."""
+    import requests
+    import anexo
+    catalogo = entrada["catalogo"]
+    pedidos = [r for e in catalogo.get("etapas") or [] if e.get("endpoint") == "products"
+               for r in e.get("requests") or [] if r.get("_file_id") and not r.get("_miniatura")]
+    if pedidos:
+        hospedagem = anexo.Hospedagem()
+        for r in pedidos:
+            r["temp_image_url"] = hospedagem.renovar(r["_file_id"])
+            r["_miniatura"] = anexo.miniatura(requests.get(r["temp_image_url"], timeout=60).content)
+    return {"catalogo": catalogo, "atualizados": len(pedidos)}
 
 
 def criar(entrada):
@@ -590,7 +695,7 @@ def banner(entrada):
     return resposta
 
 
-ACOES = {"extrair": extrair, "avaliar": avaliar, "previa": previa, "criar": criar, "banner": banner}
+ACOES = {"miniaturas": miniaturas, "extrair": extrair, "avaliar": avaliar, "previa": previa, "criar": criar, "banner": banner}
 
 
 def main():

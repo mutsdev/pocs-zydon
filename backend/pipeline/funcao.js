@@ -232,13 +232,13 @@ async function previa(ev, execucao) {
   if (!saida.ok || saida.sem_banner) {
     const motivo = saida.sem_banner || saida.erro;
     await registrar({ etapa: 'banners', mensagem: `sem banner: ${motivo}`, nivel: 'aviso' });
-    await dml(`UPDATE pedidos SET banners_situacao = 'sem_banner', observacoes = TRIM(COALESCE(observacoes, '') || ' · sem banner: ' || :m)
+    await dml(`UPDATE pedidos SET banners_situacao = 'sem_banner', execucao_atual = NULL, observacoes = TRIM(COALESCE(observacoes, '') || ' · sem banner: ' || :m)
       WHERE pedido_id = :p`, { p: pedidoId, m: String(motivo).slice(0, 500) });
     return { ok: true, banners: 'sem_banner' };
   }
   await salvarArquivo(pedidoId, 'banners', saida.banners_tar);
   await gravarPecas(pedidoId, saida.pecas, null, saida.cor);
-  await dml(`UPDATE pedidos SET banners_situacao = 'prontos', banner_cor = :c, atualizado_em = now()
+  await dml(`UPDATE pedidos SET banners_situacao = 'prontos', banner_cor = :c, execucao_atual = NULL, atualizado_em = now()
     WHERE pedido_id = :p`, { p: pedidoId, c: saida.cor || null });
   return { ok: true, banners: 'prontos' };
 }
@@ -357,12 +357,24 @@ async function banner(ev, execucao) {
   return { ok: true, pecas: Object.keys(saida.pecas || {}) };
 }
 
+async function miniaturas(ev) {
+  const pedido = await lerPedido(ev.pedido_id);
+  if (!pedido.catalogo) return { ok: true, atualizados: 0 };
+  const saida = await rodarPython('miniaturas', { catalogo: pedido.catalogo }, () => {});
+  if (!saida.ok) return saida;
+  if (saida.atualizados) {
+    await dml(`UPDATE pedidos SET catalogo = CAST(:c AS JSONB), atualizado_em = now() WHERE pedido_id = :p`,
+      { p: ev.pedido_id, c: JSON.stringify(saida.catalogo) });
+  }
+  return { ok: true, atualizados: saida.atualizados };
+}
+
 async function avaliar(ev) {
   const saida = await rodarPython('avaliar', { clientes: ev.clientes }, () => {});
   return saida;
 }
 
-const ACOES = { extrair, previa, criar, banner, avaliar };
+const ACOES = { extrair, previa, criar, banner, avaliar, miniaturas };
 
 module.exports = async (event, context) => {
   const ev = (event && event.input) ? event.input : (event || {});

@@ -442,6 +442,8 @@ def montar_pela_selecao(coleta, candidatos, escolha, cliente, segmento, descrica
         req["_origem_url"] = c["url"]
         if c.get("file_id"):
             req["_file_id"] = c["file_id"]
+        if c.get("miniatura"):
+            req["_miniatura"] = c["miniatura"]
         entrada = {"sku": req["payload"]["sku"], "nome": req["payload"]["name"],
                    "origem_url": c["url"], "imagem": c["imagem"], "fonte": c["origem"],
                    "do_cliente": do_cliente[n], "completado": n in completados,

@@ -26,6 +26,19 @@ COLUNAS = {
 }
 
 
+def miniatura(conteudo, lado=160):
+    """Data-URI JPEG pequena: a URL assinada da Zydon expira em ~2h, a miniatura não."""
+    from PIL import Image
+    try:
+        img = Image.open(io.BytesIO(conteudo)).convert("RGB")
+        img.thumbnail((lado, lado))
+        saida = io.BytesIO()
+        img.save(saida, "JPEG", quality=78)
+        return "data:image/jpeg;base64," + base64.b64encode(saida.getvalue()).decode()
+    except Exception:
+        return None
+
+
 def fonte_do_anexo(nome):
     ext = Path(nome or "").suffix.lower()
     if ext in (".xlsx", ".xls", ".csv"):
@@ -283,6 +296,8 @@ def candidatos_do_anexo(nome_arquivo, conteudo_base64, limite=60):
                               item.get("categoria"), "", "anexo")
         if file_id:
             c["file_id"] = file_id
+        if item.get("imagem_bytes"):
+            c["miniatura"] = miniatura(item["imagem_bytes"])
         candidatos.append(c)
     selecao.evento("extracao", f"anexo: {len(candidatos)} produtos com imagem, {len(descartes)} descartados")
     return fonte, candidatos, descartes
