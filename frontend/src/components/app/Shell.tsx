@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { BarChart3, LayoutDashboard, LayoutList, LogOut, Menu, PlusCircle, Users, X } from 'lucide-react'
+import { BarChart3, Hourglass, LayoutDashboard, LayoutList, LogOut, Menu, PlusCircle, Users, X } from 'lucide-react'
 import { clearSession } from '../../lib/mitra-auth'
 import { useSessao } from '../../lib/sessao'
 import LogoZydon from './LogoZydon'
@@ -12,6 +12,7 @@ const ITENS = [
   { para: '/pedidos', rotulo: 'Pedidos', icone: LayoutList },
   { para: '/relatorios', rotulo: 'Relatórios', icone: BarChart3 },
   { para: '/usuarios', rotulo: 'Usuários', icone: Users, admin: true },
+  { para: '/telas-espera', rotulo: 'Telas de espera', icone: Hourglass, admin: true },
 ]
 
 function Marca() {

@@ -4,11 +4,11 @@ import PenduloTriplo from './PenduloTriplo'
 import NuvensMatematica from './NuvensMatematica'
 import BarcosTabuada from './BarcosTabuada'
 
-type Cena = 'barcos' | 'pendulo' | 'nuvens' | 'caos' | 'galton'
-const CENAS: Cena[] = ['barcos', 'pendulo', 'nuvens', 'galton', 'caos']
-const NOMES: Record<Cena, string> = { barcos: 'barcos da tabuada', pendulo: 'pêndulo triplo', nuvens: 'pulo nas nuvens', caos: 'caos dos pêndulos', galton: 'máquina de Galton' }
+export type Cena = 'barcos' | 'pendulo' | 'nuvens' | 'caos' | 'galton'
+export const CENAS: Cena[] = ['barcos', 'pendulo', 'nuvens', 'galton', 'caos']
+export const NOMES: Record<Cena, string> = { barcos: 'barcos da tabuada', pendulo: 'pêndulo triplo', nuvens: 'pulo nas nuvens', caos: 'caos dos pêndulos', galton: 'máquina de Galton' }
 
-interface Props { titulo: string; mensagem?: string | null; desde?: string | null }
+interface Props { titulo: string; mensagem?: string | null; desde?: string | null; cenaInicial?: Cena }
 
 function cor(nome: string, reserva: string) {
   const v = getComputedStyle(document.documentElement).getPropertyValue(nome).trim()
@@ -253,12 +253,16 @@ function CenaCanvas({ cena }: { cena: 'caos' | 'galton' }) {
   )
 }
 
+export function ConteudoCena({ cena }: { cena: Cena }) {
+  return cena === 'barcos' ? <BarcosTabuada /> : cena === 'pendulo' ? <PenduloTriplo /> : cena === 'nuvens' ? <NuvensMatematica /> : <CenaCanvas key={cena} cena={cena} />
+}
+
 function duracao(segundos: number) {
   return segundos < 60 ? `${segundos} s` : `${Math.floor(segundos / 60)} min ${String(segundos % 60).padStart(2, '0')} s`
 }
 
-export default function Espera({ titulo, mensagem, desde }: Props) {
-  const [cena, setCena] = useState<Cena>('barcos')
+export default function Espera({ titulo, mensagem, desde, cenaInicial }: Props) {
+  const [cena, setCena] = useState<Cena>(cenaInicial || 'barcos')
   const [agora, setAgora] = useState(Date.now())
   const montado = useRef(Date.now())
 
@@ -292,7 +296,7 @@ export default function Espera({ titulo, mensagem, desde }: Props) {
         </button>
       </div>
       {mensagem && <p className="px-5 text-sm" style={{ color: 'var(--color-text-secondary)' }}>{mensagem}</p>}
-      {cena === 'barcos' ? <BarcosTabuada /> : cena === 'pendulo' ? <PenduloTriplo /> : cena === 'nuvens' ? <NuvensMatematica /> : <CenaCanvas key={cena} cena={cena} />}
+      <ConteudoCena cena={cena} />
     </div>
   )
 }
