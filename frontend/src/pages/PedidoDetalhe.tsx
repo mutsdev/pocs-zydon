@@ -104,11 +104,22 @@ export default function PedidoDetalhe() {
   const gerandoBanners = ['gerando', 'regerando', 'aplicando'].includes(pedido?.banners_situacao || '')
   const emAndamento = !!pedido && (['extraindo', 'criando', 'aguardando_anexo'].includes(pedido.status) || pedido.em_execucao
     || ['gerando', 'regerando', 'aplicando'].includes(pedido.banners_situacao || ''))
+  const [tique, setTique] = useState(0)
   useEffect(() => {
     if (!emAndamento) return
-    const relogio = setTimeout(() => { if (document.visibilityState === 'visible') carregar(true); else setAtualizando(false) }, 4000)
-    return () => clearTimeout(relogio)
-  }, [emAndamento, pedido, carregar])
+    let ativo = true
+    const relogio = setTimeout(async () => {
+      if (document.visibilityState === 'visible') await carregar(true)
+      if (ativo) setTique((t) => t + 1)
+    }, 4000)
+    return () => { ativo = false; clearTimeout(relogio) }
+  }, [emAndamento, tique, carregar])
+
+  useEffect(() => {
+    const aoVoltar = () => { if (document.visibilityState === 'visible') carregar(true) }
+    document.addEventListener('visibilitychange', aoVoltar)
+    return () => document.removeEventListener('visibilitychange', aoVoltar)
+  }, [carregar])
 
   useEffect(() => {
     if (!pedido) return
