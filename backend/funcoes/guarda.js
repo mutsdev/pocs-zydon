@@ -1,6 +1,28 @@
 // Guarda de acesso comum as funcoes JS (embutida em cada uma por publicar_funcao.mjs).
 // Regra: sessao obrigatoria, usuario ativo, e-mail do dominio configurado; executivo = e-mail do login.
+async function comEspera(fazer) {
+  for (let tentativa = 0; ; tentativa += 1) {
+    try {
+      return await fazer();
+    } catch (erro) {
+      if (!(erro && erro.status === 429) || tentativa >= 5) throw erro;
+      await new Promise((ok) => setTimeout(ok, 1500 * (tentativa + 1)));
+    }
+  }
+}
+function paciente(mitra) {
+  for (const k of ['executeQuery', 'executeDml']) {
+    const original = mitra.sql[k].bind(mitra.sql);
+    mitra.sql[k] = (...args) => comEspera(() => original(...args));
+  }
+  const fns = mitra.functions;
+  if (fns) for (const k of ['executeAsync', 'execute']) {
+    if (typeof fns[k] === 'function') { const o = fns[k].bind(fns); fns[k] = (...a) => comEspera(() => o(...a)); }
+  }
+  return mitra;
+}
 async function guarda(mitra, context) {
+  paciente(mitra);
   const userId = context && context.userId;
   if (!userId) return { ok: false, erro: 'SEM_SESSAO', mensagem: 'Entre com a sua conta Google da Zydon.' };
   const r = await mitra.sql.executeQuery(`SELECT lower(u.email) AS email, u.enabled,
