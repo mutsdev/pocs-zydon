@@ -19,9 +19,16 @@ function normalizar(saida: unknown): Record<string, unknown> {
   return (saida as Record<string, unknown>) || {}
 }
 
+function mensagemAmigavel(texto: string, padrao: string) {
+  if (/rate limit|429/i.test(texto || '')) return 'Muita gente usando ao mesmo tempo. Espere alguns segundos e tente de novo.'
+  if (/network|fetch|failed/i.test(texto || '')) return 'A conexão falhou. Confira a internet e tente de novo.'
+  return padrao
+}
+
 function conferir(execucao: { status: string; errorMessage: string | null; output: unknown }) {
   if (execucao.status !== 'SUCCESS') {
-    throw new ErroApi('FALHA_EXECUCAO', execucao.errorMessage || 'A operação não foi concluída.')
+    const bruta = execucao.errorMessage || 'A operação não foi concluída.'
+    throw new ErroApi('FALHA_EXECUCAO', mensagemAmigavel(bruta, 'A operação não foi concluída. Tente de novo.'))
   }
   return normalizar(execucao.output)
 }
@@ -35,7 +42,12 @@ export async function consultar<T>(nome: SfNome, entrada: Record<string, string>
 const esperar = (ms: number) => new Promise((ok) => setTimeout(ok, ms))
 
 export async function acionar(nome: SfNome, entrada: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const inicio = await mitra.functions.executeAsync(SF[nome], entrada)
+  let inicio
+  try {
+    inicio = await mitra.functions.executeAsync(SF[nome], entrada)
+  } catch (e) {
+    throw new ErroApi('LIMITE_PLATAFORMA', mensagemAmigavel(e instanceof Error ? e.message : '', 'Muita gente usando ao mesmo tempo. Espere alguns segundos e tente de novo.'))
+  }
   let execucao = inicio
   const limite = Date.now() + 120000
   while (['RUNNING', 'PENDING', 'QUEUED'].includes(execucao.status) && Date.now() < limite) {
@@ -65,6 +77,9 @@ const MENSAGENS: Record<string, string> = {
   LOGO_RECUSADA: 'O pedido não aceita trocar a logo agora.',
   EXECUTIVO_NAO_CADASTRADO: 'Peça ao João Pedro para te cadastrar.',
   SO_ADMIN: 'Só o administrador pode apagar pedidos.',
+  LIMITE_PLATAFORMA: 'Muita gente usando ao mesmo tempo. Espere alguns segundos e tente de novo.',
+  SEM_SESSAO: 'Sua sessão expirou. Saia e entre de novo.',
+  ACESSO_RESTRITO: 'Acesso restrito à equipe Zydon.',
 }
 
 function mensagemDeErro(saida: Record<string, unknown>) {

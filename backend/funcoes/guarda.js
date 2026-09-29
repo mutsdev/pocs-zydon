@@ -25,13 +25,21 @@ async function guarda(mitra, context) {
   paciente(mitra);
   const userId = context && context.userId;
   if (!userId) return { ok: false, erro: 'SEM_SESSAO', mensagem: 'Entre com a sua conta Google da Zydon.' };
-  const r = await mitra.sql.executeQuery(`SELECT lower(u.email) AS email, u.enabled,
+  let r;
+  try {
+    r = await mitra.sql.executeQuery(`SELECT lower(u.email) AS email, u.enabled,
       (lower(u.email) LIKE '%@' || d.valor) AS dominio_ok, (lower(u.email) = a.valor) AS admin,
       e.id AS executivo_id, e.nome AS executivo, e.cargo
     FROM INT_USER u CROSS JOIN (SELECT valor FROM configuracao WHERE chave = 'dominio') d
     CROSS JOIN (SELECT valor FROM configuracao WHERE chave = 'admin_email') a
     LEFT JOIN executivos e ON lower(e.email) = lower(u.email) AND e.ativo
     WHERE u.user_id = CAST(:u AS UUID)`, { u: String(userId) });
+  } catch (erro) {
+    if (erro && erro.status === 429) {
+      return { ok: false, erro: 'LIMITE_PLATAFORMA', mensagem: 'Muita gente usando ao mesmo tempo. Espere alguns segundos e tente de novo.' };
+    }
+    throw erro;
+  }
   const s = (r.rows || [])[0];
   if (!s || !s.enabled || !s.dominio_ok) {
     return { ok: false, erro: 'ACESSO_RESTRITO', mensagem: 'Acesso restrito à equipe Zydon.' };
