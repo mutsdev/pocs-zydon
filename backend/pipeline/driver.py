@@ -966,9 +966,17 @@ EMBRULHO_PALETA = r"""
 import json, sys
 from pathlib import Path
 gerador = Path(sys.argv[1]); paleta = json.loads(sys.argv[2])
+feedback = paleta.pop("_feedback", None)
 sys.path.insert(0, str(gerador.parent))
 sys.argv = [str(gerador)] + sys.argv[3:]
 import gerar_banners
+if feedback:
+    _resolver = gerar_banners.mod_segmento.resolver
+    def _resolver_com_pedido(*a, **k):
+        contexto = _resolver(*a, **k)
+        contexto["feedback"] = {"login": feedback, "cabecalho": feedback}
+        return contexto
+    gerar_banners.mod_segmento.resolver = _resolver_com_pedido
 import numpy as np
 import logo as mod_logo
 _preparar = mod_logo.preparar_para_fundo
@@ -1217,16 +1225,23 @@ def paleta_do_pedido(marca_hex, apoio_hex, gosto, anterior_hex=None, variar=Fals
     return nome, {"principal": _hex(fundo), "destaque": _hex(destaque), "neutra": _hex(neutra)}
 
 
-def gerar_pecas_paleta(caminho, logo, cliente, segmento, paleta):
+def gerar_pecas_paleta(caminho, logo, cliente, segmento, paleta, cena_ia=False, texto=""):
+    """cena_ia=True (teste com os próximos pedidos): a IA desenha a cena ao lado do painel,
+    com os produtos do catálogo e o pedido de mudança no prompt. Cena reprovada na régua
+    cai no banner só com a marca, como antes."""
     import atendimento
     pasta = Path(caminho).parent
     embrulho = pasta / "embrulho_paleta.py"
     embrulho.write_text(EMBRULHO_PALETA, encoding="utf-8")
-    comando = [sys.executable, str(embrulho), str(atendimento.GERADOR), json.dumps(paleta), "auto",
+    dados = dict(paleta, _feedback=texto.strip()) if cena_ia and (texto or "").strip() else paleta
+    comando = [sys.executable, str(embrulho), str(atendimento.GERADOR), json.dumps(dados), "auto",
                "--logo", str(logo), "--nome", cliente,
                "--segmento", segmento or atendimento.SEGMENTO_PADRAO,
                "--catalogo", str(caminho), "--regua-logo", "portal",
-               "--candidatas", "0", "--so-fallback", "--cor", paleta["principal"]]
+               "--cor", paleta["principal"]]
+    comando += ["--candidatas", "2"] if cena_ia else ["--candidatas", "0", "--so-fallback"]
+    if cena_ia:
+        evento("banners", "teste: cena do banner desenhada por IA (2 tentativas por peça)")
     return atendimento._rodar_gerador(comando, atendimento.prefixo(Path(caminho).name))
 
 
@@ -1372,8 +1387,18 @@ def gerar_com_identidade(entrada, caminho, logo, variar=False, anterior=None, te
     evento("banners", f"identidade: marca {marca}" + (f", apoio {apoio}" if apoio else "") + f" (de {origem}); "
                       f"{nome} {paleta['principal']}, destaque {paleta['destaque']}"
                       + (f"; gosto {gosto} ({fonte_gosto})" if gosto else ""))
-    nova, saida = gerar_pecas_paleta(caminho, logo, entrada.get("cliente") or "", entrada.get("segmento"), paleta)
-    if nova and texto and PEDE_FOTOS.search(texto):
+    cena_ia = bool(entrada.get("cena_ia"))
+    nova, saida = gerar_pecas_paleta(caminho, logo, entrada.get("cliente") or "", entrada.get("segmento"), paleta,
+                                     cena_ia=cena_ia, texto=texto)
+    if nova and cena_ia:
+        try:
+            manifesto = json.loads((Path(nova) / "manifesto.json").read_text(encoding="utf-8"))
+            origens = {k: v.get("origem") for k, v in (manifesto.get("pecas") or {}).items()}
+            evento("banners", "cena por IA: " + ", ".join(
+                f"{k} {'aprovada' if o == 'aprovado' else 'reprovada, ficou só a marca'}" for k, o in origens.items()))
+        except (OSError, ValueError):
+            pass
+    if nova and texto and PEDE_FOTOS.search(texto) and not cena_ia:
         montar_com_fotos(nova, caminho)
     if nova:
         arquivo = Path(nova) / "paleta.json"

@@ -79,7 +79,8 @@ function rodarPython(acao, entrada, aoEvento) {
         } else { log = (log + linha + '\n').slice(-6000); }
       }
     };
-    const limiteMs = acao === 'banner' || acao === 'previa' || acao === 'trocar_logo' ? 6 * 60 * 1000 : 25 * 60 * 1000;
+    const limiteMs = (acao === 'banner' || acao === 'previa') && entrada.cena_ia ? 12 * 60 * 1000
+      : acao === 'banner' || acao === 'previa' || acao === 'trocar_logo' ? 6 * 60 * 1000 : 25 * 60 * 1000;
     const relogio = setTimeout(() => { log += `\ntempo limite de ${limiteMs / 60000} min: etapa encerrada`; filho.kill('SIGKILL'); }, limiteMs);
     filho.on('close', () => clearTimeout(relogio));
     filho.stdout.on('data', tratar);
@@ -239,12 +240,21 @@ async function gravarPecas(pedidoId, pecas, publicadas, cor) {
   }
 }
 
+async function comCenaIa(pedidoId) {
+  const r = await sql(`WITH marco AS (SELECT CAST(MAX(valor) FILTER (WHERE chave = 'cena_ia_desde') AS TIMESTAMP) AS desde,
+      CAST(MAX(valor) FILTER (WHERE chave = 'cena_ia_quantos') AS INTEGER) AS quantos FROM configuracao),
+    fila AS (SELECT p.pedido_id FROM pedidos p, marco m WHERE m.desde IS NOT NULL AND p.criado_em >= m.desde
+      ORDER BY p.criado_em LIMIT (SELECT COALESCE(quantos, 0) FROM marco))
+    SELECT count(*) AS n FROM fila WHERE pedido_id = :p`, { p: pedidoId });
+  return Number((r[0] || {}).n) > 0;
+}
+
 async function previa(ev, execucao) {
   const pedidoId = ev.pedido_id;
   const registrar = registrador(pedidoId);
   const pedido = await lerPedido(pedidoId);
   await marcarExecucao(pedidoId, 'previa', execucao);
-  const saida = await rodarPython('previa', { pedido_id: pedidoId, cliente: pedido.cliente, site: pedido.site,
+  const saida = await rodarPython('previa', { pedido_id: pedidoId, cliente: pedido.cliente, site: pedido.site, cena_ia: await comCenaIa(pedidoId),
     preferencias: await preferenciasDoExecutivo(pedido.executivo_id),
     segmento: pedido.segmento, catalogo: pedido.catalogo, logo: pedido.logo }, registrar);
   await registrar.fim();
@@ -369,6 +379,7 @@ async function banner(ev, execucao) {
   }
   const preferencias = await preferenciasDoExecutivo(pedido.executivo_id);
   const saida = await rodarPython('banner', { site: pedido.site, preferencias, pedido_id: pedidoId, acao_banner: acao, portal_id: pedido.portal_id,
+    cena_ia: acao === 'regerar' ? await comCenaIa(pedidoId) : false,
     escolhas: ev.escolhas, pecas: ev.pecas, feedback: ev.feedback, cor: ev.cor, banners_tar: banners,
     cliente: pedido.cliente, segmento: pedido.segmento, catalogo: pedido.catalogo, logo: pedido.logo }, registrar);
   await registrar.fim();
