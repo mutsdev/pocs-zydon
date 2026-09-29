@@ -51,8 +51,8 @@ export default function PenduloTriplo() {
     const fundo = cor('--color-surface', '#19181a')
     const borda = cor('--color-border', '#333333')
 
-    const trilhoY = altura - 48
-    const comprimento = Math.min(altura - 90, 260) / ELOS
+    const trilhoY = Math.round(altura / 2) + 10
+    const comprimento = Math.min(altura - trilhoY - 24, trilhoY - 44, 240) / ELOS
     let carroX = largura / 2
     let carroV = 0
     const pontos: Ponto[] = []
@@ -172,7 +172,7 @@ export default function PenduloTriplo() {
     <>
       <canvas
         ref={tela}
-        className="w-full h-80 md:h-96 block cursor-grab touch-none"
+        className="w-full h-96 md:h-[32rem] block cursor-grab touch-none"
         onPointerDown={(e) => { arrasto.current = posicao(e); e.currentTarget.setPointerCapture(e.pointerId) }}
         onPointerMove={(e) => { if (arrasto.current !== null) arrasto.current = posicao(e) }}
         onPointerUp={() => { arrasto.current = null }}
