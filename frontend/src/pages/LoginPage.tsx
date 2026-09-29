@@ -208,16 +208,28 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4" style={{ backgroundColor: 'var(--color-bg)' }}>
+    <div className="min-h-screen grid grid-cols-1 lg:grid-cols-2" style={{ backgroundColor: 'var(--color-bg)' }}>
+      <div className="hidden lg:flex flex-col justify-between p-6" style={{ backgroundColor: 'var(--color-primary-bg)' }}>
+        <div className="flex items-center gap-2">
+          <svg width="32" height="32" viewBox="0 0 28 28" aria-hidden="true"><rect width="28" height="28" rx="7" fill="var(--color-primary)" /><path d="M8 9h12l-12 10h12" stroke="var(--color-on-primary)" strokeWidth="2.6" fill="none" strokeLinecap="round" strokeLinejoin="round" /></svg>
+          <span className="text-base font-semibold" style={{ color: 'var(--color-text)' }}>POCs Zydon</span>
+        </div>
+        <div className="flex flex-col gap-3 max-w-md">
+          <h2 className="text-2xl font-semibold" style={{ color: 'var(--color-text)' }}>Do site do cliente ao portal de demonstração</h2>
+          <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>Informe o cliente e o site. Os produtos e os banners saem prontos para a sua curadoria, e você recebe o link do portal.</p>
+        </div>
+        <span className="text-meta" style={{ color: 'var(--color-text-secondary)' }}>Pré-vendas Zydon</span>
+      </div>
+      <div className="flex items-center justify-center p-4">
       <Card className="w-full max-w-sm animate-scaleIn">
         <CardContent className="pt-8 pb-6 px-6">
           {/* Header */}
           <div className="text-center mb-6">
             <h1 className="text-xl font-semibold" style={{ color: 'var(--color-text)' }}>
-              Entrar
+              POCs Zydon
             </h1>
             <p className="text-sm mt-1" style={{ color: 'var(--color-text-secondary)' }}>
-              Acesse com sua conta
+              Portais de demonstração para os executivos comerciais
             </p>
           </div>
 
@@ -360,6 +372,7 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
           )}
         </CardContent>
       </Card>
+      </div>
     </div>
   );
 }
