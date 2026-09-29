@@ -2,10 +2,11 @@ import { useEffect, useRef, useState } from 'react'
 import { SkipForward } from 'lucide-react'
 import PenduloTriplo from './PenduloTriplo'
 import NuvensMatematica from './NuvensMatematica'
+import BarcosTabuada from './BarcosTabuada'
 
-type Cena = 'pendulo' | 'nuvens' | 'caos' | 'galton'
-const CENAS: Cena[] = ['pendulo', 'nuvens', 'galton', 'caos']
-const NOMES: Record<Cena, string> = { pendulo: 'pêndulo triplo', nuvens: 'pulo nas nuvens', caos: 'caos dos pêndulos', galton: 'máquina de Galton' }
+type Cena = 'barcos' | 'pendulo' | 'nuvens' | 'caos' | 'galton'
+const CENAS: Cena[] = ['barcos', 'pendulo', 'nuvens', 'galton', 'caos']
+const NOMES: Record<Cena, string> = { barcos: 'barcos da tabuada', pendulo: 'pêndulo triplo', nuvens: 'pulo nas nuvens', caos: 'caos dos pêndulos', galton: 'máquina de Galton' }
 
 interface Props { titulo: string; mensagem?: string | null; desde?: string | null }
 
@@ -257,7 +258,7 @@ function duracao(segundos: number) {
 }
 
 export default function Espera({ titulo, mensagem, desde }: Props) {
-  const [cena, setCena] = useState<Cena>('pendulo')
+  const [cena, setCena] = useState<Cena>('barcos')
   const [agora, setAgora] = useState(Date.now())
   const montado = useRef(Date.now())
 
@@ -291,7 +292,7 @@ export default function Espera({ titulo, mensagem, desde }: Props) {
         </button>
       </div>
       {mensagem && <p className="px-5 text-sm" style={{ color: 'var(--color-text-secondary)' }}>{mensagem}</p>}
-      {cena === 'pendulo' ? <PenduloTriplo /> : cena === 'nuvens' ? <NuvensMatematica /> : <CenaCanvas key={cena} cena={cena} />}
+      {cena === 'barcos' ? <BarcosTabuada /> : cena === 'pendulo' ? <PenduloTriplo /> : cena === 'nuvens' ? <NuvensMatematica /> : <CenaCanvas key={cena} cena={cena} />}
     </div>
   )
 }
