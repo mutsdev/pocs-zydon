@@ -17,6 +17,7 @@ module.exports = async (event, context) => {
   }
   const anexoNome = texto(ev.anexo_nome).slice(0, 200);
   const comAnexo = !!anexoNome;
+  const foco = texto(ev.foco).slice(0, 300);
   const campos = { executivo: String(g.sessao.executivo_id), cliente: texto(ev.cliente), site: texto(ev.site) };
   const faltando = Object.keys(campos).filter((k) => !campos[k] && !(k === 'site' && comAnexo));
   if (faltando.length) return { ok: false, erro: 'CAMPOS_FALTANDO', faltando };
@@ -39,13 +40,14 @@ module.exports = async (event, context) => {
   const numero = await sql(`INSERT INTO contador_pedidos (dia, ultimo) VALUES (CAST(now() AS DATE), 1)
     ON CONFLICT (dia) DO UPDATE SET ultimo = contador_pedidos.ultimo + 1 RETURNING ultimo, to_char(dia, 'YYYY-MM-DD') AS dia`);
   const pedidoId = `poc-${numero[0].dia}-${String(numero[0].ultimo).padStart(3, '0')}`;
-  await dml(`INSERT INTO pedidos (pedido_id, executivo_id, usuario_id, cliente, site, status, commit_codigo, anexo_nome)
-    VALUES (:p, CAST(:e AS INTEGER), CAST(NULLIF(:u, '') AS UUID), :c, NULLIF(:s, ''), :st, :cm, NULLIF(:an, ''))
+  await dml(`INSERT INTO pedidos (pedido_id, executivo_id, usuario_id, cliente, site, status, commit_codigo, anexo_nome, foco)
+    VALUES (:p, CAST(:e AS INTEGER), CAST(NULLIF(:u, '') AS UUID), :c, NULLIF(:s, ''), :st, :cm, NULLIF(:an, ''), NULLIF(:fo, ''))
     ON CONFLICT (pedido_id) DO NOTHING`,
   { p: pedidoId, e: String(executivo[0].id), u: usuario || '', c: campos.cliente, s: site,
-    st: comAnexo ? 'aguardando_anexo' : 'extraindo', cm: COMMIT, an: anexoNome });
+    st: comAnexo ? 'aguardando_anexo' : 'extraindo', cm: COMMIT, an: anexoNome, fo: foco });
   await dml(`INSERT INTO pedido_eventos (pedido_id, etapa, mensagem) VALUES (:p, 'pedido', :m)`,
     { p: pedidoId, m: `pedido aberto por ${executivo[0].nome}: ${campos.cliente} (${site || 'sem site'})`
+      + (foco ? ` · foco: ${foco}` : '')
       + (comAnexo ? ` · anexo ${anexoNome} sendo enviado` : '') });
   if (comAnexo) return { ok: true, pedido_id: pedidoId, aguardando_anexo: true, executivo: executivo[0].nome };
 
