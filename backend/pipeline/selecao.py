@@ -221,7 +221,7 @@ EIXOS_CONHECIDOS = (
     ("Medida", r"^(medida|medidas|dimens[aã]o|di[aâ]metro|bitola|comprimento)$"),
     ("Modelo", r"^(modelo|vers[aã]o|tipo)$"),
 )
-MAXIMO_PRODUTOS_COM_GRADE = 4
+MAXIMO_PRODUTOS_COM_GRADE = 12
 MAXIMO_VALORES_POR_EIXO = 8
 
 
@@ -265,6 +265,68 @@ def grade_do_candidato(c, paleta=None):
         if len(valores) >= 2:
             return eixo, valores, observacao
     return None
+
+
+PADROES_EIXO_NA_OBSERVACAO = (
+    ("Tamanho", r"tamanh|numera[cç]|\bp\s*,\s*m\b"),
+    ("Cor", r"\bcor(es)?\b"),
+    ("Voltagem", r"voltag|\b(110|127|220)\s*v\b|bivolt"),
+    ("Sabor", r"sabor"),
+    ("Volume", r"volume|\bml\b|litro"),
+    ("Peso", r"\bpeso\b|gramatura|\bkg\b"),
+)
+PARTE_DE_VARIACAO = re.compile(r"(?i)varia[cç]|\bgrade\b|tamanh|\bcor(es)?\b|voltag|sabor")
+
+
+def separar_observacao(observacao):
+    """(foco, eixo_pedido): as frases que falam de variação saem do foco da busca e dizem o eixo."""
+    partes = [p.strip() for p in re.split(r"[.;\n]+", observacao or "") if p.strip()]
+    foco = ", ".join(p for p in partes if not PARTE_DE_VARIACAO.search(p))
+    texto = sem_acento(" ".join(p for p in partes if PARTE_DE_VARIACAO.search(p)))
+    eixo = next((rotulo for rotulo, padrao in PADROES_EIXO_NA_OBSERVACAO if re.search(padrao, texto)), None)
+    return foco, eixo
+
+
+def _semente(texto):
+    import hashlib
+    return int(hashlib.md5(sem_acento(texto).encode()).hexdigest()[:8], 16)
+
+
+CORES_SUGERIDAS = ("Preto", "Branco", "Cinza", "Azul Marinho", "Vermelho", "Verde", "Bege", "Grafite", "Azul Royal", "Rosa")
+
+
+def grade_sugerida(c, segmento, eixo_pedido=None, paleta=None):
+    """Quando o usuário pediu variação e o site/anexo não informa: grade fixa pela regra
+    (eixo pedido na observação, senão pelo tipo de produto). Nunca vem do modelo."""
+    texto = sem_acento(f"{c.get('nome')} {c.get('categoria')} {segmento}")
+    eixo = eixo_pedido
+    if not eixo:
+        if re.search(r"cal[cç]ad|sapat|tenis|bota|sandal|chinel", texto):
+            eixo = "Tamanho"
+        elif re.search(r"roupa|camis|vestid|blus|calca|moda|jaquet|bermud|uniform|lingerie|meia|jeans|short|saia|macac|moleton|polo", texto):
+            eixo = "Tamanho"
+        elif re.search(r"eletr|motor|furadeir|lixadeir|esmerilh|ventilad|liquidific|\bvolts?\b", texto):
+            eixo = "Voltagem"
+        else:
+            eixo = "Cor"
+    if eixo == "Tamanho":
+        valores = (["36", "37", "38", "39", "40", "41", "42"]
+                   if re.search(r"cal[cç]ad|sapat|tenis|bota|sandal|chinel", texto) else ["P", "M", "G", "GG"])
+    elif eixo == "Voltagem":
+        valores = ["127V", "220V"]
+    elif eixo == "Sabor":
+        valores = ["Original", "Chocolate", "Morango"]
+    elif eixo == "Volume":
+        valores = ["500 ml", "1 L", "2 L"]
+    elif eixo == "Peso":
+        valores = ["500 g", "1 kg", "5 kg"]
+    else:
+        eixo = "Cor"
+        paleta = paleta if paleta is not None else _paleta_de_cores()
+        cores = [v for v in CORES_SUGERIDAS if not paleta or sem_acento(v) in paleta]
+        inicio = _semente(c.get("nome") or "") % len(cores)
+        valores = [cores[(inicio + k) % len(cores)] for k in range(3)]
+    return eixo, valores, "variação sugerida pelo sistema: o site não informa a grade deste produto"
 
 
 def _sitemap_pelo_foco(coletar_site, base, limite, foco):
@@ -499,7 +561,7 @@ e as imagens dos primeiros candidatos. Todos já passaram por um filtro de URL e
 Cliente: {cliente}
 Site: {site}
 Segmento informado: {segmento}
-Foco do pedido (tipo de produto que o usuário quer no portal): {foco}
+Observação do usuário (tipo de produto que ele quer no portal, público, restrições): {foco}
 
 Regras obrigatórias:
 - Escolha SOMENTE pelos números da lista. Nunca invente produto, nome, imagem ou preço.
@@ -521,7 +583,7 @@ Regras obrigatórias:
 - Para CADA candidato não escolhido, devolva o número e o motivo em uma frase curta, com
   o tipo: "nao_e_produto", "outra_marca", "repetido" (variação/tamanho de um escolhido)
   ou "limite" (produto bom que ficou de fora pela quantidade ou pela variedade).
-- Se há foco do pedido, escolha PRIMEIRO os candidatos que são desse tipo de produto e
+- Se há observação do usuário (ex.: "só produtos femininos"), escolha PRIMEIRO os candidatos que a atendem e
   descarte com tipo "fora_do_foco" os que não são (ex.: foco "peças, não a bicicleta":
   bicicleta completa é "fora_do_foco"). Só complete com fora do foco se faltar produto.
 - Diga o segmento do cliente pelo que ele VENDE, em 2 a 5 palavras, específico
@@ -900,7 +962,7 @@ def completar_ate_o_alvo(itens, candidatos, motivos, categorias):
     return completados
 
 
-def montar_pela_selecao(coleta, candidatos, escolha, cliente, segmento, descricao, com_variacoes=False):
+def montar_pela_selecao(coleta, candidatos, escolha, cliente, segmento, descricao, com_variacoes=False, eixo_pedido=None):
     """(catalogo, precos, situacao_preco, produtos_similares, regra_preco, descartes_modelo).
 
     Preco nunca vem do modelo: preco lido na pagina; sem ele, a mediana dos
@@ -946,6 +1008,10 @@ def montar_pela_selecao(coleta, candidatos, escolha, cliente, segmento, descrica
         if len(grade) >= MAXIMO_PRODUTOS_COM_GRADE:
             break
         achada = grade_do_candidato(candidatos[n], paleta)
+        if achada and eixo_pedido and achada[0] != eixo_pedido:
+            achada = None
+        if not achada:
+            achada = grade_sugerida(candidatos[n], segmento, eixo_pedido, paleta)
         if achada:
             eixo, valores, observacao = achada
             grade[n] = (eixo, valores)

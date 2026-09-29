@@ -17,7 +17,7 @@ module.exports = async (event, context) => {
   }
   const anexoNome = texto(ev.anexo_nome).slice(0, 200);
   const comAnexo = !!anexoNome;
-  const foco = texto(ev.foco).slice(0, 300);
+  const foco = texto(ev.observacao || ev.foco).slice(0, 500);
   const variacoes = ev.variacoes === true || ev.variacoes === 'sim' || ev.variacoes === 'true';
   const campos = { executivo: String(g.sessao.executivo_id), cliente: texto(ev.cliente), site: texto(ev.site) };
   const faltando = Object.keys(campos).filter((k) => !campos[k] && !(k === 'site' && comAnexo));
@@ -48,7 +48,7 @@ module.exports = async (event, context) => {
     st: comAnexo ? 'aguardando_anexo' : 'extraindo', cm: COMMIT, an: anexoNome, fo: foco, va: variacoes ? 'true' : 'false' });
   await dml(`INSERT INTO pedido_eventos (pedido_id, etapa, mensagem) VALUES (:p, 'pedido', :m)`,
     { p: pedidoId, m: `pedido aberto por ${executivo[0].nome}: ${campos.cliente} (${site || 'sem site'})`
-      + (foco ? ` · foco: ${foco}` : '')
+      + (foco ? ` · observação: ${foco}` : '')
       + (variacoes ? ' · com variações' : ' · sem variações')
       + (comAnexo ? ` · anexo ${anexoNome} sendo enviado` : '') });
   if (comAnexo) return { ok: true, pedido_id: pedidoId, aguardando_anexo: true, executivo: executivo[0].nome };

@@ -19,7 +19,7 @@ import { useSessao } from '../lib/sessao'
 import { BANNERS, dataHora, dolares, FONTE, PRECO, reais, STATUS } from '../lib/formatos'
 
 interface PrecoResumo { sku: string; nome: string; origem: string; regra: string; preco: number | null; origem_url?: string; imagem?: string; do_cliente?: boolean; variacoes?: { eixo: string; valores: string[]; observacao?: string } }
-interface Requisicao { label: string; temp_image_url?: string; _origem_url?: string; _miniatura?: string; _preco_estimado?: boolean; payload: { sku: string; name: string; price: number | null; description?: string; variations?: { values?: { name?: string }[] }[] } }
+interface Requisicao { label: string; temp_image_url?: string; _origem_url?: string; _miniatura?: string; _preco_estimado?: boolean; payload: { sku: string; name: string; price: number | null; description?: string; variations?: { sku?: string; values?: { name?: string; value?: string }[] }[] } }
 interface Catalogo { etapas: { endpoint: string; requests: (Requisicao & { payload: { name?: string } })[] }[]; [k: string]: unknown }
 interface Resumo { precos?: PrecoResumo[]; regra_preco_estimado?: string | null; produtos_similares?: boolean; descartes?: { nome: string; motivo: string }[]; [k: string]: unknown }
 
@@ -68,6 +68,7 @@ export default function PedidoDetalhe() {
   const [edicoes, setEdicoes] = useState<Record<string, { nome?: string; preco?: string }>>({})
   const [feedback, setFeedback] = useState('')
   const [semGrade, setSemGrade] = useState<Set<string>>(new Set())
+  const [valoresFora, setValoresFora] = useState<Record<string, string[]>>({})
 
   const local = useLocation()
   const [arquivo, setArquivo] = useState<File | null>(null)
@@ -164,10 +165,11 @@ export default function PedidoDetalhe() {
   const catalogo = useMemo(() => json<Catalogo>(pedido?.catalogo ?? null), [pedido?.catalogo])
   const resumo = useMemo(() => json<Resumo>(pedido?.resumo ?? null) || {}, [pedido?.resumo])
   const produtos = useMemo(() => catalogo?.etapas.find((e) => e.endpoint === 'products')?.requests || [], [catalogo])
+  const temGrade = produtos.some((r) => (r.payload.variations || []).length > 0)
   const precoPorSku = useMemo(() => Object.fromEntries((resumo.precos || []).map((p) => [p.sku, p])), [resumo])
   const emCuradoria = pedido?.status === 'curadoria' && !pedido.portal_id
   const restantes = produtos.length - excluidos.size
-  const alterado = excluidos.size > 0 || Object.keys(edicoes).length > 0 || semGrade.size > 0
+  const alterado = excluidos.size > 0 || Object.keys(edicoes).length > 0 || semGrade.size > 0 || Object.keys(valoresFora).length > 0
   const geracao = pecas.length ? Math.max(...pecas.map((x) => x.geracao)) : 0
   const pecasAtuais = pecas.filter((x) => x.geracao === geracao)
 
@@ -195,7 +197,12 @@ export default function PedidoDetalhe() {
       const ed = edicoes[r.payload.sku] || {}
       const base = precoPorSku[r.payload.sku]
       const entrada: PrecoResumo = base ? { ...base } : { sku: r.payload.sku, nome: r.payload.name, origem: 'estimado', regra: '', preco: r.payload.price }
-      if (semGrade.has(r.payload.sku)) { delete r.payload.variations; delete entrada.variacoes }
+      const tirar = valoresFora[r.payload.sku] || []
+      if (r.payload.variations && tirar.length) {
+        r.payload.variations = r.payload.variations.filter((v) => !tirar.includes(v.values?.[0]?.value || ''))
+        if (entrada.variacoes) entrada.variacoes = { ...entrada.variacoes, valores: entrada.variacoes.valores.filter((x) => !tirar.includes(x)) }
+      }
+      if (semGrade.has(r.payload.sku) || (r.payload.variations && r.payload.variations.length === 0)) { delete r.payload.variations; delete entrada.variacoes }
       if (ed.nome !== undefined && ed.nome.trim()) { r.payload.name = ed.nome.trim(); r.label = `${r.payload.sku} — ${r.payload.name}`; entrada.nome = r.payload.name }
       if (ed.preco !== undefined) {
         const valor = Number(ed.preco.replace(/\./g, '').replace(',', '.'))
@@ -212,12 +219,20 @@ export default function PedidoDetalhe() {
     })
     const eixosUsados = new Set(etapa.requests.flatMap((r) => (r.payload.variations || []).flatMap((v) => (v.values || []).map((x) => x.name))))
     const etapaGrade = novo.etapas.find((e) => e.endpoint === 'variations')
-    if (etapaGrade) etapaGrade.requests = etapaGrade.requests.filter((r) => eixosUsados.has(r.payload.name))
+    if (etapaGrade) {
+      etapaGrade.requests = etapaGrade.requests.filter((r) => eixosUsados.has(r.payload.name))
+      for (const g of etapaGrade.requests) {
+        if (g.payload.name === 'Cor') continue
+        const usados = new Set(etapa.requests.flatMap((r) => (r.payload.variations || []).flatMap((v) => (v.values || []).filter((x) => x.name === g.payload.name).map((x) => x.value))))
+        const atual = (g.payload as unknown as { values?: string[] }).values
+        if (atual) (g.payload as unknown as { values: string[] }).values = atual.filter((x) => usados.has(x))
+      }
+    }
     novo.etapas = novo.etapas.filter((e) => e.endpoint !== 'variations' || e.requests.length > 0)
     const novoResumo = { ...resumo, precos, produtos: precos.length, preco: situacao(precos) }
     const anterior = pedido
     setPedido({ ...pedido, catalogo: JSON.stringify(novo), resumo: JSON.stringify(novoResumo), produtos: precos.length, preco: novoResumo.preco })
-    setExcluidos(new Set()); setEdicoes({}); setSemGrade(new Set())
+    setExcluidos(new Set()); setEdicoes({}); setSemGrade(new Set()); setValoresFora({})
     try {
       const r = await consultar('curadoria_salvar', {
         pedido_id: id, catalogo: JSON.stringify(novo), resumo: JSON.stringify(novoResumo),
@@ -302,7 +317,7 @@ export default function PedidoDetalhe() {
           <span className="text-meta" style={{ color: 'var(--color-text-secondary)' }}>Segmento</span>
           <span className="text-base font-semibold">{pedido.segmento || '—'}</span>
           <span className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>{pedido.segmento_origem === 'inferido' ? 'inferido pelo sistema' : pedido.segmento_origem === 'informado' ? 'informado pelo usuário' : '—'}</span>
-          {pedido.foco && <span className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>Foco: {pedido.foco}</span>}
+          {pedido.foco && <span className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>Observação: {pedido.foco}</span>}
         </Card>
         <Card className="p-5 flex flex-col gap-2">
           <span className="text-meta" style={{ color: 'var(--color-text-secondary)' }}>Portal</span>
@@ -393,6 +408,7 @@ export default function PedidoDetalhe() {
                 <tr className="text-meta text-left" style={{ color: 'var(--color-text-secondary)' }}>
                   {emCuradoria && <th className="px-3 py-3 w-10" />}
                   <th className="px-3 py-3 font-medium">Produto</th>
+                  {temGrade && <th className="px-3 py-3 font-medium">Variações</th>}
                   <th className="px-3 py-3 font-medium text-right">Preço</th>
                   <th className="px-3 py-3 font-medium">Origem do preço</th>
                 </tr>
@@ -421,21 +437,31 @@ export default function PedidoDetalhe() {
                               <span>{sku}</span>
                               <Origem url={r._origem_url || info?.origem_url} />
                               {info?.do_cliente === false && <Badge variant="warning">outra marca</Badge>}
-                              {info?.variacoes && !semGrade.has(sku) && (
-                                <span title={info.variacoes.observacao || 'Variações informadas pelo site do cliente'}>
-                                  <Badge variant="info">{info.variacoes.eixo}: {info.variacoes.valores.join(', ')}</Badge>
-                                </span>
-                              )}
-                              {info?.variacoes && emCuradoria && (
-                                <button type="button" className="cursor-pointer underline" style={{ color: 'var(--color-primary-text)' }}
-                                  onClick={() => setSemGrade((s) => { const n = new Set(s); if (n.has(sku)) n.delete(sku); else n.add(sku); return n })}>
-                                  {semGrade.has(sku) ? 'manter variações' : 'tirar variações'}
-                                </button>
-                              )}
                             </div>
                           </div>
                         </div>
                       </td>
+                      {temGrade && (
+                        <td className="px-3 py-3">
+                          <CelulaVariacoes
+                            eixo={r.payload.variations?.[0]?.values?.[0]?.name || info?.variacoes?.eixo || ''}
+                            valores={(r.payload.variations || []).map((v) => v.values?.[0]?.value || '').filter(Boolean)}
+                            sugerida={!!info?.variacoes?.observacao?.startsWith('variação sugerida')}
+                            observacao={info?.variacoes?.observacao}
+                            editavel={emCuradoria}
+                            semGrade={semGrade.has(sku)}
+                            fora={valoresFora[sku] || []}
+                            alternarValor={(valor) => setValoresFora((s) => {
+                              const atual = s[sku] || []
+                              const novo = atual.includes(valor) ? atual.filter((x) => x !== valor) : [...atual, valor]
+                              const copia = { ...s }
+                              if (novo.length) copia[sku] = novo; else delete copia[sku]
+                              return copia
+                            })}
+                            alternarTudo={() => setSemGrade((s) => { const n = new Set(s); if (n.has(sku)) n.delete(sku); else n.add(sku); return n })}
+                          />
+                        </td>
+                      )}
                       <td className="px-3 py-3 text-right tabular-nums">
                         {emCuradoria ? (
                           <div className="w-32 ml-auto"><Input className="text-right" value={edicoes[sku]?.preco ?? (r.payload.price ? String(r.payload.price).replace('.', ',') : '')}
@@ -580,5 +606,44 @@ export default function PedidoDetalhe() {
       </div>
 
     </Pagina>
+  )
+}
+
+function CelulaVariacoes({ eixo, valores, sugerida, observacao, editavel, semGrade, fora, alternarValor, alternarTudo }: {
+  eixo: string; valores: string[]; sugerida: boolean; observacao?: string; editavel: boolean; semGrade: boolean
+  fora: string[]; alternarValor: (valor: string) => void; alternarTudo: () => void
+}) {
+  if (!valores.length) return <span className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>sem variação</span>
+  return (
+    <div className="flex flex-col gap-1.5 min-w-48" title={observacao || undefined}>
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <span className="font-medium" style={{ color: semGrade ? 'var(--color-text-secondary)' : 'var(--color-text)', textDecoration: semGrade ? 'line-through' : undefined }}>{eixo}</span>
+        <Badge variant={sugerida ? 'warning' : 'info'}>{sugerida ? 'sugerida' : 'do site'}</Badge>
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {valores.map((valor) => {
+          const tirado = semGrade || fora.includes(valor)
+          return (
+            <button key={valor} type="button" disabled={!editavel || semGrade}
+              onClick={() => alternarValor(valor)}
+              title={editavel && !semGrade ? (tirado ? 'Clique para voltar este valor' : 'Clique para tirar este valor') : undefined}
+              className={`px-2 py-0.5 rounded-full border text-meta ${editavel && !semGrade ? 'cursor-pointer' : ''}`}
+              style={{
+                borderColor: 'var(--color-border)',
+                backgroundColor: tirado ? 'transparent' : 'var(--color-primary-bg)',
+                color: tirado ? 'var(--color-text-secondary)' : 'var(--color-primary-text)',
+                textDecoration: tirado ? 'line-through' : undefined,
+              }}>
+              {valor}
+            </button>
+          )
+        })}
+      </div>
+      {editavel && (
+        <button type="button" onClick={alternarTudo} className="cursor-pointer underline text-sm self-start" style={{ color: 'var(--color-primary-text)' }}>
+          {semGrade ? 'manter variações' : 'tirar variações'}
+        </button>
+      )}
+    </div>
   )
 }

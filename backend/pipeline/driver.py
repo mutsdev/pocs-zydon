@@ -509,9 +509,11 @@ def montar_catalogo(entrada):
     """Coleta, filtra, seleciona por IA e monta. Levanta PrecisaCatalogo."""
     cliente, site = entrada["cliente"], str(entrada.get("site") or "").strip()
     segmento_informado = str(entrada.get("segmento") or "").strip()
-    foco = str(entrada.get("foco") or "").strip()
-    if foco:
-        evento("extracao", f"foco do pedido: {foco}")
+    observacao = str(entrada.get("foco") or "").strip()
+    foco, eixo_pedido = selecao.separar_observacao(observacao)
+    if observacao:
+        evento("extracao", f"observação do pedido: {observacao}"
+               + (f" · variação pedida: {eixo_pedido}" if eixo_pedido else ""))
     validos, descartes, fonte_anexo = [], [], None
     tipos_da_empresa = []
     if site and re.search(r"instagram\.com/|facebook\.com/|linktr\.ee/", site):
@@ -641,7 +643,7 @@ def montar_catalogo(entrada):
     try:
         catalogo, precos, situacao, similares, regra_preco, descartes_modelo = selecao.montar_pela_selecao(
             coleta, validos, escolha, cliente, segmento_informado or segmento_modelo,
-            entrada.get("descricao"), com_variacoes=bool(entrada.get("variacoes")))
+            entrada.get("descricao"), com_variacoes=bool(entrada.get("variacoes")), eixo_pedido=eixo_pedido)
         fora = next((x["_fora_do_foco"] for x in descartes_modelo if "_fora_do_foco" in x), 0)
         descartes_modelo = [x for x in descartes_modelo if "_fora_do_foco" not in x]
         if foco and fora:
