@@ -491,9 +491,16 @@ export default function PedidoDetalhe() {
               <div className="w-full sm:w-96"><Input label="O que mudar nos banners" placeholder="Ex.: fundo mais claro, sem pessoas" value={feedback} onChange={(e) => setFeedback(e.target.value)} /></div>
               <Button variant="secondary" className="h-10" disabled={!!ocupado || pedido.em_execucao || gerandoBanners}
                 onClick={async () => {
+                  const pedidoDeMudanca = feedback
+                  setFeedback('')
                   setPedido((atual) => (atual ? { ...atual, banners_situacao: 'regerando', acao_desde: new Date().toISOString() } : atual))
-                  topo.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-                  await executar('regerar', { acao: 'banner', acao_banner: 'regerar', feedback, pecas: pecasAtuais.map((x) => x.peca) }, 'Criando banners novos. O botão volta quando terminar.')
+                  const rolar = () => {
+                    document.querySelector('main')?.scrollTo({ top: 0, behavior: 'smooth' })
+                    topo.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                  }
+                  requestAnimationFrame(rolar)
+                  setTimeout(rolar, 150)
+                  await executar('regerar', { acao: 'banner', acao_banner: 'regerar', feedback: pedidoDeMudanca, pecas: pecasAtuais.map((x) => x.peca) }, 'Criando banners novos. O botão volta quando terminar.')
                   setPedido((atual) => (atual ? { ...atual, banners_situacao: 'regerando', em_execucao: true, acao_desde: new Date().toISOString() } : atual))
                 }}>
                 {ocupado === 'regerar' || gerandoBanners ? <Loader2 size={16} className="animate-spin" /> : <Wand2 size={16} />} {gerandoBanners ? 'Criando banners novos…' : 'Refazer banners'}

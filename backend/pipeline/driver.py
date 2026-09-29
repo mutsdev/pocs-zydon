@@ -98,7 +98,8 @@ def previa_jpeg(caminho, largura=960):
 
 def cor_da_pasta(pasta):
     try:
-        return json.loads((Path(pasta) / "paleta.json").read_text(encoding="utf-8")).get("principal")
+        dados = json.loads((Path(pasta) / "paleta.json").read_text(encoding="utf-8"))
+        return dados.get("marca") or dados.get("principal")
     except (OSError, ValueError):
         return None
 
@@ -833,6 +834,104 @@ def avaliar(entrada):
 COR_LOGO_CLARA = "#1C1C1E"
 
 
+EMBRULHO_PALETA = r"""
+import json, sys
+from pathlib import Path
+gerador = Path(sys.argv[1]); paleta = json.loads(sys.argv[2])
+sys.path.insert(0, str(gerador.parent))
+sys.argv = [str(gerador)] + sys.argv[3:]
+import gerar_banners
+original = gerar_banners.mod_paleta.extrair
+def extrair(logo, cor_informada=None):
+    base = original(logo, cor_informada)
+    base.update(paleta)
+    return base
+gerar_banners.mod_paleta.extrair = extrair
+sys.exit(gerar_banners.main(sys.argv[1:]))
+"""
+
+
+def _hex(rgb):
+    return "#%02X%02X%02X" % tuple(max(0, min(255, int(round(c)))) for c in rgb)
+
+
+def _rgb(texto):
+    texto = texto.lstrip("#")
+    return tuple(int(texto[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def _lum(rgb):
+    def canal(c):
+        c = c / 255
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    r, g, b = (canal(c) for c in rgb)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _contraste(a, b):
+    la, lb = sorted((_lum(a), _lum(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+def _misturar(rgb, alvo, peso):
+    return tuple(c + (t - c) * peso for c, t in zip(rgb, alvo))
+
+
+def _legivel_sobre(cor, fundo, minimo=3.0):
+    cor = tuple(cor)
+    escurecer = _lum(fundo) > 0.4
+    for _ in range(20):
+        if _contraste(cor, fundo) >= minimo:
+            break
+        cor = _misturar(cor, (0, 0, 0) if escurecer else (255, 255, 255), 0.15)
+    return cor
+
+
+def variacao_de_paleta(marca_hex, feedback_texto, anterior_hex=None):
+    """Escolhe uma paleta NOVA a cada refazer. Lê o pedido do executivo
+    (claro/branco, escuro, sem verde) e nunca devolve o mesmo fundo de antes."""
+    import random
+    import unicodedata
+    marca = _rgb(marca_hex)
+    texto = unicodedata.normalize("NFKD", (feedback_texto or "").lower()).encode("ascii", "ignore").decode()
+    quer_claro = any(p in texto for p in ("clar", "branc", "leve", "suave", "pastel", "light"))
+    quer_escuro = any(p in texto for p in ("escur", "preto", "dark"))
+    claros = [("fundo claro neutro", (247, 248, 250)), ("fundo branco", (255, 255, 255)),
+              ("fundo claro na cor da marca", _misturar(marca, (255, 255, 255), 0.88)),
+              ("fundo creme", (250, 247, 240)), ("fundo cinza claro", (236, 238, 241))]
+    escuros = [("fundo grafite", (28, 28, 30)), ("fundo marca escura", _misturar(marca, (0, 0, 0), 0.55))]
+    marca_pura = [("fundo na cor da marca", marca)]
+    if quer_claro:
+        opcoes = claros
+    elif quer_escuro:
+        opcoes = escuros
+    else:
+        opcoes = claros + escuros + marca_pura
+    anterior = anterior_hex.upper() if anterior_hex else None
+    opcoes = [o for o in opcoes if _hex(o[1]) != anterior] or opcoes
+    nome, fundo = random.choice(opcoes)
+    if _lum(fundo) > 0.4:
+        destaque = _legivel_sobre(marca, fundo)
+        neutra = (16, 20, 24)
+    else:
+        destaque = marca if _contraste(marca, fundo) >= 3 else _legivel_sobre(_misturar(marca, (255, 255, 255), 0.4), fundo)
+        neutra = (247, 248, 250)
+    return nome, {"principal": _hex(fundo), "destaque": _hex(destaque), "neutra": _hex(neutra)}
+
+
+def gerar_pecas_paleta(caminho, logo, cliente, segmento, paleta):
+    import atendimento
+    pasta = Path(caminho).parent
+    embrulho = pasta / "embrulho_paleta.py"
+    embrulho.write_text(EMBRULHO_PALETA, encoding="utf-8")
+    comando = [sys.executable, str(embrulho), str(atendimento.GERADOR), json.dumps(paleta), "auto",
+               "--logo", str(logo), "--nome", cliente,
+               "--segmento", segmento or atendimento.SEGMENTO_PADRAO,
+               "--catalogo", str(caminho), "--regua-logo", "portal",
+               "--candidatas", "0", "--so-fallback", "--cor", paleta["principal"]]
+    return atendimento._rodar_gerador(comando, atendimento.prefixo(Path(caminho).name))
+
+
 def gerar_pecas_simples(caminho, logo, cliente, segmento, cor=None):
     """Banner no estilo da JH: painel com a logo e a paleta do cliente, sem cena
     desenhada por IA (a cena gerada deformava produto: bicicleta sem guidão).
@@ -947,12 +1046,27 @@ def banner(entrada):
         logo = restaurar_logo(entrada, pasta)
         if not logo:
             logo = logo_tipografica(entrada.get("cliente"), pasta)
-        cor = entrada.get("cor") or (COR_LOGO_CLARA if logo_clara(logo) else None)
-        if feedback:
-            evento("banners", "pedido de mudança anotado: " + "; ".join(sorted(set(feedback.values())))[:200])
-        evento("banners", "refazendo as peças no estilo simples (painel com a logo, sem cena por IA)")
+        marca = entrada.get("cor") or cor_da_pasta(banners) or "#1A4FA0"
+        texto = "; ".join(sorted(set(feedback.values()))) if feedback else ""
+        anterior = None
+        try:
+            anterior = json.loads((Path(banners) / "paleta.json").read_text(encoding="utf-8")).get("principal")
+        except (OSError, ValueError):
+            pass
+        nome, paleta = variacao_de_paleta(marca, texto, anterior)
+        if texto:
+            evento("banners", "pedido de mudança: " + texto[:200])
+        evento("banners", f"banner novo do zero: {nome} {paleta['principal']}, destaque {paleta['destaque']}")
         caminho = gravar_catalogo(entrada["catalogo"], pedido_id)
-        nova, saida = gerar_pecas_simples(caminho, logo, entrada.get("cliente") or "", entrada.get("segmento"), cor)
+        nova, saida = gerar_pecas_paleta(caminho, logo, entrada.get("cliente") or "", entrada.get("segmento"), paleta)
+        if nova:
+            arquivo = Path(nova) / "paleta.json"
+            try:
+                dados = json.loads(arquivo.read_text(encoding="utf-8"))
+                dados["marca"] = marca
+                arquivo.write_text(json.dumps(dados, indent=2, ensure_ascii=False), encoding="utf-8")
+            except (OSError, ValueError):
+                pass
     elif acao == "recolorir":
         pecas = list(atendimento.DESTINOS_BANNER)
         nova, saida = atendimento.repintar_pecas(banners, entrada["cor"])
