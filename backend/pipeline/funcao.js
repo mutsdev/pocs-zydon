@@ -296,7 +296,7 @@ async function criar(ev, execucao) {
     const pedido = await lerPedido(pedidoId);
     const banners = await lerArquivo(pedidoId, 'banners');
     const saida = await rodarPython('criar', { pedido_id: pedidoId, catalogo: pedido.catalogo,
-      logo: pedido.logo, banners_tar: banners, simular }, registrar);
+      cliente: pedido.cliente, segmento: pedido.segmento || '', logo: pedido.logo, banners_tar: banners, simular }, registrar);
     await registrar.fim();
     const res = saida.resultado || {};
     if (simular) {
@@ -317,6 +317,7 @@ async function criar(ev, execucao) {
         observacoes = CASE WHEN :o = '' THEN observacoes ELSE TRIM(COALESCE(observacoes, '') || ' · ' || :o) END
       WHERE pedido_id = :p`, { p: pedidoId, id: res.portal_id, u: res.url, o: res.observacoes || '' });
     await registrar({ etapa: 'criacao', mensagem: `portal criado: ${res.url}` });
+    await gravarTelufia(pedidoId, saida.telufia, registrar);
     if (saida.publicadas) {
       for (const [peca, pub] of Object.entries(saida.publicadas)) {
         await dml(`UPDATE pecas_banner SET file_id = :f, url = :u WHERE pedido_id = :p AND peca = :pe
@@ -450,7 +451,31 @@ async function trocarLogo(ev, execucao) {
   return { ok: true, logo: 'trocada', portal_logo: saida.portal_logo || null };
 }
 
-const ACOES = { extrair, previa, criar, banner, avaliar, miniaturas, trocar_logo: trocarLogo };
+async function gravarTelufia(pedidoId, t, registrar) {
+  if (!t) return;
+  const texto = t.situacao === 'ativada' ? 'ativada' : `falhou: ${t.motivo || 'sem motivo'}`;
+  await dml('UPDATE pedidos SET telufia = :t, atualizado_em = now() WHERE pedido_id = :p', { p: pedidoId, t: texto.slice(0, 400) });
+  await registrar({ etapa: 'telufia', mensagem: t.situacao === 'ativada'
+    ? `Telufia (consultora de IA) ativada e conferida no portal · prompt com ${t.caracteres} caracteres`
+    : `Telufia não ativada: ${t.motivo}`, nivel: t.situacao === 'ativada' ? 'info' : 'erro' });
+}
+
+async function telufia(ev, execucao) {
+  const pedidoId = ev.pedido_id;
+  const registrar = registrador(pedidoId);
+  const pedido = await lerPedido(pedidoId);
+  if (!pedido.portal_id) return { ok: false, erro: 'SEM_PORTAL' };
+  await marcarExecucao(pedidoId, 'telufia', execucao);
+  await dml("UPDATE pedidos SET telufia = 'ativando', atualizado_em = now() WHERE pedido_id = :p", { p: pedidoId });
+  const saida = await rodarPython('telufia', { pedido_id: pedidoId, catalogo: pedido.catalogo, cliente: pedido.cliente,
+    segmento: pedido.segmento || '', portal_id: pedido.portal_id }, registrar);
+  await registrar.fim();
+  await gravarTelufia(pedidoId, saida.ok ? saida.telufia : { situacao: 'falhou', motivo: saida.erro }, registrar);
+  await dml('UPDATE pedidos SET execucao_atual = NULL WHERE pedido_id = :p', { p: pedidoId });
+  return { ok: !!(saida.ok && saida.telufia && saida.telufia.situacao === 'ativada'), telufia: saida.telufia };
+}
+
+const ACOES = { extrair, previa, criar, banner, avaliar, miniaturas, trocar_logo: trocarLogo, telufia };
 
 module.exports = async (event, context) => {
   const ev = (event && event.input) ? event.input : (event || {});

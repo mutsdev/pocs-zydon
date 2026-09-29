@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, ExternalLink, FileText, FlaskConical, ImageOff, ImageUp, Loader2, RefreshCw, Rocket, Save, Trash2, Wand2 } from 'lucide-react'
+import { ArrowLeft, Bot, ExternalLink, FileText, FlaskConical, ImageOff, ImageUp, Loader2, RefreshCw, Rocket, Save, Trash2, Wand2 } from 'lucide-react'
 import { Card } from '../components/ui/Card'
 import Badge from '../components/ui/Badge'
 import Button from '../components/ui/Button'
@@ -327,6 +327,23 @@ export default function PedidoDetalhe() {
             </a>
           ) : <span className="text-base font-semibold">Ainda não criado</span>}
           <span className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>{BANNERS[pedido.banners_situacao || ''] || 'Banners pendentes'}</span>
+          {pedido.portal_id && (
+            <div className="flex flex-wrap items-center gap-2 text-sm" style={{ color: 'var(--color-text-secondary)' }}>
+              <Bot size={16} />
+              <span>Telufia:</span>
+              <Badge variant={pedido.telufia === 'ativada' ? 'success' : pedido.telufia === 'ativando' ? 'info' : pedido.telufia ? 'danger' : 'neutral'}>
+                {pedido.telufia === 'ativada' ? 'ativada' : pedido.telufia === 'ativando' ? 'ativando…' : pedido.telufia ? 'falhou' : 'não ativada'}
+              </Badge>
+              {pedido.status === 'concluido' && pedido.telufia !== 'ativando' && (
+                <button type="button" disabled={!!ocupado || pedido.em_execucao}
+                  onClick={() => { setPedido((a) => (a ? { ...a, telufia: 'ativando' } : a)); executar('telufia', { acao: 'telufia' }, 'Ativando a Telufia no portal.') }}
+                  className="underline cursor-pointer disabled:cursor-not-allowed disabled:opacity-50" style={{ color: 'var(--color-primary-text)' }}>
+                  {pedido.telufia === 'ativada' ? 'reativar' : 'ativar'}
+                </button>
+              )}
+            </div>
+          )}
+          {pedido.telufia && pedido.telufia.startsWith('falhou') && <span className="text-sm" style={{ color: 'var(--color-danger)' }}>{pedido.telufia}</span>}
         </Card>
       </div>
 

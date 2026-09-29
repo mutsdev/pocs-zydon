@@ -93,7 +93,7 @@ export interface Pedido extends PedidoLinha {
   custo_ia_usd: number | string; tokens_ia: number; extracao_fim: string | null; curadoria_fim: string | null
   criacao_inicio: string | null; falhou_em: string | null; execucao_desde: string | null
   anexo_nome: string | null; nomes_lidos_na_imagem: number | null
-  acao_desde: string | null; logo_origem: string | null; logo_aviso: string | null; logo_previa: string | null
+  acao_desde: string | null; logo_origem: string | null; logo_aviso: string | null; logo_previa: string | null; telufia?: string | null
 }
 
 export interface Evento { id: number; etapa: string; mensagem: string; nivel: string; criado_em: string }

@@ -1331,6 +1331,13 @@ def criar(entrada):
             saida["publicadas"] = atendimento.publicar_pecas(ORG, resultado["portal_id"], banners)
         except Exception as erro:
             saida["publicar_erro"] = f"{type(erro).__name__}: {erro}"
+    if resultado.get("status") == "concluido" and resultado.get("portal_id"):
+        try:
+            catalogo = entrada["catalogo"] if isinstance(entrada["catalogo"], dict) else json.loads(entrada["catalogo"])
+            saida["telufia"] = ativar_telufia(catalogo, entrada.get("cliente") or "", entrada.get("segmento") or "",
+                                              resultado["portal_id"])
+        except Exception as erro:
+            saida["telufia"] = {"situacao": "falhou", "motivo": f"{type(erro).__name__}: {erro}"[:300]}
     return saida
 
 
@@ -1382,7 +1389,117 @@ def banner(entrada):
     return resposta
 
 
-ACOES = {"trocar_logo": trocar_logo, "miniaturas": miniaturas, "extrair": extrair, "avaliar": avaliar, "previa": previa, "criar": criar, "banner": banner}
+
+ZOE_URL = "https://api.zydon.com.br/api/ai/zoe/configurations"
+FERRAMENTAS_ZOE = (
+    "- Para dados atualizados, use: [Ver detalhes do produto](TOOL:get_product_details), [Buscar produtos](TOOL:search_products), "
+    "[Encontrar variações de um produto](TOOL:find_product_variations), [Buscar produtos similares](TOOL:get_similar_products), "
+    "[Buscar produtos recomendados](TOOL:get_recommended_products), [Ver descontos por quantidade do produto](TOOL:get_quantity_discounts), "
+    "[Listar categorias](TOOL:list_categories).\n"
+    "- Para montar o pedido, use: [Adicionar itens ao carrinho](TOOL:add_cart_item), [Ver carrinho](TOOL:get_cart), "
+    "[Finalizar compra](TOOL:create_order).")
+
+INSTRUCAO_TELUFIA = """Você escreve a consultoria comercial da Telufia, assistente de vendas B2B da empresa "{cliente}" (segmento: {segmento}).
+Use SÓ o que está nos nomes e descrições abaixo. Não invente característica técnica, sabor, cor, embalagem nem preço.
+Devolva:
+- "descricao_empresa": 1 frase sobre o que a empresa vende e para quem (sem inventar marcas).
+- "criterios": critérios de compra do segmento em poucas palavras (ex.: giro, margem, formato).
+- "perguntas": 2 ou 3 perguntas curtas que definem a recomendação nesse segmento.
+- "frase_personalidade": 1 frase sobre o que a Telufia faz pelo cliente.
+- "fichas": para cada produto (pelo número n), 2 a 3 frases curtas: uso, para quem, argumento de venda e um combo com outro produto DA LISTA (cite pelo nome).
+Responda só JSON: {{"descricao_empresa": "...", "criterios": "...", "perguntas": ["..."], "frase_personalidade": "...", "fichas": [{{"n": 0, "texto": "..."}}]}}
+
+Produtos:
+{lista}"""
+
+
+def _reais(valor):
+    if valor in (None, "", 0):
+        return "Preço indisponível"
+    return "R$ " + f"{float(valor):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def prompt_telufia(catalogo, cliente, segmento):
+    """(personalidade, prompt, custo). Dados de produto vêm do JSON da POC; a IA só escreve a consultoria."""
+    etapas = {e.get("endpoint"): e for e in catalogo.get("etapas") or []}
+    categorias = {f"{{{{{r.get('salvar_id_como')}}}}}": r["payload"]["name"]
+                  for r in (etapas.get("categories") or {}).get("requests") or []}
+    produtos = [r["payload"] for r in (etapas.get("products") or {}).get("requests") or []]
+    lista = "\n".join(f"{n}. {p['name']} | categoria: {categorias.get(p.get('category_id'), '-')} | {(p.get('description') or '')[:200]}"
+                      for n, p in enumerate(produtos))
+    dados, custo = {}, {}
+    try:
+        dados, custo = selecao._chamar_openrouter([{"role": "user", "content": INSTRUCAO_TELUFIA.format(
+            cliente=cliente, segmento=segmento or "comércio B2B", lista=lista)}])
+    except Exception as erro:
+        evento("telufia", f"IA não escreveu a consultoria ({type(erro).__name__}); usando as descrições do catálogo", "aviso")
+    fichas = {int(f.get("n")): selecao.limpar_texto(f.get("texto")) for f in dados.get("fichas") or []
+              if str(f.get("n", "")).isdigit() and f.get("texto")}
+    perguntas = [selecao.limpar_texto(x) for x in dados.get("perguntas") or [] if x][:3] \
+        or ["qual o tipo do seu negócio", "qual volume você costuma comprar"]
+    blocos = {}
+    for n, p in enumerate(produtos):
+        cat = categorias.get(p.get("category_id"), "Produtos")
+        ficha = fichas.get(n) or selecao.limpar_texto(p.get("description") or "")[:240]
+        linha = f"- {p['name']} ({p.get('sku')}) · {_reais(p.get('price'))} · mín. {p.get('minimum_for_sale') or 1}. {ficha}".strip()
+        grade = p.get("variations") or []
+        if grade:
+            eixo = (grade[0].get("values") or [{}])[0].get("name") or "Variação"
+            valores = ", ".join(v["values"][0]["value"] for v in grade if v.get("values"))
+            linha += f" {eixo}: {valores}."
+        blocos.setdefault(cat, []).append(linha)
+    catalogo_txt = "\n\n".join(f"{cat.upper()}\n" + "\n".join(linhas) for cat, linhas in blocos.items())
+    descricao = selecao.limpar_texto(dados.get("descricao_empresa")) or f"A {cliente} atende clientes B2B em {segmento or 'seu segmento'}."
+    criterios = selecao.limpar_texto(dados.get("criterios")) or "giro, margem e mix"
+    personalidade = (f"Oi, sou a Telufia, consultora comercial da {cliente}. "
+                     + (selecao.limpar_texto(dados.get("frase_personalidade")) or "Ajudo você a montar o pedido certo para o seu negócio."))
+    prompt = (f"Você é a Telufia, consultora comercial da {cliente}. {descricao}\n\n"
+              f"Objetivo: ajudar o cliente a montar o pedido certo ({criterios}). Antes de recomendar, pergunte "
+              + "; ".join(perguntas) + ".\n\n"
+              "Catálogo de referência (valores da POC; confirme preço e estoque atuais pelas ferramentas, nunca use estes valores como final):\n\n"
+              f"{catalogo_txt}\n\n"
+              "Regras:\n"
+              "- Recomende só itens deste catálogo. Nunca invente preço, estoque, sabor, cor ou embalagem.\n"
+              "- Se o preço vier nulo ou o item estiver indisponível, diga \"Preço indisponível\", nunca \"R$ 0,00\". Sem estoque, diga \"Estoque indisponível\".\n"
+              f"{FERRAMENTAS_ZOE}\n"
+              "- O catálogo acima serve para a consultoria (uso, público, combo). Preço e estoque final vêm sempre das ferramentas.\n"
+              "- Respostas curtas e consultivas. Termine sempre com um próximo passo ou um combo sugerido.")
+    return personalidade, prompt, custo
+
+
+def ativar_telufia(catalogo, cliente, segmento, portal_id):
+    """Grava a Zoe como Telufia no portal (login com solution_id = portal) e confere por GET.
+    2xx não prova nada: só vale se o GET devolver assistant_name = Telufia."""
+    import requests
+    import credenciais
+    headers, _ = credenciais.carregar(ORG)
+    login = requests.post(f"{credenciais.ACCOUNT_BASE_URL}/access-key/login", timeout=20,
+                          json={"code": headers["X-Zydon-Access-Key-Code"], "token": headers["X-Zydon-Access-Key-Token"],
+                                "solution_id": portal_id})
+    if login.status_code != 200 or not (login.json() or {}).get("accessToken"):
+        return {"situacao": "falhou", "motivo": f"login no portal respondeu HTTP {login.status_code}"}
+    bearer = {"Authorization": "Bearer " + login.json()["accessToken"], "Content-Type": "application/json"}
+    personalidade, prompt, custo = prompt_telufia(catalogo, cliente, segmento)
+    evento("telufia", f"ativando a Telufia no portal (prompt com {len(prompt)} caracteres)")
+    gravacao = requests.put(ZOE_URL, headers=bearer, timeout=30,
+                            json={"assistant_name": "Telufia", "assistant_personality": personalidade, "assistant_prompt": prompt})
+    if gravacao.status_code >= 300:
+        return {"situacao": "falhou", "motivo": f"PUT da Zoe respondeu HTTP {gravacao.status_code}: {gravacao.text[:200]}"}
+    conferencia = requests.get(ZOE_URL, headers=bearer, timeout=20)
+    lido = conferencia.json() if conferencia.status_code == 200 and conferencia.text.strip() else {}
+    if (lido or {}).get("assistant_name") != "Telufia":
+        return {"situacao": "falhou", "motivo": f"GET da Zoe não confirmou a Telufia (HTTP {conferencia.status_code})"}
+    evento("telufia", "Telufia ativada e conferida no portal")
+    return {"situacao": "ativada", "caracteres": len(prompt), "custo": custo}
+
+
+def telufia(entrada):
+    catalogo = entrada["catalogo"]
+    if isinstance(catalogo, str):
+        catalogo = json.loads(catalogo)
+    return {"telufia": ativar_telufia(catalogo, entrada["cliente"], entrada.get("segmento") or "", entrada["portal_id"])}
+
+ACOES = {"trocar_logo": trocar_logo, "miniaturas": miniaturas, "extrair": extrair, "avaliar": avaliar, "previa": previa, "criar": criar, "banner": banner, "telufia": telufia}
 
 
 def main():

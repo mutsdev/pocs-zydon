@@ -8,6 +8,7 @@ const PERMITIDAS = {
   extrair: ['falhou', 'precisa_catalogo', 'aguardando_anexo'],
   banner: ['curadoria', 'concluido'],
   trocar_logo: ['curadoria', 'concluido'],
+  telufia: ['concluido'],
 };
 const ACOES_BANNER = ['dispensar', 'aplicar', 'regerar'];
 
