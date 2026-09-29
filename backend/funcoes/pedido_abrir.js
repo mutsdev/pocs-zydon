@@ -12,14 +12,15 @@ module.exports = async (event, context) => {
   await mitra.init();
   const g = await guarda(mitra, context);
   if (!g.ok) return g;
-  if (!g.sessao.executivo_id) {
+  const doAdmin = g.sessao.admin;
+  if (!doAdmin && !g.sessao.executivo_id) {
     return { ok: false, erro: 'EXECUTIVO_NAO_CADASTRADO', mensagem: 'Peça ao João Pedro para te cadastrar.', email: g.sessao.email };
   }
   const anexoNome = texto(ev.anexo_nome).slice(0, 200);
   const comAnexo = !!anexoNome;
   const foco = texto(ev.observacao || ev.foco).slice(0, 500);
   const variacoes = ev.variacoes === true || ev.variacoes === 'sim' || ev.variacoes === 'true';
-  const campos = { executivo: String(g.sessao.executivo_id), cliente: texto(ev.cliente), site: texto(ev.site) };
+  const campos = { executivo: doAdmin ? texto(ev.executivo) : String(g.sessao.executivo_id), cliente: texto(ev.cliente), site: texto(ev.site) };
   const faltando = Object.keys(campos).filter((k) => !campos[k] && !(k === 'site' && comAnexo));
   if (faltando.length) return { ok: false, erro: 'CAMPOS_FALTANDO', faltando };
   if (comAnexo && !/\.(pdf|xlsx|xls|csv|docx)$/i.test(anexoNome)) {
@@ -47,7 +48,7 @@ module.exports = async (event, context) => {
   { p: pedidoId, e: String(executivo[0].id), u: usuario || '', c: campos.cliente, s: site,
     st: comAnexo ? 'aguardando_anexo' : 'extraindo', cm: COMMIT, an: anexoNome, fo: foco, va: variacoes ? 'true' : 'false' });
   await dml(`INSERT INTO pedido_eventos (pedido_id, etapa, mensagem) VALUES (:p, 'pedido', :m)`,
-    { p: pedidoId, m: `pedido aberto por ${executivo[0].nome}: ${campos.cliente} (${site || 'sem site'})`
+    { p: pedidoId, m: `pedido aberto ${doAdmin ? `pelo administrador para ${executivo[0].nome}` : `por ${executivo[0].nome}`}: ${campos.cliente} (${site || 'sem site'})`
       + (foco ? ` · observação: ${foco}` : '')
       + (variacoes ? ' · com variações' : ' · sem variações')
       + (comAnexo ? ` · anexo ${anexoNome} sendo enviado` : '') });

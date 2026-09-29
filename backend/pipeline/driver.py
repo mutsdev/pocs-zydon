@@ -389,8 +389,9 @@ def logo_pela_web(cliente, site_informado="", nomes_produtos=()):
     Só aceita domínio que contenha o nome do cliente, para não pegar logo de outra empresa."""
     from urllib.parse import urlparse
     nome = _sem_acento(cliente or "")
-    palavras = [p for p in re.findall(r"[a-z0-9]{3,}", nome)
-                if p not in {"ltda", "distribuidora", "comercio", "industria", "teste", "anexo", "loja"}]
+    palavras = [p for p in re.findall(r"[a-z0-9]{2,}", nome)
+                if p not in {"ltda", "distribuidora", "distribuidor", "distribuidores", "distribuicao", "comercio",
+                             "industria", "teste", "anexo", "loja", "atacado", "atacadista", "me", "eireli", "sa"}]
     if not palavras:
         return "", ""
     informado = (urlparse(selecao.normalizar_site(site_informado)).hostname or "") if site_informado else ""
@@ -400,7 +401,7 @@ def logo_pela_web(cliente, site_informado="", nomes_produtos=()):
             host = (urlparse(url).hostname or "").lower()
             if not host or host == informado or selecao.MERCADO_LIVRE.search(host):
                 continue
-            if not all(p in host.replace("-", "") for p in palavras[:2]):
+            if not all(p in host.replace("-", "") for p in palavras[:3]):
                 continue
             base = f"https://{host}/"
             if base in vistos:
@@ -505,9 +506,13 @@ def logo_tipografica(cliente, pasta):
     return alvo
 
 
+PRAZO_BUSCA_SEGUNDOS = 140
+
+
 def montar_catalogo(entrada):
     """Coleta, filtra, seleciona por IA e monta. Levanta PrecisaCatalogo."""
     cliente, site = entrada["cliente"], str(entrada.get("site") or "").strip()
+    selecao.iniciar_prazo(PRAZO_BUSCA_SEGUNDOS)
     segmento_informado = str(entrada.get("segmento") or "").strip()
     observacao = str(entrada.get("foco") or "").strip()
     foco, eixo_pedido = selecao.separar_observacao(observacao)
@@ -597,7 +602,7 @@ def montar_catalogo(entrada):
         brutos = selecao.buscar_candidatos_web(cliente, segmento_informado, categorias_site,
                                                site or "https://sem-site.invalid/", nomes_conhecidos,
                                                foco=foco, tipos=tipos_da_empresa)
-        if len(brutos) < selecao.MINIMO_PRODUTOS:
+        if len(brutos) < selecao.MINIMO_PRODUTOS and selecao.restante() > 40:
             brutos += selecao.buscar_candidatos(cliente, segmento_informado)
         achados, descartes_busca = selecao.filtrar_candidatos(brutos)
         vistos = {v["imagem"] for v in validos} | {selecao.sem_acento(v["nome"]) for v in validos}

@@ -76,6 +76,7 @@ const MENSAGENS: Record<string, string> = {
   LOGO_FORMATO: 'Envie a logo em PNG, JPG, SVG ou WEBP.',
   LOGO_RECUSADA: 'O pedido não aceita trocar a logo agora.',
   EXECUTIVO_NAO_CADASTRADO: 'Peça ao João Pedro para te cadastrar.',
+  CAMPOS_FALTANDO_EXECUTIVO: 'Escolha para qual usuário é o portal.',
   SO_ADMIN: 'Só o administrador pode apagar pedidos.',
   LIMITE_PLATAFORMA: 'Muita gente usando ao mesmo tempo. Espere alguns segundos e tente de novo.',
   SEM_SESSAO: 'Sua sessão expirou. Saia e entre de novo.',
@@ -85,6 +86,7 @@ const MENSAGENS: Record<string, string> = {
 function mensagemDeErro(saida: Record<string, unknown>) {
   const codigo = String(saida.erro || '')
   const base = MENSAGENS[codigo] || codigo || 'Erro desconhecido.'
+  if (codigo === 'CAMPOS_FALTANDO' && Array.isArray(saida.faltando) && saida.faltando.includes('executivo')) return MENSAGENS.CAMPOS_FALTANDO_EXECUTIVO
   if (codigo === 'CAMPOS_FALTANDO' && Array.isArray(saida.faltando)) return `${base}: ${saida.faltando.join(', ')}.`
   return base
 }

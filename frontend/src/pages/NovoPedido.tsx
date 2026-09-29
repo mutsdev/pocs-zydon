@@ -5,6 +5,8 @@ import { Card } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import RadioGroup from '../components/ui/Radio'
+import Select from '../components/ui/Select'
+import { useApoio } from '../hooks/useApoio'
 import CampoAnexo from '../components/app/CampoAnexo'
 import { Pagina } from '../components/app/Pagina'
 import { acionar, ErroApi } from '../lib/mitra-api'
@@ -14,6 +16,11 @@ import { useSessao } from '../lib/sessao'
 export default function NovoPedido() {
   const sessao = useSessao()
   const navegar = useNavigate()
+  const { executivos } = useApoio()
+  const [dono, setDono] = useState('')
+  const opcoesDono = executivos
+    .filter((e) => e.ativo && e.id !== sessao.executivo_id)
+    .map((e) => ({ value: String(e.id), label: e.cargo ? `${e.nome} · ${e.cargo}` : e.nome }))
   const [cliente, setCliente] = useState('')
   const [site, setSite] = useState('')
   const [observacao, setObservacao] = useState('')
@@ -26,6 +33,10 @@ export default function NovoPedido() {
   async function enviar(ev: React.FormEvent) {
     ev.preventDefault()
     setErro(null)
+    if (sessao.admin && !dono) {
+      setErro('Escolha para qual usuário é o portal.')
+      return
+    }
     if (!cliente.trim() || (!site.trim() && !arquivo)) {
       setErro('Informe o cliente e o site, ou anexe o catálogo quando o cliente não tiver site.')
       return
@@ -35,7 +46,7 @@ export default function NovoPedido() {
     setEnviando(true)
     let pedidoId = ''
     try {
-      const r = await acionar('pedido_abrir', { cliente: cliente.trim(), site: site.trim(), observacao: observacao.trim(), variacoes: variacoes === 'sim', anexo_nome: arquivo?.name || '' })
+      const r = await acionar('pedido_abrir', { ...(sessao.admin ? { executivo: dono } : {}), cliente: cliente.trim(), site: site.trim(), observacao: observacao.trim(), variacoes: variacoes === 'sim', anexo_nome: arquivo?.name || '' })
       pedidoId = String(r.pedido_id)
       if (arquivo) {
         setProgresso(0)
@@ -56,10 +67,18 @@ export default function NovoPedido() {
     <Pagina titulo="Novo pedido de POC" subtitulo="Informe o cliente e o site. O sistema identifica o segmento, busca os produtos, gera os banners e leva você pela curadoria até o link do portal.">
       <Card className="p-5 max-w-2xl">
         <form onSubmit={enviar} className="flex flex-col gap-4">
-          <div className="flex flex-col gap-1.5">
-            <span className="text-sm font-medium" style={{ color: 'var(--color-text-secondary)' }}>Usuário</span>
-            <span className="text-sm" style={{ color: 'var(--color-text)' }}>{sessao.executivo} · {sessao.cargo || 'Executivo comercial'} · {sessao.email}</span>
-          </div>
+          {sessao.admin ? (
+            <div className="flex flex-col gap-1.5">
+              <Select label="Para qual usuário é o portal" placeholder="Escolha o usuário" value={dono} onChange={setDono}
+                options={opcoesDono} disabled={enviando} />
+              <span className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>O pedido fica com esse usuário, que passa a vê-lo na lista dele.</span>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              <span className="text-sm font-medium" style={{ color: 'var(--color-text-secondary)' }}>Usuário</span>
+              <span className="text-sm" style={{ color: 'var(--color-text)' }}>{sessao.executivo} · {sessao.cargo || 'Executivo comercial'} · {sessao.email}</span>
+            </div>
+          )}
           <Input label="Cliente" placeholder="Ex.: Distribuidora JH" value={cliente} onChange={(e) => setCliente(e.target.value)} />
           <Input label="Site do cliente" placeholder={arquivo ? 'Opcional com anexo' : 'www.cliente.com.br'} value={site} onChange={(e) => setSite(e.target.value)} />
           <RadioGroup label="Criar variações" direction="horizontal" value={variacoes} onChange={setVariacoes} disabled={enviando}

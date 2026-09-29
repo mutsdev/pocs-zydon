@@ -35,6 +35,39 @@ IMAGEM_NAO_E_PRODUTO = re.compile(
     r"(/slider/|/slides?/|/banners?/|/icons?/|logo|favicon|sprite|placeholder|\.svg($|\?))", re.I)
 
 
+PRAZO = {"fim": None}
+
+
+def iniciar_prazo(segundos):
+    """Relógio da extração: cada etapa extra de busca confere quanto tempo sobra."""
+    import time
+    PRAZO["fim"] = time.monotonic() + segundos
+
+
+def restante():
+    import time
+    return 9999 if PRAZO["fim"] is None else PRAZO["fim"] - time.monotonic()
+
+
+def em_paralelo(funcao, itens, trabalhadores=16, teto=30):
+    """pool.map que não espera página lenta: o que não voltar até o teto (ou até o prazo) vira None."""
+    from concurrent.futures import wait
+    itens = list(itens)
+    if not itens:
+        return []
+    pool = ThreadPoolExecutor(trabalhadores)
+    futuros = [pool.submit(funcao, i) for i in itens]
+    wait(futuros, timeout=max(5, min(teto, restante() - 10)))
+    pool.shutdown(wait=False, cancel_futures=True)
+    saida = []
+    for f in futuros:
+        try:
+            saida.append(f.result() if f.done() else None)
+        except Exception:
+            saida.append(None)
+    return saida
+
+
 class SemCreditoOpenRouter(RuntimeError):
     """Cota do modelo esgotada (HTTP 402/429): a selecao nao pode rodar agora."""
 
@@ -1233,7 +1266,7 @@ def buscar_barroso(consulta, limite=10):
     segue pelo DuckDuckGo/Bing."""
     import requests
     chave = os.environ.get("BARROSO_API_KEY", "").strip()
-    if not chave or BARROSO_FORA["sim"]:
+    if not chave or BARROSO_FORA["sim"] or restante() < 20:
         return []
     pedido = {"model": MODELO_BUSCA, "tools": [{"type": "web_search"}],
               "input": (f"Pesquise na web: {consulta}\n"
@@ -1242,7 +1275,8 @@ def buscar_barroso(consulta, limite=10):
                         "Prefira páginas de lojas e sites de empresas brasileiras; nada de redes sociais, "
                         "notícias, Wikipédia ou marketplaces.")}
     try:
-        r = requests.post(BARROSO_URL, json=pedido, headers={"Authorization": "Bearer " + chave}, timeout=120)
+        r = requests.post(BARROSO_URL, json=pedido, headers={"Authorization": "Bearer " + chave},
+                          timeout=max(15, min(60, restante() - 10)))
     except requests.RequestException as erro:
         evento("extracao", "busca do gateway fora do ar (" + type(erro).__name__ + "); usando a busca comum", "aviso")
         return []
@@ -1398,6 +1432,8 @@ def buscar_na_web(consulta, limite=10):
         return urls
     melhor = urls
     for variacao in variacoes_da_consulta(consulta):
+        if restante() < 30:
+            break
         urls = buscar_bing(variacao, limite)
         if len(urls) > len(melhor):
             melhor = urls
@@ -1495,7 +1531,7 @@ def buscar_google_gemini(consulta, limite=12):
     for modelo in (MODELO_SELECAO,) + MODELOS_RESERVA:
         try:
             r = requests.post(GEMINI_URL.format(modelo=modelo), json=pedido,
-                              headers={"x-goog-api-key": chave}, timeout=90)
+                              headers={"x-goog-api-key": chave}, timeout=max(10, min(45, restante() - 15)))
         except requests.RequestException:
             continue
         if r.status_code in (429, 500, 503):
@@ -1549,7 +1585,7 @@ def links_de_produto(url, chaves, limite=8):
     from urllib.parse import urljoin
     try:
         pagina = requests.get(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                              "AppleWebKit/537.36 Chrome/128 Safari/537.36"}, timeout=20).text
+                              "AppleWebKit/537.36 Chrome/128 Safari/537.36"}, timeout=12).text
     except requests.RequestException:
         return []
     host = urlparse(url).hostname or ""
@@ -1576,7 +1612,7 @@ def links_da_marca(url, marca, limite=12):
     import requests
     from urllib.parse import urljoin
     try:
-        html = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=20).text
+        html = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=12).text
     except requests.RequestException:
         return []
     saida, vistos = [], {url}
@@ -1610,25 +1646,30 @@ def buscar_candidatos_web(cliente, segmento, categorias, site, nomes=(), limite=
     host = urlparse(normalizar_site(site)).hostname or ""
     pares, vistos = [], set()
     termos = termos_de_busca(cliente, segmento, categorias, nomes, foco)
-    if tipos and not foco:
-        termos = list(dict.fromkeys([f"{t} {cliente}" for t in tipos[:3]] + [f"{t} comprar" for t in tipos[:3]]
-                                    + termos))[:8]
-    evento("extracao", "termos de busca: " + " · ".join(termos))
-    for termo in termos:
-        for url in buscar_na_web(termo):
+    revenda = bool(tipos) and not foco
+    if revenda:
+        termos = list(dict.fromkeys([f"{t} comprar" for t in tipos[:4]]))
+    termos = termos[:4]
+    evento("extracao", "termos de busca (em paralelo): " + " · ".join(termos))
+    resultados = [r or [] for r in em_paralelo(buscar_na_web, termos, len(termos) or 1, teto=75)]
+    for termo, urls in zip(termos, resultados):
+        for url in urls:
             if url not in vistos and host not in url:
                 vistos.add(url)
                 pares.append((url, termo))
     pares = pares[:limite]
-    marca = [p for p in palavras_chave(cliente) if len(p) >= 4]
+    marca = [] if revenda else [p for p in palavras_chave(cliente) if len(p) >= 4]
+    if revenda:
+        evento("extracao", "distribuidor sem marca própria: buscando produtos dos tipos que ele vende, de qualquer marca")
     achados, fora, lidas = [], 0, set()
 
     def ler(lista, frouxo=False):
         nonlocal fora
         lista = [(u, t) for u, t in lista if u not in lidas]
         lidas.update(u for u, _ in lista)
-        with ThreadPoolExecutor(8) as pool:
-            registros = list(pool.map(_ler_pagina_busca, [u for u, _ in lista]))
+        if not lista or restante() < 15:
+            return
+        registros = em_paralelo(_ler_pagina_busca, [u for u, _ in lista])
         nomes_vistos = {(sem_acento(c["nome"]), c["imagem"]) for c in achados}
         for (url, termo), r in zip(lista, registros):
             if not r:
@@ -1646,26 +1687,39 @@ def buscar_candidatos_web(cliente, segmento, categorias, site, nomes=(), limite=
             achados.append(candidato(r["name"], r["url"], r["image"], r.get("price"), r.get("category"),
                                      r.get("description"), "busca"))
 
-    ler(pares)
-    if len(achados) < 12 and tipos:
+    ler(pares, frouxo=revenda)
+
+    def falta(segundos):
+        if len(achados) >= 12:
+            return False
+        if restante() < segundos:
+            evento("extracao", f"busca na web encerrada pelo prazo com {len(achados)} produtos", "aviso")
+            PRAZO["avisado"] = True
+            return False
+        return True
+
+    if falta(40) and tipos:
         extras = []
+        tarefas = []
         for url, termo in pares[:12]:
             chaves = [c[:5] for c in palavras_chave(termo) if c not in palavras_chave(cliente) and len(c) >= 3]
             if chaves:
-                extras += [(link, termo) for link in links_de_produto(url, chaves) if host not in link]
+                tarefas.append((url, termo, chaves))
+        for (url, termo, _), links in zip(tarefas, em_paralelo(lambda t: links_de_produto(t[0], t[2]), tarefas, teto=15)):
+            extras += [(link, termo) for link in (links or []) if host not in link]
         extras = [e for e in dict.fromkeys(extras) if e[0] not in lidas]
         if extras:
             evento("extracao", f"busca na web: {len(extras)} produtos dentro de páginas de categoria das lojas")
             ler(extras[:40], frouxo=True)
-    if len(achados) < 12 and marca:
+    if falta(40) and marca:
         listas = [(u, t) for u, t in pares if any(m in sem_acento(urlparse(u).path) for m in marca)]
         extras = []
-        for url, termo in listas[:4]:
-            extras += [(link, termo) for link in links_da_marca(url, marca) if host not in link]
+        for (url, termo), links in zip(listas[:4], em_paralelo(lambda t: links_da_marca(t[0], marca), listas[:4], teto=15)):
+            extras += [(link, termo) for link in (links or []) if host not in link]
         if extras:
             evento("extracao", f"busca na web: {len(extras)} links de produto da marca em páginas de loja")
             ler(extras[:24])
-    if len(achados) < 12 and marca:
+    if falta(60) and marca:
         assunto = assunto_dos_achados(achados, marca)
         if assunto:
             termo = f"{assunto} {cliente.split()[0]}"
@@ -1674,10 +1728,10 @@ def buscar_candidatos_web(cliente, segmento, categorias, site, nomes=(), limite=
             ler(novos[:12])
             listas = [(u, t) for u, t in novos if any(m in sem_acento(urlparse(u).path) for m in marca)]
             extras = []
-            for url, t in listas[:3]:
-                extras += [(link, t) for link in links_da_marca(url, marca) if host not in link]
+            for (url, t), links in zip(listas[:3], em_paralelo(lambda x: links_da_marca(x[0], marca), listas[:3], teto=15)):
+                extras += [(link, t) for link in (links or []) if host not in link]
             ler(extras[:24])
-    if len(achados) < 12 and marca:
+    if falta(40) and marca:
         lojas = []
         for c in list(achados) + [{"url": u} for u, _ in pares]:
             h = urlparse(c.get("url") or "").hostname or ""
@@ -1685,22 +1739,23 @@ def buscar_candidatos_web(cliente, segmento, categorias, site, nomes=(), limite=
                 lojas.append(h)
         slugs = list(dict.fromkeys(["-".join(marca)] + marca))
         extras = []
-        for h in lojas[:6]:
-            for pagina in [f"https://{h}/{sl}" for sl in slugs] + [f"https://{h}/busca?q={sl}" for sl in slugs]:
-                extras += [(link, cliente) for link in links_da_marca(pagina, marca) if host not in link]
+        paginas = [f"https://{h}/{sl}" for h in lojas[:6] for sl in slugs] + \
+                  [f"https://{h}/busca?q={sl}" for h in lojas[:6] for sl in slugs]
+        for links in em_paralelo(lambda u: links_da_marca(u, marca), paginas, teto=15):
+            extras += [(link, cliente) for link in (links or []) if host not in link]
         extras = [e for e in dict.fromkeys(extras) if e[0] not in lidas]
         if extras:
             evento("extracao", f"busca na web: {len(extras)} links da marca nas lojas {', '.join(lojas[:6])}")
             ler(extras[:30])
-    if len(achados) < 12 and marca:
+    if falta(60) and marca:
         termo = f"{cliente} {assunto_dos_achados(achados, marca) or segmento or ''}".strip()
         google = [u for u in buscar_google_gemini(termo) if host not in u and u not in lidas]
         evento("extracao", f"busca no Google (via {MODELO_SELECAO}): {len(google)} páginas para {termo}")
         ler([(u, cliente) for u in google])
         listas = [u for u in google if any(m in sem_acento(urlparse(u).path) for m in marca)]
         extras = []
-        for url in listas[:3]:
-            extras += [(link, cliente) for link in links_da_marca(url, marca) if host not in link]
+        for links in em_paralelo(lambda u: links_da_marca(u, marca), listas[:3], teto=15):
+            extras += [(link, cliente) for link in (links or []) if host not in link]
         ler(extras[:24])
     evento("extracao", f"busca na web: {len(achados)} produtos em {len(lidas)} páginas "
                        f"({fora} páginas fora do assunto descartadas)")
@@ -1744,7 +1799,7 @@ def descobrir_empresa(cliente, site=""):
     for modelo in (MODELO_SELECAO,) + MODELOS_RESERVA:
         try:
             r = requests.post(GEMINI_URL.format(modelo=modelo), json=pedido,
-                              headers={"x-goog-api-key": chave}, timeout=90)
+                              headers={"x-goog-api-key": chave}, timeout=max(10, min(40, restante() - 20)))
         except requests.RequestException:
             continue
         if r.status_code != 200:
@@ -1772,17 +1827,25 @@ def descobrir_empresa(cliente, site=""):
 
 
 def _nome_no_instagram(site):
+    """Nome da empresa no Instagram. Link de post (/p/...) é lido como está: o título do post
+    traz o nome do perfil ("P2 Distribuidor - UAI SALGADOS on Instagram") e o @."""
     import requests
     m = re.search(r"instagram\.com/([A-Za-z0-9._]+)", site or "")
     if not m:
         return ""
+    url = site if m.group(1) in ("p", "reel", "reels", "tv") else f"https://www.instagram.com/{m.group(1)}/"
     try:
-        r = requests.get(f"https://www.instagram.com/{m.group(1)}/",
-                         headers={"User-Agent": "facebookexternalhit/1.1"}, timeout=20)
-        t = re.search(r'<meta property="og:title" content="([^"]+)"', r.text)
-        return html.unescape(t.group(1)).split("(")[0].strip() if t else ""
+        r = requests.get(url, headers={"User-Agent": "facebookexternalhit/1.1"}, timeout=15)
     except Exception:
         return ""
+    partes = []
+    t = re.search(r'<meta property="og:title" content="([^"]+)"', r.text)
+    if t:
+        partes.append(re.sub(r"\s+on Instagram.*$", "", html.unescape(t.group(1)).split("(")[0]).strip())
+    d = re.search(r'<meta (?:property="og:description"|name="description") content="[^"]*?- ([A-Za-z0-9._]+) on ', r.text)
+    if d:
+        partes.append("@" + d.group(1))
+    return " ".join(p for p in partes if p)
 
 
 def _titulo_cita(pagina, cliente):
@@ -1824,7 +1887,8 @@ def _descobrir_sem_google(cliente, site):
     nome = _nome_no_instagram(site)
     oficial = _site_pelo_perfil(site, cliente)
     pergunta = (f"Empresa brasileira: {cliente}. Nome no perfil: {nome or cliente}. Perfil: {site or '-'}. "
-                "Pelo nome, diga que tipos de produto ela provavelmente vende. Responda SOMENTE JSON: "
+                "Pelo nome e pelo @ do perfil, diga que tipos de produto ela provavelmente vende "
+                "(ex.: 'uaisalgados' = salgados). Responda SOMENTE JSON: "
                 "{\"tipos_de_produto\": [\"3 a 5 tipos, 2 a 4 palavras cada, termos que um comprador "
                 "digitaria numa loja online\"], \"segmento\": \"ramo em poucas palavras\"}")
     try:
