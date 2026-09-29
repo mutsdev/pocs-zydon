@@ -125,7 +125,7 @@ async function lerArquivo(pedidoId, tipo) {
 
 async function lerPedido(pedidoId) {
   const linhas = await sql(`SELECT p.pedido_id, p.cliente, p.site, p.segmento, p.segmento_origem,
-      p.status, p.portal_id, p.portal_url, p.banner_cor, p.anexo_url, p.anexo_nome, p.logo_url,
+      p.status, p.foco, p.portal_id, p.portal_url, p.banner_cor, p.anexo_url, p.anexo_nome, p.logo_url,
       CAST(p.catalogo AS TEXT) AS catalogo, e.nome AS executivo
     FROM pedidos p JOIN executivos e ON e.id = p.executivo_id WHERE p.pedido_id = :p`, { p: pedidoId });
   if (!linhas.length) throw new Error(`pedido ${pedidoId} não existe`);
@@ -165,7 +165,7 @@ async function extrair(ev, execucao) {
     return { ok: false, erro: 'ANEXO_AUSENTE' };
   }
   const saida = await rodarPython('extrair', { pedido_id: pedidoId, cliente: pedido.cliente,
-    site: pedido.site || '', segmento: '', executivo: pedido.executivo,
+    site: pedido.site || '', segmento: '', foco: pedido.foco || '', executivo: pedido.executivo,
     anexo: conteudoAnexo ? { nome: pedido.anexo_nome, conteudo_base64: conteudoAnexo } : null }, registrar);
   await registrar.fim();
   if (!saida.ok) { await falhar(pedidoId, saida.erro, registrar); return saida; }

@@ -154,7 +154,25 @@ def inferir_segmento(texto):
     total, indice = max(contagem)
     if total:
         return ROTULOS_RAMO[indice], f"palavras-chave do ramo ({total} ocorrencias)"
-    return "distribuição B2B", "nenhum sinal de ramo no site; valor padrão"
+    nomes = [p for p in re.findall(r"[a-zà-ú]{4,}", texto.lower()) if p not in {"para", "com", "kit"}]
+    if nomes:
+        comum = max(set(nomes), key=nomes.count)
+        return f"produtos de {comum}", "palavra mais frequente nos nomes dos produtos"
+    return "catálogo variado", "sem sinal de ramo nos produtos"
+
+
+SEGMENTO_GENERICO = re.compile(
+    r"^(distribui[cç][aã]o|com[eé]rcio|varejo|atacado|revenda|loja|b2b|vendas?|ind[uú]stria)"
+    r"(\s+(b2b|geral|em geral|atacadista|varejista|de produtos))*$", re.I)
+
+
+def segmento_do_modelo(texto):
+    """(segmento, criterio) com o que o cliente vende, dito pelo modelo; ("", None) se genérico."""
+    texto = re.sub(r"\s+", " ", str(texto or "")).strip(" .;:-").lower()
+    texto = re.sub(r"^(distribui[cç][aã]o|com[eé]rcio|venda|atacado|revenda) (b2b )?de ", "", texto)
+    if not texto or len(texto) > 60 or SEGMENTO_GENERICO.match(texto):
+        return "", None
+    return texto, "descrito pelo modelo a partir dos produtos escolhidos"
 
 
 def conferir_logo(logo):
@@ -181,6 +199,50 @@ def _logo_da_home(site):
     if achada:
         return achada
     return _logo_pelo_arquivo(soup, final)
+
+
+def _home_fala_dos_produtos(base, nomes_produtos):
+    """A home achada só vale se citar ao menos 2 palavras dos nomes dos produtos do catálogo."""
+    import extracao
+    try:
+        _, soup, _ = extracao._soup(base)
+    except Exception:
+        return False
+    texto = _sem_acento(soup.get_text(" ", strip=True))[:200000]
+    chaves = set()
+    for nome in nomes_produtos:
+        chaves.update(selecao.palavras_chave(nome))
+    return sum(1 for c in chaves if len(c) >= 4 and c in texto) >= 2
+
+
+def logo_pela_web(cliente, site_informado="", nomes_produtos=()):
+    """(site, url da logo) buscando o site oficial pelo nome do cliente.
+    Só aceita domínio que contenha o nome do cliente, para não pegar logo de outra empresa."""
+    from urllib.parse import urlparse
+    nome = _sem_acento(cliente or "")
+    palavras = [p for p in re.findall(r"[a-z0-9]{3,}", nome)
+                if p not in {"ltda", "distribuidora", "comercio", "industria", "teste", "anexo", "loja"}]
+    if not palavras:
+        return "", ""
+    informado = (urlparse(selecao.normalizar_site(site_informado)).hostname or "") if site_informado else ""
+    vistos = set()
+    for consulta in (f"{cliente} site oficial",):
+        for url in selecao.buscar_duckduckgo(consulta, 8) or selecao.buscar_bing(consulta, 8):
+            host = (urlparse(url).hostname or "").lower()
+            if not host or host == informado or selecao.MERCADO_LIVRE.search(host):
+                continue
+            if not all(p in host.replace("-", "") for p in palavras[:2]):
+                continue
+            base = f"https://{host}/"
+            if base in vistos:
+                continue
+            vistos.add(base)
+            if nomes_produtos and not _home_fala_dos_produtos(base, nomes_produtos):
+                continue
+            achada = _logo_da_home(base)
+            if achada:
+                return base, achada
+    return "", ""
 
 
 def _logo_pelo_arquivo(soup, base):
@@ -278,6 +340,9 @@ def montar_catalogo(entrada):
     """Coleta, filtra, seleciona por IA e monta. Levanta PrecisaCatalogo."""
     cliente, site = entrada["cliente"], str(entrada.get("site") or "").strip()
     segmento_informado = str(entrada.get("segmento") or "").strip()
+    foco = str(entrada.get("foco") or "").strip()
+    if foco:
+        evento("extracao", f"foco do pedido: {foco}")
     validos, descartes, fonte_anexo = [], [], None
     coleta = {"site": selecao.normalizar_site(site) if site else "", "plataforma": "nenhuma"}
     if entrada.get("anexo"):
@@ -329,7 +394,7 @@ def montar_catalogo(entrada):
             aprovados, descartes_nomeados = selecao.filtrar_candidatos(nomeados)
             validos += aprovados
             descartes += descartes_fotos + descartes_nomeados
-    if len(validos) < selecao.MINIMO_PRODUTOS:
+    if len(validos) < selecao.MINIMO_PRODUTOS or (foco and len(validos) < selecao.MAXIMO_PRODUTOS):
         evento("extracao", f"site com só {len(validos)} produtos: buscando na web produtos do mesmo tipo")
         categorias_site = []
         for v in validos:
@@ -340,7 +405,8 @@ def montar_catalogo(entrada):
                 categorias_site.append(secao)
         nomes_conhecidos = [v["nome"] for v in validos if v.get("nome_lido_na_imagem")] + [v["nome"] for v in validos]
         brutos = selecao.buscar_candidatos_web(cliente, segmento_informado, categorias_site,
-                                               site or "https://sem-site.invalid/", nomes_conhecidos)
+                                               site or "https://sem-site.invalid/", nomes_conhecidos,
+                                               foco=foco)
         if len(brutos) < selecao.MINIMO_PRODUTOS:
             brutos += selecao.buscar_candidatos(cliente, segmento_informado)
         achados, descartes_busca = selecao.filtrar_candidatos(brutos)
@@ -365,7 +431,7 @@ def montar_catalogo(entrada):
             {"custo": custo, "descartes": descartes})
     evento("extracao", f"{selecao.MODELO_SELECAO} escolhendo entre {len(validos)} candidatos")
     escolha, custo_selecao = selecao.selecionar(validos, cliente, site or f"anexo {fonte_anexo}",
-                                                segmento_informado)
+                                                segmento_informado, foco)
     for k in ("custo_usd", "tokens_entrada", "tokens_saida"):
         custo_selecao[k] = (custo_selecao.get(k) or 0) + (custo.get(k) or 0)
     custo = custo_selecao
@@ -406,8 +472,10 @@ def extrair(entrada):
 
     segmento, origem, criterio = entrada.get("segmento"), "informado", None
     if not str(segmento or "").strip():
-        texto = " ".join([montado["segmento_modelo"], " ".join(p["nome"] for p in precos)])
-        segmento, criterio = inferir_segmento(texto)
+        segmento, criterio = segmento_do_modelo(montado["segmento_modelo"])
+        if not segmento:
+            texto = " ".join(p["nome"] for p in precos)
+            segmento, criterio = inferir_segmento(texto)
         origem = "inferido"
         evento("extracao", f"segmento inferido: {segmento} ({criterio})")
     catalogo["setor"] = segmento
@@ -432,6 +500,16 @@ def extrair(entrada):
     logo_url = _logo_da_home(entrada["site"]) if entrada.get("site") else None
     logo = atendimento.baixar_logo(logo_url, atendimento.prefixo(caminho.name)) if logo_url else None
     logo, aviso_logo = conferir_logo(logo)
+    if not logo:
+        site_achado, logo_web = logo_pela_web(entrada.get("cliente"), entrada.get("site"),
+                                                  [p["nome"] for p in precos])
+        if logo_web:
+            baixada = atendimento.baixar_logo(logo_web, atendimento.prefixo(caminho.name))
+            baixada, aviso_web = conferir_logo(baixada)
+            if baixada:
+                logo, logo_url, aviso_logo = baixada, logo_web, None
+                observacoes.append(f"logo achada na web, no site {site_achado}; confira se é a do cliente")
+                evento("extracao", f"logo achada na web em {site_achado}")
     if aviso_logo:
         observacoes.append(aviso_logo)
         evento("extracao", aviso_logo, "aviso")
@@ -595,6 +673,19 @@ def avaliar(entrada):
     return {"linhas": linhas}
 
 
+def gerar_pecas_simples(caminho, logo, cliente, segmento):
+    """Banner no estilo da JH: painel com a logo e a paleta do cliente, sem cena
+    desenhada por IA (a cena gerada deformava produto: bicicleta sem guidão).
+    --candidatas 0 não gera cena nenhuma; --so-fallback monta só o piso."""
+    import atendimento
+    comando = [sys.executable, str(atendimento.GERADOR), "auto",
+               "--logo", str(logo), "--nome", cliente,
+               "--segmento", segmento or atendimento.SEGMENTO_PADRAO,
+               "--catalogo", str(caminho), "--regua-logo", "portal",
+               "--candidatas", "0", "--so-fallback"]
+    return atendimento._rodar_gerador(comando, atendimento.prefixo(Path(caminho).name))
+
+
 def previa(entrada):
     import atendimento
     pedido_id = entrada["pedido_id"]
@@ -608,8 +699,7 @@ def previa(entrada):
             return {"sem_banner": f"sem logo e a logo de texto falhou ({type(erro).__name__}: {erro})"}
     caminho = gravar_catalogo(entrada["catalogo"], pedido_id)
     evento("banners", "gerando as peças (login e cabeçalho)")
-    gerada, saida = atendimento.gerar_pecas(caminho, logo, entrada["cliente"],
-                                            entrada.get("segmento"), candidatas=2)
+    gerada, saida = gerar_pecas_simples(caminho, logo, entrada["cliente"], entrada.get("segmento"))
     if not gerada:
         return {"sem_banner": str(saida)[-800:]}
     return {"pecas": pecas_para_tela(gerada), "cor": cor_da_pasta(gerada),

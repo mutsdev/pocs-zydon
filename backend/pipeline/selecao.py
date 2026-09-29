@@ -266,6 +266,7 @@ e as imagens dos primeiros candidatos. Todos já passaram por um filtro de URL e
 Cliente: {cliente}
 Site: {site}
 Segmento informado: {segmento}
+Foco do pedido (tipo de produto que o usuário quer no portal): {foco}
 
 Regras obrigatórias:
 - Escolha SOMENTE pelos números da lista. Nunca invente produto, nome, imagem ou preço.
@@ -287,7 +288,12 @@ Regras obrigatórias:
 - Para CADA candidato não escolhido, devolva o número e o motivo em uma frase curta, com
   o tipo: "nao_e_produto", "outra_marca", "repetido" (variação/tamanho de um escolhido)
   ou "limite" (produto bom que ficou de fora pela quantidade ou pela variedade).
-- Diga o segmento do cliente em poucas palavras.
+- Se há foco do pedido, escolha PRIMEIRO os candidatos que são desse tipo de produto e
+  descarte com tipo "fora_do_foco" os que não são (ex.: foco "peças, não a bicicleta":
+  bicicleta completa é "fora_do_foco"). Só complete com fora do foco se faltar produto.
+- Diga o segmento do cliente pelo que ele VENDE, em 2 a 5 palavras, específico
+  (ex.: "bicicletas e peças", "abrasivos e discos de corte", "biscoitos e salgadinhos").
+  Nunca responda algo genérico como "distribuição B2B", "comércio" ou "varejo".
 
 Responda SOMENTE JSON:
 {{"segmento": "...", "categorias": ["A", "B", "C"],
@@ -457,7 +463,7 @@ def conferir_fotos(candidatos, cliente):
     return aprovados, descartes, custo
 
 
-def selecionar(candidatos, cliente, site, segmento):
+def selecionar(candidatos, cliente, site, segmento, foco=""):
     linhas = []
     for n, c in enumerate(candidatos):
         arquivo = c["imagem"].split("?")[0].rsplit("/", 1)[-1][:60]
@@ -465,6 +471,7 @@ def selecionar(candidatos, cliente, site, segmento):
                       f" | url: {c['url'][:120]} | imagem: {arquivo}"
                       f" | {(c.get('descricao') or '')[:140]}")
     texto = INSTRUCAO_SELECAO.format(cliente=cliente, site=site, segmento=segmento or "não informado",
+                                     foco=foco or "nenhum (catálogo variado do cliente)",
                                      alvo=min(MAXIMO_PRODUTOS, len(candidatos)),
                                      total=len(candidatos), lista="\n".join(linhas))
     conteudo = [{"type": "text", "text": texto}]
@@ -899,11 +906,15 @@ def palavras_chave(texto):
     return [p for p in re.findall(r"[a-z0-9]+", singular(texto)) if len(p) >= 3 and p not in PALAVRAS_VAZIAS]
 
 
-def termos_de_busca(cliente, segmento, categorias, nomes=()):
+def termos_de_busca(cliente, segmento, categorias, nomes=(), foco=""):
     """Termos específicos: nomes de produto já conhecidos (lidos no site ou na foto)
     e linhas do site com duas palavras ou mais ("disco diamantado"). Palavra solta
     ("metal") traz enciclopédia, então fica de fora."""
     termos = []
+    foco_limpo = re.split(r"(?i)[,;]|\bn[aã]o\b|\bsem\b", foco or "")[0]
+    if palavras_chave(foco_limpo):
+        termos.append(f"{' '.join(palavras_chave(foco_limpo)[:4])} {cliente}")
+        termos.append(f"{' '.join(palavras_chave(foco_limpo)[:4])} comprar")
     for n in list(nomes)[:3]:
         chave = " ".join(palavras_chave(n)[:5])
         if len(chave.split()) >= 2:
@@ -943,12 +954,12 @@ def _ler_pagina_busca(url):
     return registro
 
 
-def buscar_candidatos_web(cliente, segmento, categorias, site, nomes=(), limite=24):
+def buscar_candidatos_web(cliente, segmento, categorias, site, nomes=(), limite=24, foco=""):
     """Busca na web por termos do próprio site. Página de outra marca vira candidato
     [busca]; o modelo marca do_cliente e o pedido fica com produtos_similares."""
     host = urlparse(normalizar_site(site)).hostname or ""
     pares, vistos = [], set()
-    termos = termos_de_busca(cliente, segmento, categorias, nomes)
+    termos = termos_de_busca(cliente, segmento, categorias, nomes, foco)
     evento("extracao", "termos de busca: " + " · ".join(termos))
     for termo in termos:
         for url in buscar_na_web(termo):
