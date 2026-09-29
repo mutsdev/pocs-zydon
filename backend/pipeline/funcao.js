@@ -339,7 +339,7 @@ async function banner(ev, execucao) {
     const escolhas = ev.escolhas || {};
     const confere = (saida.relato || {}).confere || {};
     for (const [peca, fileId] of Object.entries(escolhas)) {
-      await dml(`UPDATE pecas_banner SET aplicada = true, conferida_get = CAST(:c AS BOOLEAN), conferencia = :j
+      await dml(`UPDATE pecas_banner SET aplicada = true, conferida_get = CAST(:c AS BOOLEAN), conferencia = CAST(:j AS JSONB)
         WHERE pedido_id = :p AND peca = :pe AND file_id = :f`,
       { p: pedidoId, pe: peca, f: fileId, c: String(confere[peca] === true), j: JSON.stringify(saida.relato || saida) });
     }
