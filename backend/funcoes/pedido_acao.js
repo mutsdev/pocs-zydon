@@ -4,7 +4,7 @@ const { createClient } = require('@mitralab.io/functions-sdk');
 
 const PERMITIDAS = {
   criar: ['curadoria'],
-  extrair: ['falhou', 'precisa_catalogo'],
+  extrair: ['falhou', 'precisa_catalogo', 'aguardando_anexo'],
   banner: ['curadoria', 'concluido'],
 };
 const ACOES_BANNER = ['dispensar', 'aplicar', 'regerar'];
@@ -46,6 +46,17 @@ module.exports = async (event, context) => {
   if (marcaViva) return { ok: false, erro: 'EM_EXECUCAO', desde: pedido.execucao_desde };
 
   const entrada = { acao, pedido_id: pedidoId };
+  if (acao === 'extrair' && ev.anexo_nome) {
+    const total = Math.max(0, parseInt(ev.anexo_partes, 10) || 0);
+    await mitra.sql.executeDml([{ sql: `DELETE FROM pedido_arquivos WHERE pedido_id = :p AND tipo = 'anexo'
+      AND parte >= CAST(:q AS INTEGER)`, parameters: { p: pedidoId, q: String(total) } }]);
+    const partes = await sql(`SELECT count(*) AS n FROM pedido_arquivos WHERE pedido_id = :p AND tipo = 'anexo'`, { p: pedidoId });
+    if (!total || Number(partes[0].n) !== total) {
+      return { ok: false, erro: 'ANEXO_AUSENTE', mensagem: `O arquivo chegou incompleto (${partes[0].n} de ${total} partes); envie de novo.` };
+    }
+    await mitra.sql.executeDml([{ sql: `UPDATE pedidos SET anexo_nome = :n, anexo_partes = CAST(:q AS INTEGER),
+      atualizado_em = now() WHERE pedido_id = :p`, parameters: { p: pedidoId, n: String(ev.anexo_nome).slice(0, 200), q: String(partes[0].n) } }]);
+  }
   if (acao === 'criar') entrada.simular = !!ev.simular;
   if (acao === 'banner') {
     entrada.acao_banner = ev.acao_banner;
