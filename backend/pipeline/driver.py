@@ -1132,7 +1132,7 @@ def cor_pedida(texto):
     as que ele mandou tirar ("tira esse verde", "sem marsala")."""
     t = _texto_simples(texto)
     for trecho in re.split(r"[,.;]| e ", t):
-        if re.search(r"\b(tir|sem|nao|remov|evit)", trecho):
+        if re.search(r"\b(tir|sem|nao|remov|evit|inves|desse|dessa|esse|essa|horr|feio)", trecho):
             continue
         for nome, hexa in NOMES_DE_COR.items():
             if nome in trecho and nome not in ("preto",):
