@@ -17,6 +17,7 @@ from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
 MODELO_SELECAO = "gemini-3.5-flash-lite"
+MODELOS_RESERVA = ("gemini-3.1-flash-lite", "gemini-3.5-flash")
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent"
 CONFERENCIA_POR_CHAMADA = 20
 MODELO_OPENROUTER = "google/gemini-2.5-flash"
@@ -90,7 +91,29 @@ def _get_com_retentativa(original):
     return _get
 
 
-def _coletar(base, limite):
+def palavras_do_foco(foco):
+    """(incluir, excluir): radicais antes e depois de "não"/"sem" ("peças, não a bicicleta")."""
+    partes = re.split(r"(?i)\bn[aã]o\b|\bsem\b|\bexceto\b", foco or "", maxsplit=1)
+
+    def radicais(texto):
+        return {sem_acento(p)[:6] for p in re.findall(r"[A-Za-zÀ-ú]{4,}", texto or "")
+                if sem_acento(p) not in PALAVRAS_VAZIAS and sem_acento(p) not in {"completa", "completo", "inteira"}}
+    return radicais(partes[0]), radicais(partes[1] if len(partes) > 1 else "")
+
+
+def ordenar_pelo_foco(urls, foco):
+    """Endereços do tipo pedido primeiro, os excluídos por último (ordem estável)."""
+    incluir, excluir = palavras_do_foco(foco)
+    if not incluir and not excluir:
+        return urls
+
+    def nota(url):
+        slug = sem_acento(url)
+        return (-2 if any(r in slug for r in excluir) else 0) + (1 if any(r in slug for r in incluir) else 0)
+    return sorted(urls, key=nota, reverse=True)
+
+
+def _coletar(base, limite, foco=""):
     """Mesma ordem do coletar_site.coletar, mas para na primeira sonda com itens.
 
     O coletar() roda as quatro sondas sempre: no fise.com.br o wordpress_cpt
@@ -106,7 +129,7 @@ def _coletar(base, limite):
     home = coletar_site._get(base)
     plataforma, itens = "nenhuma", []
     sondas = (coletar_site.shopify, coletar_site.woocommerce, coletar_site.vtex,
-              coletar_site.wordpress_cpt, lambda b: coletar_site.sitemap_generico(b, limite),
+              coletar_site.wordpress_cpt, lambda b: _sitemap_pelo_foco(coletar_site, b, limite, foco),
               lambda b: coletar_site.imagens_home(b, home))
     for sonda in sondas:
         try:
@@ -123,6 +146,19 @@ def _coletar(base, limite):
         gerador = m.group(1) if m else ""
     return {"site": base, "gerador": gerador, "plataforma": plataforma,
             "total": len(itens), "itens": itens[:limite]}
+
+
+def _sitemap_pelo_foco(coletar_site, base, limite, foco):
+    if not foco:
+        return coletar_site.sitemap_generico(base, limite)
+    urls = coletar_site._urls_sitemap(base, 2000)
+    if not urls:
+        return None
+    urls = ordenar_pelo_foco(urls, foco)[:limite]
+    with ThreadPoolExecutor(8) as ex:
+        itens = [i for i in ex.map(coletar_site._pagina_produto, urls) if i and i["imagem"]]
+    evento("extracao", f"sitemap: {len(urls)} endereços lidos, os do foco primeiro")
+    return "sitemap", itens
 
 
 def limpar_texto(texto):
@@ -195,8 +231,8 @@ def coletar_secoes(base, limite=60):
     return itens[:limite]
 
 
-def coletar_candidatos(site):
-    coleta = _coletar(normalizar_site(site), MAXIMO_CANDIDATOS)
+def coletar_candidatos(site, foco=""):
+    coleta = _coletar(normalizar_site(site), MAXIMO_CANDIDATOS, foco)
     candidatos = [candidato(i.get("nome"), i.get("url"), i.get("imagem"), i.get("preco"),
                             i.get("categoria"), i.get("descricao"), "site")
                   for i in coleta.get("itens") or []]
@@ -293,11 +329,13 @@ Regras obrigatórias:
   bicicleta completa é "fora_do_foco"). Só complete com fora do foco se faltar produto.
 - Diga o segmento do cliente pelo que ele VENDE, em 2 a 5 palavras, específico
   (ex.: "bicicletas e peças", "abrasivos e discos de corte", "biscoitos e salgadinhos").
+- Em cada escolhido, "no_foco": true se ele é do tipo pedido no foco, false se não é
+  (sem foco, sempre true).
   Nunca responda algo genérico como "distribuição B2B", "comércio" ou "varejo".
 
 Responda SOMENTE JSON:
 {{"segmento": "...", "categorias": ["A", "B", "C"],
-  "selecionados": [{{"n": 3, "categoria": 0, "do_cliente": true}}],
+  "selecionados": [{{"n": 3, "categoria": 0, "do_cliente": true, "no_foco": true}}],
   "descartados": [{{"n": 7, "tipo": "nao_e_produto", "motivo": "slide do carrossel"}}]}}
 
 Candidatos:
@@ -380,14 +418,25 @@ def _chamar_openrouter(mensagens):
     corpo_pedido = {"contents": [{"role": "user", "parts": partes}],
                     "generationConfig": {"temperature": 0, "maxOutputTokens": MAXIMO_TOKENS_SAIDA,
                                          "responseMimeType": "application/json"}}
-    resposta = None
-    for tentativa in range(3):
-        resposta = requests.post(GEMINI_URL.format(modelo=MODELO_SELECAO), json=corpo_pedido,
-                                 headers={"x-goog-api-key": chave}, timeout=180)
-        if resposta.status_code not in (429, 503) or tentativa == 2:
+    import time
+    resposta, modelo_usado = None, MODELO_SELECAO
+    for modelo_usado in (MODELO_SELECAO,) + MODELOS_RESERVA:
+        for tentativa in range(2):
+            try:
+                resposta = requests.post(GEMINI_URL.format(modelo=modelo_usado), json=corpo_pedido,
+                                         headers={"x-goog-api-key": chave}, timeout=90)
+            except requests.RequestException as erro:
+                evento("extracao", f"{modelo_usado} sem resposta ({type(erro).__name__})", "aviso")
+                resposta = None
+                continue
+            if resposta.status_code not in (429, 500, 503):
+                break
+            time.sleep(8)
+        if resposta is not None and resposta.status_code not in (429, 500, 503):
             break
-        import time
-        time.sleep(20 * (tentativa + 1))
+        evento("extracao", f"{modelo_usado} ocupado; tentando o modelo reserva", "aviso")
+    if resposta is None:
+        raise RuntimeError("Gemini sem resposta em nenhum dos modelos")
     if resposta.status_code in (402, 429):
         raise SemCreditoOpenRouter(
             f"cota gratuita do Gemini esgotada (HTTP {resposta.status_code}): o modelo não pôde "
@@ -401,7 +450,7 @@ def _chamar_openrouter(mensagens):
                     if not p.get("thought"))
     texto = re.sub(r"^```(?:json)?|```$", "", texto.strip()).strip()
     uso = corpo.get("usageMetadata") or {}
-    return json.loads(texto), {"modelo": MODELO_SELECAO, "custo_usd": 0.0,
+    return json.loads(texto), {"modelo": modelo_usado, "custo_usd": 0.0,
                                "tokens_entrada": uso.get("promptTokenCount") or 0,
                                "tokens_saida": (uso.get("candidatesTokenCount") or 0)
                                + (uso.get("thoughtsTokenCount") or 0)}
@@ -542,7 +591,7 @@ def montar_pela_selecao(coleta, candidatos, escolha, cliente, segmento, descrica
     categorias = [limpar_texto(c)[:60] for c in (escolha.get("categorias") or []) if str(c).strip()][:3]
     if len(categorias) < 3:
         categorias += ["Produtos em Destaque", "Linha Completa", "Lançamentos"][len(categorias):]
-    itens, usados, do_cliente = [], set(), {}
+    itens, usados, do_cliente, fora_do_foco = [], set(), {}, set()
     for s in escolha.get("selecionados") or []:
         try:
             n, ci = int(s.get("n")), int(s.get("categoria", 0))
@@ -553,6 +602,8 @@ def montar_pela_selecao(coleta, candidatos, escolha, cliente, segmento, descrica
         usados.add(n)
         itens.append((n, ci if 0 <= ci < 3 else 0))
         do_cliente[n] = s.get("do_cliente") is not False
+        if s.get("no_foco") is False:
+            fora_do_foco.add(n)
     itens = itens[:MAXIMO_PRODUTOS]
     motivos = ler_descartes(escolha, candidatos, usados)
     completados = completar_ate_o_alvo(itens, candidatos, motivos, categorias)
@@ -610,6 +661,7 @@ def montar_pela_selecao(coleta, candidatos, escolha, cliente, segmento, descrica
         regra_preco = ("preço estimado por regra fixa, nunca pelo modelo: "
                        + "; ".join(sorted(regras))
                        + (f" (tabela faixas_preco.json v{faixas.versao})" if not publicos else ""))
+    descartes_modelo.append({"_fora_do_foco": sum(1 for n, _ in itens if n in fora_do_foco)})
     return (catalogo, precos, situacao_preco(precos), not all(do_cliente[n] for n, _ in itens),
             regra_preco, descartes_modelo)
 
@@ -906,16 +958,31 @@ def palavras_chave(texto):
     return [p for p in re.findall(r"[a-z0-9]+", singular(texto)) if len(p) >= 3 and p not in PALAVRAS_VAZIAS]
 
 
+def assunto_dos_nomes(nomes):
+    """A palavra que mais se repete nos nomes do site ("bicicleta"), com acento."""
+    contagem = {}
+    for nome in nomes or ():
+        for palavra in set(re.findall(r"[a-zà-ú]{5,}", str(nome).lower())):
+            contagem[palavra] = contagem.get(palavra, 0) + 1
+    if not contagem:
+        return ""
+    palavra, vezes = max(contagem.items(), key=lambda kv: kv[1])
+    return palavra if vezes >= 3 else ""
+
+
 def termos_de_busca(cliente, segmento, categorias, nomes=(), foco=""):
     """Termos específicos: nomes de produto já conhecidos (lidos no site ou na foto)
     e linhas do site com duas palavras ou mais ("disco diamantado"). Palavra solta
     ("metal") traz enciclopédia, então fica de fora."""
     termos = []
     foco_limpo = re.split(r"(?i)[,;]|\bn[aã]o\b|\bsem\b", foco or "")[0]
-    if palavras_chave(foco_limpo):
-        termos.append(f"{' '.join(palavras_chave(foco_limpo)[:4])} {cliente}")
-        termos.append(f"{' '.join(palavras_chave(foco_limpo)[:4])} comprar")
-    for n in list(nomes)[:3]:
+    assunto = assunto_dos_nomes(nomes) or (re.findall(r"[a-zà-ú]{4,}", (segmento or "").lower()) or [""])[0]
+    for parte in re.split(r"\s+e\s+|/", foco_limpo):
+        chave = " ".join(re.findall(r"[a-zà-ú0-9]{3,}", parte.lower())[:3])
+        if chave:
+            termos.append(f"{chave} para {assunto}".strip() if assunto else chave)
+            termos.append(f"{chave} {assunto} {cliente}".strip())
+    for n in ([] if foco_limpo.strip() else list(nomes)[:3]):
         chave = " ".join(palavras_chave(n)[:5])
         if len(chave.split()) >= 2:
             termos.append(f"{chave} comprar")

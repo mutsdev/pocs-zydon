@@ -357,7 +357,7 @@ def montar_catalogo(entrada):
     if site and len(validos) < selecao.MAXIMO_PRODUTOS:
         evento("extracao", f"lendo {site}")
         try:
-            coleta_site, candidatos = selecao.coletar_candidatos(site)
+            coleta_site, candidatos = selecao.coletar_candidatos(site, foco)
             if not fonte_anexo:
                 coleta = coleta_site
         except Exception as erro:
@@ -394,7 +394,7 @@ def montar_catalogo(entrada):
             aprovados, descartes_nomeados = selecao.filtrar_candidatos(nomeados)
             validos += aprovados
             descartes += descartes_fotos + descartes_nomeados
-    if len(validos) < selecao.MINIMO_PRODUTOS or (foco and len(validos) < selecao.MAXIMO_PRODUTOS):
+    if len(validos) < selecao.MINIMO_PRODUTOS or foco:
         evento("extracao", f"site com só {len(validos)} produtos: buscando na web produtos do mesmo tipo")
         categorias_site = []
         for v in validos:
@@ -414,6 +414,9 @@ def montar_catalogo(entrada):
         validos += [a for a in achados if a["imagem"] not in vistos
                     and selecao.sem_acento(a["nome"]) not in vistos]
         descartes += descartes_busca
+    if foco:
+        da_busca = [v for v in validos if v["origem"] == "busca"]
+        validos = da_busca[:24] + [v for v in validos if v["origem"] != "busca"]
     validos = validos[:selecao.MAXIMO_CANDIDATOS]
     if validos:
         evento("extracao", f"{selecao.MODELO_SELECAO} conferindo se cada foto mostra o produto do nome")
@@ -442,6 +445,13 @@ def montar_catalogo(entrada):
         catalogo, precos, situacao, similares, regra_preco, descartes_modelo = selecao.montar_pela_selecao(
             coleta, validos, escolha, cliente, segmento_informado or segmento_modelo,
             entrada.get("descricao"))
+        fora = next((x["_fora_do_foco"] for x in descartes_modelo if "_fora_do_foco" in x), 0)
+        descartes_modelo = [x for x in descartes_modelo if "_fora_do_foco" not in x]
+        if foco and fora:
+            evento("extracao", f"{fora} de {len(precos)} produtos NÃO são do foco pedido "
+                               f"({foco}): o site e a busca não tinham o suficiente", "aviso")
+            entrada["_aviso_foco"] = (f"{fora} de {len(precos)} produtos NÃO são do foco pedido ({foco}); "
+                                      "o site e a busca não trouxeram produtos suficientes desse tipo")
     except selecao.PrecisaCatalogo as erro:
         extra = erro.args[1] if len(erro.args) > 1 else {}
         raise selecao.PrecisaCatalogo(erro.args[0], {"custo": custo, "descartes": descartes
@@ -493,6 +503,8 @@ def extrair(entrada):
     if montado.get("nomes_lidos_na_imagem"):
         observacoes.append(f"{montado['nomes_lidos_na_imagem']} nomes de produto foram LIDOS NA FOTO do site "
                            "(o site não tinha o nome em texto); confira na curadoria")
+    if entrada.get("_aviso_foco"):
+        observacoes.append(entrada["_aviso_foco"])
     if montado["similares"]:
         observacoes.append("há produtos SIMILARES achados na busca que NÃO são da marca do cliente")
         evento("extracao", "produtos similares de outras marcas no catálogo", "aviso")
