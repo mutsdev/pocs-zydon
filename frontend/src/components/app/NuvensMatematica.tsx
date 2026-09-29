@@ -124,7 +124,6 @@ export default function NuvensMatematica() {
       } else {
         fase = 'erro'; t = 0; errada = i
         sequencia = 0
-        progresso = 0
         setPlacar({ pontos, sequencia, recorde })
       }
     }
@@ -134,7 +133,7 @@ export default function NuvensMatematica() {
       const dt = Math.min(0.05, (agora - anterior) / 1000)
       anterior = agora
       t += dt
-      if (fase === 'pergunta') {
+      if (fase === 'pergunta' || fase === 'erro') {
         progresso += dt / limite
         if (progresso >= 1) {
           progresso = 1
@@ -250,7 +249,7 @@ export default function NuvensMatematica() {
         const tremor = fase === 'erro' ? Math.sin(t * 50) * 6 * Math.max(0, 1 - t / 0.5) : 0
         const pulinho = fase === 'pergunta' ? Math.abs(Math.sin(agora / 350)) * 4 * (1 - tensao) : 0
         heroi(colunas[atual] + tremor + tremorNuvem, baseY + afundo - pulinho, -tensao * 0.6)
-        if (fase === 'erro' && t > 0.9) { fase = 'pergunta'; t = 0; errada = -1; progresso = 0 }
+        if (fase === 'erro' && t > 0.9) { fase = 'pergunta'; t = 0; errada = -1 }
       }
 
       for (let k = particulas.length - 1; k >= 0; k--) {
