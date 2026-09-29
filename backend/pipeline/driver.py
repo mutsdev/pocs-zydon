@@ -29,6 +29,32 @@ for _p in (REPO, REPO / "Identidade Visual", REPO / "Criar Portais", REPO / "POC
 
 import selecao  # noqa: E402
 
+
+def _proteger_logo_opaca():
+    """Logo sem transparência (JPG, foto de perfil) nunca vira silhueta chapada: pintar a
+    imagem inteira de uma cor só gera um retângulo preto no cabeçalho do portal."""
+    try:
+        import logo as mod_logo
+    except Exception:
+        return
+    original = mod_logo.preparar_para_fundo
+    if getattr(original, "_protegida", False):
+        return
+
+    def preparar_para_fundo(logo_img, fundo, limiares):
+        pronta, modo = original(logo_img, fundo, limiares)
+        if modo.get("modo") == "knockout":
+            alfa = logo_img.convert("RGBA").getchannel("A")
+            transparentes = sum(alfa.histogram()[:128])
+            if transparentes < 0.05 * logo_img.width * logo_img.height:
+                return logo_img, dict(modo, modo="original", motivo="logo sem transparência não vira silhueta")
+        return pronta, modo
+    preparar_para_fundo._protegida = True
+    mod_logo.preparar_para_fundo = preparar_para_fundo
+
+
+_proteger_logo_opaca()
+
 ORG = "pocs"
 TRABALHO = Path(os.environ.get("ZYDON_TRABALHO", "/tmp/pocs"))
 
@@ -963,8 +989,11 @@ def _colorida_visivel(img, fundo):
     return float((razao >= 2.5).mean()) >= 0.6
 def preparar_para_fundo(logo_img, fundo, limiares):
     pronta, modo = _preparar(logo_img, fundo, limiares)
+    alfa = logo_img.convert("RGBA").getchannel("A")
+    if modo.get("modo") == "knockout" and sum(alfa.histogram()[:128]) < 0.05 * logo_img.width * logo_img.height:
+        return logo_img, dict(modo, modo="original", motivo="logo sem transparência não vira silhueta")
     if modo.get("modo") == "knockout" and _colorida_visivel(logo_img, fundo):
-        return logo_img, {"modo": "original", "motivo": "cor da marca visível no fundo"}
+        return logo_img, dict(modo, modo="original", motivo="cor da marca visível no fundo")
     return pronta, modo
 mod_logo.preparar_para_fundo = preparar_para_fundo
 original = gerar_banners.mod_paleta.extrair
