@@ -277,6 +277,17 @@ def recortar_circulo_de_perfil(caminho):
     ImageDraw.Draw(mascara).ellipse((1, 1, w - 2, h - 2), fill=255)
     alfa = Image.composite(img.getchannel("A"), Image.new("L", (w, h), 0), mascara)
     img.putalpha(alfa)
+    import numpy as np
+    dados = np.array(img)
+    dentro = dados[..., 3] > 0
+    quase_branco = (dados[..., :3].min(axis=2) > 225) & dentro
+    if dentro.sum() and quase_branco.sum() / dentro.sum() > 0.4:
+        dados[quase_branco, 3] = 0
+        img = Image.fromarray(dados, "RGBA")
+        caixa = img.getbbox()
+        if caixa:
+            img = img.crop(caixa)
+        evento("extracao", "foto de perfil: fundo branco do círculo removido, fica só a marca")
     alvo = Path(caminho).with_name(Path(caminho).stem + "_circulo.png")
     img.save(alvo, "PNG")
     evento("extracao", "foto de perfil redonda: cantos fora do círculo removidos")
@@ -925,6 +936,30 @@ gerador = Path(sys.argv[1]); paleta = json.loads(sys.argv[2])
 sys.path.insert(0, str(gerador.parent))
 sys.argv = [str(gerador)] + sys.argv[3:]
 import gerar_banners
+import numpy as np
+import logo as mod_logo
+_preparar = mod_logo.preparar_para_fundo
+def _colorida_visivel(img, fundo):
+    dados = np.asarray(img.convert("RGBA"), dtype=np.float64).reshape(-1, 4)
+    dados = dados[dados[:, 3] > 128][:, :3]
+    if not len(dados):
+        return False
+    saturados = dados[(dados.max(axis=1) - dados.min(axis=1)) > 60]
+    if len(saturados) < 0.1 * len(dados):
+        return False
+    def lum(c):
+        c = c / 255.0
+        c = np.where(c <= 0.03928, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+        return 0.2126 * c[..., 0] + 0.7152 * c[..., 1] + 0.0722 * c[..., 2]
+    a, b = lum(saturados), float(lum(np.asarray(fundo, dtype=np.float64)))
+    razao = (np.maximum(a, b) + 0.05) / (np.minimum(a, b) + 0.05)
+    return float((razao >= 2.5).mean()) >= 0.6
+def preparar_para_fundo(logo_img, fundo, limiares):
+    pronta, modo = _preparar(logo_img, fundo, limiares)
+    if modo.get("modo") == "knockout" and _colorida_visivel(logo_img, fundo):
+        return logo_img, {"modo": "original", "motivo": "cor da marca visível no fundo"}
+    return pronta, modo
+mod_logo.preparar_para_fundo = preparar_para_fundo
 original = gerar_banners.mod_paleta.extrair
 def extrair(logo, cor_informada=None):
     base = original(logo, cor_informada)
