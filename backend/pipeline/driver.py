@@ -177,7 +177,24 @@ def _logo_da_home(site):
     except Exception:
         return ""
     organizacao = extracao._first_jsonld(soup, "Organization")
-    return extracao._logo(soup, final, organizacao)
+    achada = extracao._logo(soup, final, organizacao)
+    if achada:
+        return achada
+    return _logo_pelo_arquivo(soup, final)
+
+
+def _logo_pelo_arquivo(soup, base):
+    """Recurso extra: logo sem alt/classe, reconhecida so pelo nome do arquivo (ex.: jh-logo-2019-transp.webp).
+
+    Ignora imagens de carrossel/slider e de outras marcas em cache de slider."""
+    from urllib.parse import urljoin
+    for img in soup.find_all("img"):
+        src = img.get("src") or img.get("data-src") or ""
+        arquivo = src.rsplit("/", 1)[-1].lower()
+        if "logo" not in arquivo or any(x in src.lower() for x in ("slider", "carousel", "banner", "/cache/")):
+            continue
+        return urljoin(base, src)
+    return ""
 
 
 def montar_catalogo(entrada):

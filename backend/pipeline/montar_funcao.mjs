@@ -8,4 +8,5 @@ process.stdout.write(ler('funcao.js')
   .replace("'__COMMIT__'", `'${COMMIT}'`)
   .replace('__DRIVER__', () => JSON.stringify(ler('driver.py')))
   .replace('__SELECAO__', () => JSON.stringify(ler('selecao.py')))
-  .replace('__FAIXAS__', () => JSON.stringify(ler('faixas_preco.json'))));
+  .replace('__FAIXAS__', () => JSON.stringify(ler('faixas_preco.json')))
+  .replace('__GUARDA__', () => readFileSync(new URL('../funcoes/guarda.js', aqui), 'utf-8')));

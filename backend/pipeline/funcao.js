@@ -13,11 +13,13 @@ const FAIXAS_JSON = __FAIXAS__;
 const RAIZ = '/tmp/zydon-pocs';
 const REPO = `${RAIZ}/repo-${COMMIT}`;
 const TRABALHO = `${RAIZ}/trabalho`;
-const PARTE = 250000;
+const PARTE = 80000;
 const SEGREDOS = ['ZYDON_POCS_CODE', 'ZYDON_POCS_TOKEN', 'CLOUDFLARE_ACCOUNT_ID',
   'CLOUDFLARE_API_TOKEN', 'OPENROUTER_API_KEY'];
 
 let mitra;
+
+__GUARDA__
 const sql = async (texto, parametros = {}) => (await mitra.sql.executeQuery(texto, parametros)).rows || [];
 const dml = async (texto, parametros = {}) => mitra.sql.executeDml([{ sql: texto, parameters: parametros }]);
 
@@ -198,10 +200,11 @@ async function gravarPecas(pedidoId, pecas, publicadas, cor) {
   const geracao = Number(atual[0].g) + 1;
   for (const [peca, dados] of Object.entries(pecas || {})) {
     const pub = (publicadas || {})[peca] || {};
+    await salvarArquivo(pedidoId, `previa:${peca}:${geracao}`, dados.previa_base64 || null);
     await dml(`INSERT INTO pecas_banner (pedido_id, peca, geracao, file_id, url, cor, previa_base64)
-      VALUES (:p, :pe, CAST(:g AS INTEGER), :f, :u, :c, :pv)`,
+      VALUES (:p, :pe, CAST(:g AS INTEGER), :f, :u, :c, NULL)`,
     { p: pedidoId, pe: peca, g: String(geracao), f: pub.file_id || null, u: pub.url || null,
-      c: cor || null, pv: dados.previa_base64 });
+      c: cor || null });
   }
 }
 
@@ -356,6 +359,17 @@ module.exports = async (event, context) => {
   const faltando = SEGREDOS.filter((nome) => !process.env[nome]);
   mitra = createClient();
   await mitra.init();
+  const g = await guarda(mitra, context);
+  if (!g.ok) return g;
+  if (!g.sessao.admin && !g.sessao.executivo_id) {
+    return { ok: false, erro: 'EXECUTIVO_NAO_CADASTRADO', mensagem: 'Peça ao João Pedro para te cadastrar.' };
+  }
+  if (ev.pedido_id && !g.sessao.admin) {
+    const dono = await sql('SELECT executivo_id FROM pedidos WHERE pedido_id = :p', { p: ev.pedido_id });
+    if (!dono.length || Number(dono[0].executivo_id) !== Number(g.sessao.executivo_id)) {
+      return { ok: false, erro: 'PEDIDO_DESCONHECIDO', pedido_id: ev.pedido_id };
+    }
+  }
   prepararRepositorio();
   const execucao = (context && context.executionId) || null;
   try {
@@ -364,7 +378,15 @@ module.exports = async (event, context) => {
   } catch (erro) {
     const texto = `${erro.name || 'Erro'}: ${erro.message}`;
     if (ev.pedido_id) {
-      try { await falhar(ev.pedido_id, texto, registrador(ev.pedido_id)); } catch (e) { /* banco fora */ }
+      try {
+        if (acao === 'previa' || acao === 'banner') {
+          await registrador(ev.pedido_id)({ etapa: 'banners', mensagem: texto, nivel: 'erro' });
+          await dml(`UPDATE pedidos SET banners_situacao = 'falhou', execucao_atual = NULL, atualizado_em = now()
+            WHERE pedido_id = :p`, { p: ev.pedido_id });
+        } else {
+          await falhar(ev.pedido_id, texto, registrador(ev.pedido_id));
+        }
+      } catch (e) { /* banco fora */ }
       try {
         await dml("UPDATE travas SET pedido_id = NULL WHERE nome = 'criacao_portal' AND pedido_id = :p", { p: ev.pedido_id });
       } catch (e) { /* ok */ }
