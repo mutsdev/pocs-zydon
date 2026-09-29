@@ -24,6 +24,18 @@ COLUNAS = {
     "imagem": ("imagem", "foto", "image", "url imagem", "link imagem", "img"),
     "sku": ("sku", "codigo", "código", "cod", "referencia", "referência", "ref"),
 }
+COLUNAS_VARIACAO = ("cor", "cores", "tamanho", "tamanhos", "voltagem", "volume", "peso", "sabor", "medida", "modelo")
+
+
+def _opcoes_da_linha(cabecalho, linha):
+    """Colunas de variação ("Cor: Branco, Preto") viram opções; o valor vem do documento."""
+    opcoes = []
+    for i, titulo in enumerate(cabecalho):
+        if selecao.sem_acento(titulo).strip() in COLUNAS_VARIACAO and i < len(linha):
+            valores = [v.strip() for v in re.split(r"[,;/|]", str(linha[i] or "")) if v.strip()]
+            if len(valores) >= 2:
+                opcoes.append({"nome": titulo.strip(), "valores": valores})
+    return opcoes
 
 
 def miniatura(conteudo, lado=96):
@@ -168,7 +180,8 @@ def ler_planilha(dados, nome_arquivo):
             continue
         item = {"nome": nome[:110], "preco": _numero(valor("preco")),
                 "categoria": selecao.limpar_texto(valor("categoria")),
-                "origem_url": f"anexo:{nome_arquivo}#linha={n + 1}"}
+                "origem_url": f"anexo:{nome_arquivo}#linha={n + 1}",
+                "opcoes": _opcoes_da_linha(cab, linha)}
         url = str(valor("imagem") or "").strip()
         if url.startswith(("http://", "https://")):
             item["imagem_url"] = url
@@ -296,6 +309,8 @@ def candidatos_do_anexo(nome_arquivo, conteudo_base64, limite=60):
                               item.get("categoria"), "", "anexo")
         if file_id:
             c["file_id"] = file_id
+        if item.get("opcoes"):
+            c["opcoes"] = item["opcoes"]
         if item.get("imagem_bytes"):
             c["miniatura"] = miniatura(item["imagem_bytes"])
         candidatos.append(c)

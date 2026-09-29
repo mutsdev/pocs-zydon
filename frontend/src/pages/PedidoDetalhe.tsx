@@ -18,9 +18,9 @@ import type { Evento, Pedido, Peca } from '../lib/mitra-api'
 import { useSessao } from '../lib/sessao'
 import { BANNERS, dataHora, dolares, FONTE, PRECO, reais, STATUS } from '../lib/formatos'
 
-interface PrecoResumo { sku: string; nome: string; origem: string; regra: string; preco: number | null; origem_url?: string; imagem?: string; do_cliente?: boolean }
-interface Requisicao { label: string; temp_image_url?: string; _origem_url?: string; _miniatura?: string; _preco_estimado?: boolean; payload: { sku: string; name: string; price: number | null; description?: string } }
-interface Catalogo { etapas: { endpoint: string; requests: Requisicao[] }[]; [k: string]: unknown }
+interface PrecoResumo { sku: string; nome: string; origem: string; regra: string; preco: number | null; origem_url?: string; imagem?: string; do_cliente?: boolean; variacoes?: { eixo: string; valores: string[]; observacao?: string } }
+interface Requisicao { label: string; temp_image_url?: string; _origem_url?: string; _miniatura?: string; _preco_estimado?: boolean; payload: { sku: string; name: string; price: number | null; description?: string; variations?: { values?: { name?: string }[] }[] } }
+interface Catalogo { etapas: { endpoint: string; requests: (Requisicao & { payload: { name?: string } })[] }[]; [k: string]: unknown }
 interface Resumo { precos?: PrecoResumo[]; regra_preco_estimado?: string | null; produtos_similares?: boolean; descartes?: { nome: string; motivo: string }[]; [k: string]: unknown }
 
 const MINIMO = 5
@@ -67,6 +67,7 @@ export default function PedidoDetalhe() {
   const [excluidos, setExcluidos] = useState<Set<string>>(new Set())
   const [edicoes, setEdicoes] = useState<Record<string, { nome?: string; preco?: string }>>({})
   const [feedback, setFeedback] = useState('')
+  const [semGrade, setSemGrade] = useState<Set<string>>(new Set())
 
   const local = useLocation()
   const [arquivo, setArquivo] = useState<File | null>(null)
@@ -166,7 +167,7 @@ export default function PedidoDetalhe() {
   const precoPorSku = useMemo(() => Object.fromEntries((resumo.precos || []).map((p) => [p.sku, p])), [resumo])
   const emCuradoria = pedido?.status === 'curadoria' && !pedido.portal_id
   const restantes = produtos.length - excluidos.size
-  const alterado = excluidos.size > 0 || Object.keys(edicoes).length > 0
+  const alterado = excluidos.size > 0 || Object.keys(edicoes).length > 0 || semGrade.size > 0
   const geracao = pecas.length ? Math.max(...pecas.map((x) => x.geracao)) : 0
   const pecasAtuais = pecas.filter((x) => x.geracao === geracao)
 
@@ -194,6 +195,7 @@ export default function PedidoDetalhe() {
       const ed = edicoes[r.payload.sku] || {}
       const base = precoPorSku[r.payload.sku]
       const entrada: PrecoResumo = base ? { ...base } : { sku: r.payload.sku, nome: r.payload.name, origem: 'estimado', regra: '', preco: r.payload.price }
+      if (semGrade.has(r.payload.sku)) { delete r.payload.variations; delete entrada.variacoes }
       if (ed.nome !== undefined && ed.nome.trim()) { r.payload.name = ed.nome.trim(); r.label = `${r.payload.sku} — ${r.payload.name}`; entrada.nome = r.payload.name }
       if (ed.preco !== undefined) {
         const valor = Number(ed.preco.replace(/\./g, '').replace(',', '.'))
@@ -208,10 +210,14 @@ export default function PedidoDetalhe() {
       precos.push(entrada)
       return r
     })
+    const eixosUsados = new Set(etapa.requests.flatMap((r) => (r.payload.variations || []).flatMap((v) => (v.values || []).map((x) => x.name))))
+    const etapaGrade = novo.etapas.find((e) => e.endpoint === 'variations')
+    if (etapaGrade) etapaGrade.requests = etapaGrade.requests.filter((r) => eixosUsados.has(r.payload.name))
+    novo.etapas = novo.etapas.filter((e) => e.endpoint !== 'variations' || e.requests.length > 0)
     const novoResumo = { ...resumo, precos, produtos: precos.length, preco: situacao(precos) }
     const anterior = pedido
     setPedido({ ...pedido, catalogo: JSON.stringify(novo), resumo: JSON.stringify(novoResumo), produtos: precos.length, preco: novoResumo.preco })
-    setExcluidos(new Set()); setEdicoes({})
+    setExcluidos(new Set()); setEdicoes({}); setSemGrade(new Set())
     try {
       const r = await consultar('curadoria_salvar', {
         pedido_id: id, catalogo: JSON.stringify(novo), resumo: JSON.stringify(novoResumo),
@@ -415,6 +421,17 @@ export default function PedidoDetalhe() {
                               <span>{sku}</span>
                               <Origem url={r._origem_url || info?.origem_url} />
                               {info?.do_cliente === false && <Badge variant="warning">outra marca</Badge>}
+                              {info?.variacoes && !semGrade.has(sku) && (
+                                <span title={info.variacoes.observacao || 'Variações informadas pelo site do cliente'}>
+                                  <Badge variant="info">{info.variacoes.eixo}: {info.variacoes.valores.join(', ')}</Badge>
+                                </span>
+                              )}
+                              {info?.variacoes && emCuradoria && (
+                                <button type="button" className="cursor-pointer underline" style={{ color: 'var(--color-primary-text)' }}
+                                  onClick={() => setSemGrade((s) => { const n = new Set(s); if (n.has(sku)) n.delete(sku); else n.add(sku); return n })}>
+                                  {semGrade.has(sku) ? 'manter variações' : 'tirar variações'}
+                                </button>
+                              )}
                             </div>
                           </div>
                         </div>

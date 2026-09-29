@@ -396,7 +396,7 @@ def logo_pela_web(cliente, site_informado="", nomes_produtos=()):
     informado = (urlparse(selecao.normalizar_site(site_informado)).hostname or "") if site_informado else ""
     vistos = set()
     for consulta in (f"{cliente} site oficial",):
-        for url in selecao.buscar_duckduckgo(consulta, 8) or selecao.buscar_bing(consulta, 8):
+        for url in selecao.buscar_tavily(consulta, 8) or selecao.buscar_duckduckgo(consulta, 8) or selecao.buscar_bing(consulta, 8):
             host = (urlparse(url).hostname or "").lower()
             if not host or host == informado or selecao.MERCADO_LIVRE.search(host):
                 continue

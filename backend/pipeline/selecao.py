@@ -131,7 +131,7 @@ def _coletar(base, limite, foco=""):
         coletar_site._retentativa = True
     home = coletar_site._get(base)
     plataforma, itens = "nenhuma", []
-    sondas = (_shopify_com_foto, coletar_site.woocommerce, coletar_site.vtex,
+    sondas = (_shopify_com_foto, _woocommerce_com_opcoes, coletar_site.vtex,
               coletar_site.wordpress_cpt, lambda b: _sitemap_pelo_foco(coletar_site, b, limite, foco),
               lambda b: coletar_site.imagens_home(b, home))
     for sonda in sondas:
@@ -175,8 +175,11 @@ def _shopify_com_foto(base):
                 preco = float(v.get("price") or 0) or None
             except (TypeError, ValueError):
                 preco = None
-            saida.append(coletar_site._item(p["title"], preco, p.get("product_type"), img,
-                                            _junta(base, f"/products/{p['handle']}")))
+            item = coletar_site._item(p["title"], preco, p.get("product_type"), img,
+                                      _junta(base, f"/products/{p['handle']}"))
+            item["opcoes"] = [{"nome": o.get("name"), "valores": o.get("values") or []}
+                              for o in p.get("options") or []]
+            saida.append(item)
         if len(produtos) < 250 or sum(1 for i in saida if i.get("imagem")) >= 60:
             break
     if not saida:
@@ -184,6 +187,84 @@ def _shopify_com_foto(base):
     com_foto = sum(1 for i in saida if i.get("imagem"))
     evento("extracao", f"loja Shopify: {len(saida)} produtos, {com_foto} com foto")
     return "shopify", saida
+
+
+def _woocommerce_com_opcoes(base):
+    """WooCommerce Store API do repo, guardando os termos dos atributos com variação
+    (Cor: Branco, Preto) para a grade de variações."""
+    import coletar_site
+    from urllib.parse import urljoin as _junta
+    dados = coletar_site._json(_junta(base, "/wp-json/wc/store/v1/products?per_page=100"))
+    if not isinstance(dados, list) or not dados:
+        return None
+    saida = []
+    for p in dados:
+        pr = p.get("prices") or {}
+        div = 10 ** int(pr.get("currency_minor_unit", 2))
+        preco = float(pr.get("price") or 0) / div or None
+        cat = (p.get("categories") or [{}])[0].get("name")
+        img = (p.get("images") or [{}])[0].get("src")
+        item = coletar_site._item(p["name"], preco, cat, img, p.get("permalink"))
+        item["opcoes"] = [{"nome": a.get("name"), "valores": [t.get("name") for t in a.get("terms") or []]}
+                          for a in p.get("attributes") or [] if a.get("has_variations")]
+        saida.append(item)
+    return "woocommerce", saida
+
+
+EIXOS_CONHECIDOS = (
+    ("Cor", r"^(cor|cores|color|colour)$"),
+    ("Tamanho", r"^(tamanho|tam|size|numera[cç][aã]o)$"),
+    ("Voltagem", r"^(voltagem|tens[aã]o|volt|voltage)$"),
+    ("Volume", r"^(volume|capacidade)$"),
+    ("Peso", r"^(peso|gramatura|weight)$"),
+    ("Sabor", r"^(sabor|flavor|aroma)$"),
+    ("Medida", r"^(medida|medidas|dimens[aã]o|di[aâ]metro|bitola|comprimento)$"),
+    ("Modelo", r"^(modelo|vers[aã]o|tipo)$"),
+)
+MAXIMO_PRODUTOS_COM_GRADE = 4
+MAXIMO_VALORES_POR_EIXO = 8
+
+
+def _paleta_de_cores():
+    """{nome sem acento: nome do template} da paleta de cores do repositório."""
+    caminho = Path(os.environ.get("ZYDON_REPO", "")) / "Criar Portais" / "template_variacoes.json"
+    try:
+        dados = json.loads(caminho.read_text(encoding="utf-8"))
+        valores = dados["etapa_variations"]["requests"][0]["payload"]["values"]
+    except (OSError, ValueError, KeyError, IndexError):
+        return {}
+    return {sem_acento(v): v for v in valores}
+
+
+def grade_do_candidato(c, paleta=None):
+    """(eixo, valores, observacao) ou None. Só o que o site/anexo informou: nunca inventa valor.
+    Um eixo por produto (o montar_poc do repositório monta um). Cor só com nomes da paleta
+    do template; o que ficar de fora vai na observação."""
+    for opcao in c.get("opcoes") or []:
+        nome = limpar_texto(opcao.get("nome"))
+        eixo = next((rotulo for rotulo, padrao in EIXOS_CONHECIDOS
+                     if re.match(padrao, sem_acento(nome))), None)
+        if not eixo and nome and nome.lower() not in ("title", "opção", "opcao", "default"):
+            eixo = nome[:30].capitalize()
+        if not eixo:
+            continue
+        valores = []
+        for v in opcao.get("valores") or []:
+            v = limpar_texto(v)[:40]
+            if v and v.lower() not in ("default title", "único", "unico", "padrão", "padrao") and v not in valores:
+                valores.append(v)
+        observacao = ""
+        if eixo == "Cor":
+            paleta = paleta if paleta is not None else _paleta_de_cores()
+            aceitos = [paleta[sem_acento(v)] for v in valores if sem_acento(v) in paleta]
+            fora = [v for v in valores if sem_acento(v) not in paleta]
+            if fora:
+                observacao = f"cores fora da paleta do template ficaram de fora: {', '.join(fora[:6])}"
+            valores = list(dict.fromkeys(aceitos))
+        valores = valores[:MAXIMO_VALORES_POR_EIXO]
+        if len(valores) >= 2:
+            return eixo, valores, observacao
+    return None
 
 
 def _sitemap_pelo_foco(coletar_site, base, limite, foco):
@@ -271,9 +352,16 @@ def coletar_secoes(base, limite=60):
 
 def coletar_candidatos(site, foco=""):
     coleta = _coletar(normalizar_site(site), MAXIMO_CANDIDATOS, foco)
-    candidatos = [candidato(i.get("nome"), i.get("url"), i.get("imagem"), i.get("preco"),
-                            i.get("categoria"), i.get("descricao"), "site")
-                  for i in coleta.get("itens") or []]
+    candidatos = []
+    for i in coleta.get("itens") or []:
+        c = candidato(i.get("nome"), i.get("url"), i.get("imagem"), i.get("preco"),
+                      i.get("categoria"), i.get("descricao"), "site")
+        opcoes = i.get("opcoes") or []
+        if not opcoes and i.get("variantes") and coleta.get("plataforma") == "shopify":
+            opcoes = [{"nome": "Opção", "valores": i["variantes"]}]
+        if opcoes:
+            c["opcoes"] = opcoes
+        candidatos.append(c)
     evento("extracao", f"site: {len(candidatos)} candidatos ({coleta.get('plataforma')})")
     return coleta, candidatos
 
@@ -852,8 +940,22 @@ def montar_pela_selecao(coleta, candidatos, escolha, cliente, segmento, descrica
                        "itens": [{"nome": c["nome"], "preco": c["preco"] if _tem_preco(c) else None,
                                   "categoria": c["categoria"], "imagem": c["imagem"], "url": c["url"],
                                   "descricao": c.get("descricao") or ""} for c in candidatos]}
+    paleta = _paleta_de_cores()
+    grade, grade_info = {}, {}
+    for n, _ in itens:
+        if len(grade) >= MAXIMO_PRODUTOS_COM_GRADE:
+            break
+        achada = grade_do_candidato(candidatos[n], paleta)
+        if achada:
+            eixo, valores, observacao = achada
+            grade[n] = (eixo, valores)
+            grade_info[n] = {"eixo": eixo, "valores": valores, "observacao": observacao}
+    if grade:
+        evento("extracao", f"variações: {len(grade)} produtos com grade ("
+               + "; ".join(f"{candidatos[n]['nome'][:40]}: {g[0]} {', '.join(g[1])}" for n, g in grade.items())[:600]
+               + ")")
     catalogo = montar_poc.montar(coleta_montagem, cliente, (segmento or "Comércio B2B")[:120],
-                                 descricao or f"{cliente} — catálogo B2B", categorias, itens)
+                                 descricao or f"{cliente} — catálogo B2B", categorias, itens, grade=grade)
     requisicoes = next(e for e in catalogo["etapas"] if e.get("endpoint") == "products")["requests"]
     publicos = [candidatos[n]["preco"] for n, _ in itens if _tem_preco(candidatos[n])]
     faixas = FaixasPreco.carregar()
@@ -870,6 +972,8 @@ def montar_pela_selecao(coleta, candidatos, escolha, cliente, segmento, descrica
                    "origem_url": c["url"], "imagem": c["imagem"], "fonte": c["origem"],
                    "do_cliente": do_cliente[n], "completado": n in completados,
                    "nome_lido_na_imagem": bool(c.get("nome_lido_na_imagem"))}
+        if n in grade_info:
+            entrada["variacoes"] = grade_info[n]
         if not req.get("_preco_estimado"):
             entrada.update(origem="publico", regra=("lido no anexo do cliente" if c["origem"] == "anexo"
                                                    else "lido na página do produto"))
@@ -1050,6 +1154,38 @@ MARKETPLACES = re.compile(
 CAPTCHA = re.compile(r"confirme seu acesso|captcha|are you a robot|access denied", re.I)
 
 
+TAVILY_ESGOTADO = {"sim": False}
+
+
+def buscar_tavily(consulta, limite=10):
+    """URLs da API de busca do Tavily (plano gratuito). Sem chave, cota esgotada ou erro, devolve [] e a busca segue pelo DuckDuckGo/Bing."""
+    import requests
+    chave = os.environ.get("TAVILY_API_KEY", "").strip()
+    if not chave or TAVILY_ESGOTADO["sim"]:
+        return []
+    try:
+        r = requests.post("https://api.tavily.com/search",
+                          json={"query": consulta, "max_results": min(max(limite, 5), 20),
+                                "search_depth": "basic", "country": "brazil"},
+                          headers={"Authorization": "Bearer " + chave}, timeout=20)
+    except requests.RequestException as erro:
+        evento("extracao", "Tavily fora do ar (" + type(erro).__name__ + "); usando a busca comum", "aviso")
+        return []
+    if r.status_code in (429, 432, 433):
+        TAVILY_ESGOTADO["sim"] = True
+        evento("extracao", "cota do Tavily esgotada; usando a busca comum ate o fim deste pedido", "aviso")
+        return []
+    if r.status_code != 200:
+        evento("extracao", "Tavily respondeu HTTP " + str(r.status_code) + "; usando a busca comum", "aviso")
+        return []
+    urls = []
+    for item in (r.json() or {}).get("results") or []:
+        href = (item.get("url") or "").strip()
+        if href.startswith("http") and not MARKETPLACES.search(href) and href not in urls:
+            urls.append(href)
+    return urls[:limite]
+
+
 def buscar_duckduckgo(consulta, limite=10):
     """URLs orgânicas do DuckDuckGo HTML (Google/Bing devolvem página de bloqueio)."""
     import requests
@@ -1165,9 +1301,12 @@ def variacoes_da_consulta(consulta):
 
 
 def buscar_na_web(consulta, limite=10):
-    """DuckDuckGo primeiro; o Bing só entra quando o DuckDuckGo traz menos de 3 links."""
+    """Tavily primeiro; sem resultado, DuckDuckGo; o Bing só entra quando ainda há menos de 3 links."""
     import time
-    urls = buscar_duckduckgo(consulta, limite)
+    urls = buscar_tavily(consulta, limite)
+    if len(urls) >= 3:
+        return urls
+    urls = buscar_duckduckgo(consulta, limite) or urls
     if len(urls) >= 3:
         return urls
     melhor = urls

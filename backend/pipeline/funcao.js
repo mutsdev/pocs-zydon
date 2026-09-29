@@ -1,5 +1,5 @@
 // pipeline_poc — roda em segundo plano (executeAsync). Unica peca que fala com
-// a internet: Zydon, Cloudflare, OpenRouter e sites dos clientes.
+// a internet: Zydon, Cloudflare, OpenRouter, Tavily e sites dos clientes.
 // Gerado por montar_funcao.mjs: driver.py e selecao.py vao embutidos abaixo.
 const { createClient } = require('@mitralab.io/functions-sdk');
 const { spawn, execFileSync } = require('child_process');
@@ -17,7 +17,7 @@ const REPO = `${RAIZ}/repo-${COMMIT}`;
 const TRABALHO = `${RAIZ}/trabalho`;
 const PARTE = 80000;
 const SEGREDOS = ['ZYDON_POCS_CODE', 'ZYDON_POCS_TOKEN', 'CLOUDFLARE_ACCOUNT_ID',
-  'CLOUDFLARE_API_TOKEN', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY'];
+  'CLOUDFLARE_API_TOKEN', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'TAVILY_API_KEY'];
 
 let mitra;
 
