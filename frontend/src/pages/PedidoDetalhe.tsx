@@ -94,6 +94,7 @@ export default function PedidoDetalhe() {
     if (aviso) addToast('error', aviso)
   }, [local.state, addToast])
 
+  const gerandoBanners = ['gerando', 'regerando', 'aplicando'].includes(pedido?.banners_situacao || '')
   const emAndamento = !!pedido && (['extraindo', 'criando', 'aguardando_anexo'].includes(pedido.status) || pedido.em_execucao
     || ['gerando', 'regerando', 'aplicando'].includes(pedido.banners_situacao || ''))
   useEffect(() => {
@@ -486,9 +487,12 @@ export default function PedidoDetalhe() {
           {pecasAtuais.length > 0 && pedido.banners_situacao !== 'dispensado' && (
             <div className="flex flex-wrap items-end gap-3">
               <div className="w-full sm:w-96"><Input label="O que mudar nos banners" placeholder="Ex.: fundo mais claro, sem pessoas" value={feedback} onChange={(e) => setFeedback(e.target.value)} /></div>
-              <Button variant="secondary" className="h-10" disabled={!!ocupado || pedido.em_execucao}
-                onClick={() => executar('regerar', { acao: 'banner', acao_banner: 'regerar', feedback, pecas: pecasAtuais.map((x) => x.peca) }, 'Novos banners em geração.')}>
-                {ocupado === 'regerar' ? <Loader2 size={16} className="animate-spin" /> : <Wand2 size={16} />} Refazer banners
+              <Button variant="secondary" className="h-10" disabled={!!ocupado || pedido.em_execucao || gerandoBanners}
+                onClick={async () => {
+                  await executar('regerar', { acao: 'banner', acao_banner: 'regerar', feedback, pecas: pecasAtuais.map((x) => x.peca) }, 'Criando banners novos. O botão volta quando terminar.')
+                  setPedido((atual) => (atual ? { ...atual, banners_situacao: 'regerando', em_execucao: true, acao_desde: new Date().toISOString() } : atual))
+                }}>
+                {ocupado === 'regerar' || gerandoBanners ? <Loader2 size={16} className="animate-spin" /> : <Wand2 size={16} />} {gerandoBanners ? 'Criando banners novos…' : 'Refazer banners'}
               </Button>
             </div>
           )}
