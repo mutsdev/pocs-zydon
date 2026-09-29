@@ -941,8 +941,11 @@ def banner(entrada):
         raise RuntimeError("este pedido não tem pasta de banners para refazer")
     if acao == "regerar":
         pecas = entrada["pecas"]
+        feedback = entrada.get("feedback")
+        if isinstance(feedback, str):
+            feedback = {peca: feedback.strip() for peca in pecas} if feedback.strip() else None
         nova, saida = atendimento.regerar_pecas(banners, pecas, candidatas=2,
-                                                feedback=entrada.get("feedback"),
+                                                feedback=feedback,
                                                 cor=entrada.get("cor"))
     elif acao == "recolorir":
         pecas = list(atendimento.DESTINOS_BANNER)
