@@ -91,6 +91,11 @@ module.exports = async (event, context) => {
       WHERE pedido_id = :p AND status = 'curadoria' AND portal_id IS NULL RETURNING pedido_id`, { p: pedidoId });
     if (!tomado.length) return { ok: false, erro: 'STATUS_NAO_PERMITE', status: 'criando', acao };
   }
+  if (acao === 'banner' && ev.acao_banner === 'regerar') {
+    const tomado = await sql(`UPDATE pedidos SET banners_situacao = 'regerando', acao_desde = now(), atualizado_em = now()
+      WHERE pedido_id = :p AND COALESCE(banners_situacao, '') NOT IN ('gerando', 'regerando', 'aplicando') RETURNING pedido_id`, { p: pedidoId });
+    if (!tomado.length) return { ok: false, erro: 'EM_EXECUCAO', mensagem: 'Os banners novos já estão sendo criados.' };
+  }
   if (acao === 'extrair') {
     const tomado = await sql(`UPDATE pedidos SET status = 'extraindo', erro = NULL, erro_codigo = NULL, atualizado_em = now()
       WHERE pedido_id = :p AND status IN ('falhou', 'precisa_catalogo', 'aguardando_anexo') RETURNING pedido_id`, { p: pedidoId });
@@ -103,6 +108,10 @@ module.exports = async (event, context) => {
     if (criarDeVerdade) {
       await mitra.sql.executeDml([{ sql: `UPDATE pedidos SET status = 'curadoria', criacao_inicio = NULL
         WHERE pedido_id = :p AND status = 'criando' AND portal_id IS NULL`, parameters: { p: pedidoId } }]);
+    }
+    if (acao === 'banner' && ev.acao_banner === 'regerar') {
+      await mitra.sql.executeDml([{ sql: `UPDATE pedidos SET banners_situacao = 'prontos' WHERE pedido_id = :p AND banners_situacao = 'regerando'`,
+        parameters: { p: pedidoId } }]);
     }
     if (acao === 'extrair') {
       await mitra.sql.executeDml([{ sql: `UPDATE pedidos SET status = :s WHERE pedido_id = :p AND status = 'extraindo'`,
