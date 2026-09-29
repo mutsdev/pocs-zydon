@@ -944,9 +944,15 @@ def banner(entrada):
         feedback = entrada.get("feedback")
         if isinstance(feedback, str):
             feedback = {peca: feedback.strip() for peca in pecas} if feedback.strip() else None
-        nova, saida = atendimento.regerar_pecas(banners, pecas, candidatas=2,
-                                                feedback=feedback,
-                                                cor=entrada.get("cor"))
+        logo = restaurar_logo(entrada, pasta)
+        if not logo:
+            logo = logo_tipografica(entrada.get("cliente"), pasta)
+        cor = entrada.get("cor") or (COR_LOGO_CLARA if logo_clara(logo) else None)
+        if feedback:
+            evento("banners", "pedido de mudança anotado: " + "; ".join(sorted(set(feedback.values())))[:200])
+        evento("banners", "refazendo as peças no estilo simples (painel com a logo, sem cena por IA)")
+        caminho = gravar_catalogo(entrada["catalogo"], pedido_id)
+        nova, saida = gerar_pecas_simples(caminho, logo, entrada.get("cliente") or "", entrada.get("segmento"), cor)
     elif acao == "recolorir":
         pecas = list(atendimento.DESTINOS_BANNER)
         nova, saida = atendimento.repintar_pecas(banners, entrada["cor"])

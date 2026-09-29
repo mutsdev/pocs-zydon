@@ -79,12 +79,16 @@ function rodarPython(acao, entrada, aoEvento) {
         } else { log = (log + linha + '\n').slice(-6000); }
       }
     };
+    const limiteMs = acao === 'banner' || acao === 'previa' || acao === 'trocar_logo' ? 6 * 60 * 1000 : 25 * 60 * 1000;
+    const relogio = setTimeout(() => { log += `\ntempo limite de ${limiteMs / 60000} min: etapa encerrada`; filho.kill('SIGKILL'); }, limiteMs);
+    filho.on('close', () => clearTimeout(relogio));
     filho.stdout.on('data', tratar);
     filho.stderr.on('data', (b) => { log = (log + b.toString()).slice(-6000); });
     filho.on('close', (codigo, sinal) => {
       let saida;
       try { saida = JSON.parse(fs.readFileSync(arqSaida, 'utf-8')); } catch (e) {
-        saida = { ok: false, erro: `driver saiu com código ${codigo} (sinal ${sinal}) sem resultado` };
+        saida = { ok: false, erro: sinal === 'SIGKILL' ? 'a etapa passou do tempo limite e foi encerrada; tente de novo'
+          : `driver saiu com código ${codigo} (sinal ${sinal}) sem resultado` };
       }
       for (const arq of [arqEntrada, arqSaida]) { try { fs.unlinkSync(arq); } catch (e) { /* ok */ } }
       saida.log = log.slice(-3000);
@@ -345,7 +349,8 @@ async function banner(ev, execucao) {
     { p: pedidoId, b: acao === 'aplicar' ? 'aplicando' : 'regerando' });
   const banners = await lerArquivo(pedidoId, 'banners');
   const saida = await rodarPython('banner', { pedido_id: pedidoId, acao_banner: acao, portal_id: pedido.portal_id,
-    escolhas: ev.escolhas, pecas: ev.pecas, feedback: ev.feedback, cor: ev.cor, banners_tar: banners }, registrar);
+    escolhas: ev.escolhas, pecas: ev.pecas, feedback: ev.feedback, cor: ev.cor, banners_tar: banners,
+    cliente: pedido.cliente, segmento: pedido.segmento, catalogo: pedido.catalogo, logo: pedido.logo }, registrar);
   await registrar.fim();
   const encerrar = (situacao, extra = {}) => dml(`UPDATE pedidos SET banners_situacao = :b, execucao_atual = NULL,
     erro = COALESCE(:e, erro), atualizado_em = now() WHERE pedido_id = :p`, { p: pedidoId, b: situacao, e: extra.erro || null });
