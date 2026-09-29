@@ -486,6 +486,15 @@ def montar_catalogo(entrada):
         for k in ("custo_usd", "tokens_entrada", "tokens_saida"):
             custo[k] += custo_fotos.get(k) or 0
         descartes += descartes_fotos
+        unicos, nomes = [], set()
+        for v in validos:
+            chave = selecao.sem_acento(v["nome"])
+            if chave in nomes:
+                descartes.append({"nome": v["nome"], "motivo": "duplicado (mesmo produto em outra loja)"})
+                continue
+            nomes.add(chave)
+            unicos.append(v)
+        validos = unicos
     if len(validos) < selecao.MINIMO_PRODUTOS:
         raise selecao.PrecisaCatalogo(
             f"só {len(validos)} produtos com URL de origem e imagem válida "
