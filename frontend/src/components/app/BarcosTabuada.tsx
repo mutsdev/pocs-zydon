@@ -39,8 +39,9 @@ function criarSom(mudoInicial: boolean): Som {
   let audio: AudioContext | null = null
   let mestre: GainNode | null = null
   let ruido: AudioBuffer | null = null
-  let marGanho: GainNode | null = null
-  let marFiltro: BiquadFilterNode | null = null
+  let ondaMestre: GainNode | null = null
+  let proximaOnda = 0
+  let velocidadeMar = 0.5
   let tensaoGanho: GainNode | null = null
   let mudo = mudoInicial
 
@@ -59,24 +60,10 @@ function criarSom(mudoInicial: boolean): Som {
       marrom = (marrom + 0.02 * (Math.random() * 2 - 1)) / 1.02
       dados[i] = marrom * 3.5
     }
-    const fonteMar = audio.createBufferSource()
-    fonteMar.buffer = ruido
-    fonteMar.loop = true
-    fonteMar.playbackRate.value = 0.5
-    marFiltro = audio.createBiquadFilter()
-    marFiltro.type = 'lowpass'
-    marFiltro.frequency.value = 500
-    marGanho = audio.createGain()
-    marGanho.gain.value = 0
-    fonteMar.connect(marFiltro).connect(marGanho).connect(mestre)
-    fonteMar.start()
-    const onda = audio.createOscillator()
-    onda.type = 'sine'
-    onda.frequency.value = 0.13
-    const ondaGanho = audio.createGain()
-    ondaGanho.gain.value = 0.03
-    onda.connect(ondaGanho).connect(marGanho.gain)
-    onda.start()
+    ondaMestre = audio.createGain()
+    ondaMestre.gain.value = 1
+    ondaMestre.connect(mestre)
+    proximaOnda = audio.currentTime + 0.2
     const oscA = audio.createOscillator()
     oscA.type = 'sine'
     oscA.frequency.value = 55
@@ -92,12 +79,58 @@ function criarSom(mudoInicial: boolean): Som {
     oscB.start()
   }
 
+  const onda = (inicio: number, forca: number) => {
+    if (!audio || !ondaMestre || !ruido) return
+    const subida = 1.6 - forca * 0.6 + Math.random() * 0.5
+    const descida = 2.4 - forca * 0.8 + Math.random() * 0.8
+    const pico = 0.16 + forca * 0.14 + Math.random() * 0.05
+    const fim = inicio + subida + descida
+    const fonte = audio.createBufferSource()
+    fonte.buffer = ruido
+    fonte.loop = true
+    fonte.playbackRate.value = 0.85 + Math.random() * 0.3
+    const filtro = audio.createBiquadFilter()
+    filtro.type = 'lowpass'
+    filtro.Q.value = 0.6
+    filtro.frequency.setValueAtTime(260, inicio)
+    filtro.frequency.linearRampToValueAtTime(900 + forca * 900, inicio + subida)
+    filtro.frequency.exponentialRampToValueAtTime(320, fim)
+    const ganho = audio.createGain()
+    ganho.gain.setValueAtTime(0.0001, inicio)
+    ganho.gain.exponentialRampToValueAtTime(pico, inicio + subida)
+    ganho.gain.exponentialRampToValueAtTime(0.0001, fim)
+    const lado = audio.createStereoPanner ? audio.createStereoPanner() : null
+    if (lado) lado.pan.value = (Math.random() - 0.5) * 0.8
+    fonte.connect(filtro).connect(ganho)
+    if (lado) ganho.connect(lado).connect(ondaMestre)
+    else ganho.connect(ondaMestre)
+    fonte.start(inicio, Math.random() * 1.5)
+    fonte.stop(fim + 0.05)
+
+    const espuma = audio.createBufferSource()
+    espuma.buffer = ruido
+    const agudo = audio.createBiquadFilter()
+    agudo.type = 'highpass'
+    agudo.frequency.value = 1800
+    const chiado = audio.createGain()
+    const quebra = inicio + subida
+    chiado.gain.setValueAtTime(0.0001, quebra - 0.05)
+    chiado.gain.exponentialRampToValueAtTime(0.12 + forca * 0.1, quebra + 0.08)
+    chiado.gain.exponentialRampToValueAtTime(0.0001, quebra + 0.9 + Math.random() * 0.4)
+    espuma.connect(agudo).connect(chiado).connect(ondaMestre)
+    espuma.start(quebra - 0.05, Math.random())
+    espuma.stop(quebra + 1.5)
+  }
+
   const mar = (vel: number) => {
-    if (!audio || !marGanho || !marFiltro) return
-    const forca = Math.min(1, Math.max(0, (vel - 0.5) / 3.5))
+    if (!audio) return
+    velocidadeMar = vel
     const agora = audio.currentTime
-    marGanho.gain.setTargetAtTime(0.09 + forca * 0.16, agora, 0.4)
-    marFiltro.frequency.setTargetAtTime(380 + forca * 750, agora, 0.4)
+    if (proximaOnda < agora) proximaOnda = agora + 0.1
+    if (proximaOnda > agora + 0.5) return
+    const forca = Math.min(1, Math.max(0, (velocidadeMar - 0.5) / 3.5))
+    onda(proximaOnda, forca)
+    proximaOnda += Math.max(1.6, 4.8 - forca * 2.4) + Math.random() * 1.8
   }
 
   const tensao = (progresso: number, jogando: boolean) => {

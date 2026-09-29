@@ -21,13 +21,11 @@ function lerMudo() {
   try { return localStorage.getItem(CHAVE_SOM) === '1' } catch { return false }
 }
 
-interface Som { ativar: () => void; acerto: () => void; vento: (velocidade: number) => void; mudar: (mudo: boolean) => void; fechar: () => void }
+interface Som { ativar: () => void; acerto: () => void; mudar: (mudo: boolean) => void; fechar: () => void }
 
 function criarSom(mudoInicial: boolean): Som {
   let audio: AudioContext | null = null
   let mestre: GainNode | null = null
-  let ventoGanho: GainNode | null = null
-  let ventoFiltro: BiquadFilterNode | null = null
   let ruido: AudioBuffer | null = null
   let mudo = mudoInicial
 
@@ -46,27 +44,8 @@ function criarSom(mudoInicial: boolean): Som {
       marrom = (marrom + 0.02 * (Math.random() * 2 - 1)) / 1.02
       dados[i] = marrom * 3.5
     }
-    const fonte = audio.createBufferSource()
-    fonte.buffer = ruido
-    fonte.loop = true
-    ventoFiltro = audio.createBiquadFilter()
-    ventoFiltro.type = 'bandpass'
-    ventoFiltro.frequency.value = 300
-    ventoFiltro.Q.value = 0.8
-    ventoGanho = audio.createGain()
-    ventoGanho.gain.value = 0
-    fonte.connect(ventoFiltro).connect(ventoGanho).connect(mestre)
-    fonte.start()
   }
 
-  const vento = (velocidade: number) => {
-    if (!audio || !ventoGanho || !ventoFiltro) return
-    const forca = Math.min(1, Math.max(0, (velocidade - 60) / 1400))
-    const agora = audio.currentTime
-    ventoGanho.gain.setTargetAtTime(forca * forca * 0.55, agora, 0.08)
-    ventoFiltro.frequency.setTargetAtTime(250 + forca * 1600, agora, 0.1)
-    ventoFiltro.Q.setTargetAtTime(0.7 + forca * 2.5, agora, 0.1)
-  }
 
   const acerto = () => {
     if (!audio || !mestre || !ruido) return
@@ -115,7 +94,7 @@ function criarSom(mudoInicial: boolean): Som {
 
   const fechar = () => { void audio?.close(); audio = null }
 
-  return { ativar, acerto, vento, mudar, fechar }
+  return { ativar, acerto, mudar, fechar }
 }
 
 function lerRecordePassaros() {
@@ -202,7 +181,6 @@ export default function PenduloTriplo() {
     const penas: Pena[] = []
     const avisos: { x: number; y: number; vida: number }[] = []
     let proximoPassaro = 0.8
-    let velocidadePonta = 0
     let pontosPassaros = 0
     let recordePassaros = lerRecordePassaros()
     const alcanceTopo = Math.max(36, trilhoY - ELOS * comprimento - 10)
@@ -292,9 +270,6 @@ export default function PenduloTriplo() {
       }
 
       const ponta = pontos[ELOS - 1]
-      const anteriorPonta = rastro[rastro.length - 1]
-      if (anteriorPonta && dt > 0) velocidadePonta += (Math.hypot(ponta.x - anteriorPonta.x, ponta.y - anteriorPonta.y) / dt - velocidadePonta) * Math.min(1, dt * 10)
-      som.current?.vento(velocidadePonta)
       rastro.push({ x: ponta.x, y: ponta.y })
       if (rastro.length > 140) rastro.shift()
       const emPe = pontos.every((p, i) => p.y < trilhoY - (i + 1) * comprimento * 0.8)
@@ -406,7 +381,7 @@ export default function PenduloTriplo() {
       pedido = requestAnimationFrame(laco)
     }
     pedido = requestAnimationFrame(laco)
-    return () => { cancelAnimationFrame(pedido); som.current?.vento(0) }
+    return () => cancelAnimationFrame(pedido)
   }, [])
 
   const posicao = (e: React.PointerEvent<HTMLCanvasElement>) => e.clientX - e.currentTarget.getBoundingClientRect().left
