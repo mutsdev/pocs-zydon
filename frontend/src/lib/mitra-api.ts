@@ -61,6 +61,8 @@ const MENSAGENS: Record<string, string> = {
   ACAO_INVALIDA: 'Ação inválida.',
   ANEXO_INVALIDO: 'Envie PDF, planilha (xlsx, xls, csv) ou Word (docx).',
   ANEXO_AUSENTE: 'O arquivo chegou incompleto. Envie de novo.',
+  LOGO_FORMATO: 'Envie a logo em PNG, JPG, SVG ou WEBP.',
+  LOGO_RECUSADA: 'O pedido não aceita trocar a logo agora.',
   EXECUTIVO_NAO_CADASTRADO: 'Peça ao João Pedro para te cadastrar.',
 }
 
@@ -90,6 +92,7 @@ export interface Pedido extends PedidoLinha {
   custo_ia_usd: number | string; tokens_ia: number; extracao_fim: string | null; curadoria_fim: string | null
   criacao_inicio: string | null; falhou_em: string | null; execucao_desde: string | null
   anexo_nome: string | null; nomes_lidos_na_imagem: number | null
+  acao_desde: string | null; logo_origem: string | null; logo_aviso: string | null; logo_previa: string | null
 }
 
 export interface Evento { id: number; etapa: string; mensagem: string; nivel: string; criado_em: string }

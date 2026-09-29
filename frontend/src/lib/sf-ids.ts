@@ -4,6 +4,7 @@ export const SF = {
   executivo_ativo: 'b4c68cd0-872b-475c-bc5f-3f9b4bc3e099',
   executivo_salvar: 'd42bc07d-3506-49d9-9376-1220825e332a',
   executivos_listar: 'd8669dab-6cca-4a6f-9e86-d0ce74dcd20c',
+  logo_parte: '3d87d565-f988-4724-8f2a-3ef89c44fe3c',
   pedido_abrir: '2958f983-0c43-4088-8423-ee45e3dce08c',
   pedido_acao: '30e3d129-e9c3-4e1a-ba3c-ef715ae8edcb',
   pedido_eventos: '09b33f93-24f3-4886-a981-39d563ad43ee',

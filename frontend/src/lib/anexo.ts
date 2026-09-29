@@ -29,3 +29,22 @@ export async function enviarAnexo(pedidoId: string, arquivo: File, aoProgresso?:
   }
   await acionar('pedido_acao', { pedido_id: pedidoId, acao: 'extrair', anexo_nome: arquivo.name, anexo_partes: total })
 }
+
+export const ACEITOS_LOGO = '.png,.jpg,.jpeg,.svg,.webp'
+
+export function validarLogo(arquivo: File): string | null {
+  if (!/\.(png|jpe?g|svg|webp)$/i.test(arquivo.name)) return 'Envie a logo em PNG, JPG, SVG ou WEBP.'
+  if (arquivo.size > 5 * 1024 * 1024) return 'A logo passa de 5 MB. Envie uma versão menor.'
+  return null
+}
+
+export async function enviarLogo(pedidoId: string, arquivo: File, aoProgresso?: (fracao: number) => void) {
+  const conteudo = await paraBase64(arquivo)
+  const total = Math.max(1, Math.ceil(conteudo.length / PARTE))
+  for (let i = 0; i < total; i += 1) {
+    const r = await consultar('logo_parte', { pedido_id: pedidoId, parte: String(i), conteudo: conteudo.slice(i * PARTE, (i + 1) * PARTE) })
+    if (!r.length) throw new ErroApi('LOGO_RECUSADA', 'O pedido não aceita trocar a logo agora. Espere a etapa em andamento terminar.')
+    aoProgresso?.((i + 1) / total)
+  }
+  await acionar('pedido_acao', { pedido_id: pedidoId, acao: 'trocar_logo', logo_nome: arquivo.name, logo_partes: total })
+}

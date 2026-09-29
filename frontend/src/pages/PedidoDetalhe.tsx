@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useParams } from 'react-router-dom'
-import { ArrowLeft, ExternalLink, FileText, FlaskConical, ImageOff, Loader2, RefreshCw, Rocket, Save, Wand2 } from 'lucide-react'
+import { ArrowLeft, ExternalLink, FileText, FlaskConical, ImageOff, ImageUp, Loader2, RefreshCw, Rocket, Save, Wand2 } from 'lucide-react'
 import { Card } from '../components/ui/Card'
 import Badge from '../components/ui/Badge'
 import Button from '../components/ui/Button'
@@ -11,9 +11,8 @@ import { ToastContainer } from '../components/ui/Toast'
 import { useToast } from '../hooks/useToast'
 import { Aviso, Esqueleto, Pagina } from '../components/app/Pagina'
 import Espera from '../components/app/Espera'
-import PenduloTriplo from '../components/app/PenduloTriplo'
 import CampoAnexo from '../components/app/CampoAnexo'
-import { enviarAnexo, validarArquivo } from '../lib/anexo'
+import { enviarAnexo, enviarLogo, validarArquivo, validarLogo, ACEITOS_LOGO } from '../lib/anexo'
 import { acionar, consultar, ErroApi } from '../lib/mitra-api'
 import type { Evento, Pedido, Peca } from '../lib/mitra-api'
 import { useSessao } from '../lib/sessao'
@@ -25,6 +24,7 @@ interface Catalogo { etapas: { endpoint: string; requests: Requisicao[] }[]; [k:
 interface Resumo { precos?: PrecoResumo[]; regra_preco_estimado?: string | null; produtos_similares?: boolean; descartes?: { nome: string; motivo: string }[]; [k: string]: unknown }
 
 const MINIMO = 5
+const ORIGEM_LOGO: Record<string, string> = { site: 'Achada no site do cliente.', web: 'Achada na web, fora do site informado: confira.', texto: 'Gerada a partir do nome do cliente (texto), porque nenhuma logo foi achada.', enviada: 'Enviada pelo usuário.' }
 const json = <T,>(t: string | null): T | null => { try { return t ? JSON.parse(t) as T : null } catch { return null } }
 
 function situacao(precos: PrecoResumo[]) {
@@ -70,6 +70,8 @@ export default function PedidoDetalhe() {
   const [arquivo, setArquivo] = useState<File | null>(null)
   const [progresso, setProgresso] = useState<number | null>(null)
   const statusAnterior = useRef<string | null>(null)
+  const entradaLogo = useRef<HTMLInputElement>(null)
+  const [progressoLogo, setProgressoLogo] = useState<number | null>(null)
 
   const carregar = useCallback(async (silencioso = false) => {
     if (!silencioso) setAtualizando(true)
@@ -133,6 +135,24 @@ export default function PedidoDetalhe() {
     } finally {
       setOcupado(null)
       setProgresso(null)
+    }
+  }
+
+  async function trocarLogo(novo: File | null) {
+    if (!novo) return
+    const problema = validarLogo(novo)
+    if (problema) { addToast('error', problema); return }
+    setOcupado('logo')
+    setProgressoLogo(0)
+    try {
+      await enviarLogo(id, novo, setProgressoLogo)
+      addToast('success', 'Logo recebida. Conferindo e refazendo os banners…')
+      await carregar(true)
+    } catch (e) {
+      addToast('error', e instanceof ErroApi ? e.message : 'Não foi possível enviar a logo.')
+    } finally {
+      setOcupado(null)
+      setProgressoLogo(null)
     }
   }
 
@@ -283,11 +303,11 @@ export default function PedidoDetalhe() {
       {(pedido.status === 'extraindo' || pedido.status === 'criando' || (pedido.status === 'aguardando_anexo' && pedido.em_execucao)) && (
         <Espera
           titulo={pedido.status === 'criando' ? 'Criando o portal na Zydon' : pedido.anexo_nome ? `Lendo o catálogo ${pedido.anexo_nome}` : 'Buscando os produtos do cliente'}
-          mensagem={eventos[0]?.mensagem || (pedido.status === 'criando' ? 'Um portal por vez; se houver outro na fila, este espera a vez.' : 'Leva de 20 s a 2 min. A tela se atualiza sozinha.')}
-          desde={pedido.execucao_desde || pedido.criacao_inicio || pedido.criado_em} />
+          mensagem={eventos[0]?.mensagem || (pedido.status === 'criando' ? 'Um portal por vez; se houver outro na fila, este espera a vez.' : 'A tela se atualiza sozinha.')}
+          desde={pedido.status === 'criando' ? (pedido.acao_desde || pedido.criacao_inicio) : (pedido.acao_desde || pedido.criado_em)} />
       )}
       {pedido.status !== 'extraindo' && pedido.status !== 'criando' && ['gerando', 'regerando', 'aplicando'].includes(pedido.banners_situacao || '') && (
-        <PenduloTriplo titulo="Gerando os banners de identidade visual" mensagem={eventos[0]?.mensagem || 'A tela se atualiza sozinha quando terminar.'} />
+        <Espera titulo={pedido.execucao_acao === 'trocar_logo' ? 'Trocando a logo e refazendo os banners' : 'Gerando os banners de identidade visual'} mensagem={eventos[0]?.mensagem || 'A tela se atualiza sozinha quando terminar.'} desde={pedido.acao_desde || pedido.execucao_desde} />
       )}
       {(pedido.nomes_lidos_na_imagem || 0) > 0 && (
         <Aviso titulo={`${pedido.nomes_lidos_na_imagem} nomes de produto foram lidos nas fotos do site`}>O site não tinha o nome em texto; o sistema leu o que está escrito na foto. Confira cada nome antes de criar o portal.</Aviso>
@@ -379,6 +399,36 @@ export default function PedidoDetalhe() {
         </Card>
       )}
 
+      {(pedido.status === 'curadoria' || pedido.status === 'concluido') && (
+        <Card className="p-5 flex flex-col gap-3">
+          <div className="flex flex-wrap items-start gap-3">
+            <div className="flex flex-col gap-1">
+              <h2 className="text-base font-semibold">Logo do cliente</h2>
+              <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
+                {ORIGEM_LOGO[pedido.logo_origem || ''] || 'Nenhuma logo encontrada.'} Se estiver errada, envie a logo certa: os banners são refeitos{pedido.portal_id ? ' e o portal recebe a logo nova' : ''}.
+              </p>
+            </div>
+            <input ref={entradaLogo} type="file" accept={ACEITOS_LOGO} className="hidden"
+              onChange={(e) => { const f = e.target.files?.[0] || null; e.target.value = ''; trocarLogo(f) }} />
+            <Button size="sm" variant="secondary" className="ml-auto" disabled={!!ocupado || pedido.em_execucao} onClick={() => entradaLogo.current?.click()}>
+              {progressoLogo !== null ? <><Loader2 size={16} className="animate-spin" /> Enviando {Math.round(progressoLogo * 100)}%</> : <><ImageUp size={16} /> {pedido.logo_previa ? 'Trocar logo' : 'Enviar logo'}</>}
+            </Button>
+          </div>
+          {pedido.logo_aviso && <p className="text-sm" style={{ color: 'var(--color-warning)' }}>{pedido.logo_aviso}</p>}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {[{ nome: 'Sobre fundo claro', fundo: '#ffffff' }, { nome: 'Sobre fundo escuro', fundo: '#1c1c1e' }].map((f) => (
+              <div key={f.nome} className="flex flex-col gap-1.5">
+                <span className="text-meta" style={{ color: 'var(--color-text-secondary)' }}>{f.nome}</span>
+                <div className="h-28 rounded-md flex items-center justify-center p-4" style={{ backgroundColor: f.fundo }}>
+                  {pedido.logo_previa
+                    ? <img src={`data:image/png;base64,${pedido.logo_previa}`} alt={`Logo de ${pedido.cliente}`} className="max-h-full max-w-full object-contain" />
+                    : <ImageOff size={24} style={{ color: '#8a8a8a' }} />}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
       {(pecasAtuais.length > 0 || pedido.banners_situacao) && (
         <Card className="p-5 flex flex-col gap-3">
           <div className="flex flex-wrap items-end gap-3">

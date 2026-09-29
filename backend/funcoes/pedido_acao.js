@@ -1,11 +1,13 @@
 // Dispara uma acao da pipeline para um pedido existente, em segundo plano.
-// Acoes aceitas: criar (com simular opcional), banner (dispensar | aplicar | regerar), extrair (refazer).
+// Acoes aceitas: criar (com simular opcional), banner (dispensar | aplicar | regerar), extrair (refazer),
+// trocar_logo (logo enviada em partes por logo_parte).
 const { createClient } = require('@mitralab.io/functions-sdk');
 
 const PERMITIDAS = {
   criar: ['curadoria'],
   extrair: ['falhou', 'precisa_catalogo', 'aguardando_anexo'],
   banner: ['curadoria', 'concluido'],
+  trocar_logo: ['curadoria', 'concluido'],
 };
 const ACOES_BANNER = ['dispensar', 'aplicar', 'regerar'];
 
@@ -62,6 +64,23 @@ module.exports = async (event, context) => {
     entrada.acao_banner = ev.acao_banner;
     for (const k of ['escolhas', 'pecas', 'feedback', 'cor']) if (ev[k] !== undefined) entrada[k] = ev[k];
   }
+  if (acao === 'trocar_logo') {
+    await mitra.sql.executeDml([{ sql: `DELETE FROM pedido_arquivos WHERE pedido_id = :p AND tipo = 'logo_envio'
+      AND parte >= CAST(:q AS INTEGER)`, parameters: { p: pedidoId, q: String(Math.max(0, parseInt(ev.logo_partes, 10) || 0)) } }]);
+    const partes = await sql(`SELECT count(*) AS n FROM pedido_arquivos WHERE pedido_id = :p AND tipo = 'logo_envio'`, { p: pedidoId });
+    const total = Math.max(0, parseInt(ev.logo_partes, 10) || 0);
+    const nome = String(ev.logo_nome || '').trim();
+    if (!nome || !/\.(png|jpe?g|svg|webp)$/i.test(nome)) return { ok: false, erro: 'LOGO_FORMATO', mensagem: 'Envie a logo em PNG, JPG, SVG ou WEBP.' };
+    if (!total || Number(partes[0].n) !== total) {
+      return { ok: false, erro: 'ANEXO_AUSENTE', mensagem: `A logo chegou incompleta (${partes[0].n} de ${total} partes); envie de novo.` };
+    }
+    await mitra.sql.executeDml([
+      { sql: `DELETE FROM pedido_arquivos WHERE pedido_id = :p AND tipo = 'logo_envio_nome'`, parameters: { p: pedidoId } },
+      { sql: `INSERT INTO pedido_arquivos (pedido_id, tipo, parte, conteudo_base64) VALUES (:p, 'logo_envio_nome', 0, :n)`,
+        parameters: { p: pedidoId, n: nome.slice(0, 200) } },
+    ]);
+  }
+  await mitra.sql.executeDml([{ sql: 'UPDATE pedidos SET acao_desde = now() WHERE pedido_id = :p', parameters: { p: pedidoId } }]);
   const lista = await mitra.functionsAdmin.list({ size: 100 });
   const pipeline = (lista.content || lista.items || []).find((f) => f.name === 'pipeline_poc');
   if (!pipeline) return { ok: false, erro: 'PIPELINE_AUSENTE' };
