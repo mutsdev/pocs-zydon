@@ -40,7 +40,10 @@ module.exports = async (event, context) => {
   if (acao === 'banner' && ev.acao_banner === 'aplicar' && !pedido.portal_id) {
     return { ok: false, erro: 'PORTAL_AUSENTE' };
   }
-  if (pedido.execucao_atual) return { ok: false, erro: 'EM_EXECUCAO', desde: pedido.execucao_desde };
+  const MARCA_EXPIRA_MS = 20 * 60 * 1000;
+  const marcaViva = pedido.execucao_atual && pedido.execucao_desde
+    && Date.now() - new Date(pedido.execucao_desde).getTime() < MARCA_EXPIRA_MS;
+  if (marcaViva) return { ok: false, erro: 'EM_EXECUCAO', desde: pedido.execucao_desde };
 
   const entrada = { acao, pedido_id: pedidoId };
   if (acao === 'criar') entrada.simular = !!ev.simular;
