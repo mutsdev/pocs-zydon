@@ -204,14 +204,18 @@ async function extrair(ev, execucao) {
   }
   await salvarArquivo(pedidoId, 'logo_previa', saida.logo_previa || null);
   await dml('UPDATE pedidos SET logo_origem = :o, logo_aviso = :a WHERE pedido_id = :p', { p: pedidoId, o: saida.logo_origem || null, a: saida.logo_aviso || null });
-  await dml(`UPDATE pedidos SET status = 'curadoria', catalogo = CAST(:cat AS JSONB), resumo = CAST(:r AS JSONB),
+  await dml('UPDATE pedidos SET catalogo = CAST(:cat AS JSONB) WHERE pedido_id = :p',
+    { p: pedidoId, cat: JSON.stringify(saida.catalogo) });
+  await dml('UPDATE pedidos SET resumo = CAST(:r AS JSONB) WHERE pedido_id = :p',
+    { p: pedidoId, r: JSON.stringify(r) });
+  await dml(`UPDATE pedidos SET status = 'curadoria',
       produtos = CAST(:np AS INTEGER), categorias = CAST(:nc AS INTEGER), fonte = :f, preco = :pr,
       segmento = :s, segmento_origem = :so, logo_url = :l, modelo_ia = :mo,
       custo_ia_usd = CAST(:cu AS NUMERIC), tokens_ia = CAST(:t AS INTEGER),
       produtos_similares = CAST(:sim AS BOOLEAN), observacoes = :o, extracao_fim = now(),
       nomes_lidos_na_imagem = CAST(:nl AS INTEGER),
       banners_situacao = :b, atualizado_em = now() WHERE pedido_id = :p`,
-  { p: pedidoId, cat: JSON.stringify(saida.catalogo), r: JSON.stringify(r), np: String(r.produtos),
+  { p: pedidoId, np: String(r.produtos),
     nc: String(r.categorias), f: r.fonte, pr: r.preco, s: r.segmento, so: r.segmento_origem,
     l: saida.logo_url || null, mo: r.modelo, cu: String(r.custo_usd || 0), t: String(r.tokens || 0),
     sim: String(!!r.produtos_similares), o: r.observacoes || null, nl: String(r.nomes_lidos_na_imagem || 0),

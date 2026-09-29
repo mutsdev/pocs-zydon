@@ -26,14 +26,14 @@ COLUNAS = {
 }
 
 
-def miniatura(conteudo, lado=160):
+def miniatura(conteudo, lado=96):
     """Data-URI JPEG pequena: a URL assinada da Zydon expira em ~2h, a miniatura não."""
     from PIL import Image
     try:
         img = Image.open(io.BytesIO(conteudo)).convert("RGB")
         img.thumbnail((lado, lado))
         saida = io.BytesIO()
-        img.save(saida, "JPEG", quality=78)
+        img.save(saida, "JPEG", quality=60, optimize=True)
         return "data:image/jpeg;base64," + base64.b64encode(saida.getvalue()).decode()
     except Exception:
         return None

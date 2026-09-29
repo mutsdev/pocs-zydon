@@ -696,6 +696,11 @@ def extrair(entrada):
         evento("extracao", "produtos similares de outras marcas no catálogo", "aviso")
 
     logo_url = _logo_da_home(entrada["site"]) if entrada.get("site") else None
+    if logo_url:
+        original = selecao._imagem_cheia(logo_url)
+        if original != logo_url:
+            evento("extracao", "logo do Wix: usando o arquivo original (a versão da página vem em AVIF)")
+            logo_url = original
     logo = atendimento.baixar_logo(logo_url, atendimento.prefixo(caminho.name)) if logo_url else None
     bruta = logo
     logo, aviso_logo = conferir_logo(logo)
