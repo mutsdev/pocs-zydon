@@ -77,7 +77,7 @@ export interface Executivo { id: number; nome: string; email: string | null; car
 
 export interface PedidoLinha {
   pedido_id: string; cliente: string; site: string; status: Status; segmento: string | null
-  segmento_origem: string | null; executivo: string; produtos: number | null; preco: string | null
+  segmento_origem: string | null; foco?: string | null; executivo: string; produtos: number | null; preco: string | null
   fonte: string | null; portal_url: string | null; banners_situacao: string | null; erro_codigo: string | null
   produtos_similares: boolean; simulado: boolean; criado_em: string; concluido_em: string | null
   execucao_acao: string | null; em_execucao: boolean

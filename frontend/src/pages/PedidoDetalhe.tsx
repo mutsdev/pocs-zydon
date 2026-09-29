@@ -11,6 +11,7 @@ import { ToastContainer } from '../components/ui/Toast'
 import { useToast } from '../hooks/useToast'
 import { Aviso, Esqueleto, Pagina } from '../components/app/Pagina'
 import Espera from '../components/app/Espera'
+import PenduloTriplo from '../components/app/PenduloTriplo'
 import CampoAnexo from '../components/app/CampoAnexo'
 import { enviarAnexo, validarArquivo } from '../lib/anexo'
 import { acionar, consultar, ErroApi } from '../lib/mitra-api'
@@ -235,6 +236,7 @@ export default function PedidoDetalhe() {
           <span className="text-meta" style={{ color: 'var(--color-text-secondary)' }}>Segmento</span>
           <span className="text-base font-semibold">{pedido.segmento || '—'}</span>
           <span className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>{pedido.segmento_origem === 'inferido' ? 'inferido pelo sistema' : pedido.segmento_origem === 'informado' ? 'informado pelo usuário' : '—'}</span>
+          {pedido.foco && <span className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>Foco: {pedido.foco}</span>}
         </Card>
         <Card className="p-5 flex flex-col gap-2">
           <span className="text-meta" style={{ color: 'var(--color-text-secondary)' }}>Portal</span>
@@ -285,7 +287,7 @@ export default function PedidoDetalhe() {
           desde={pedido.execucao_desde || pedido.criacao_inicio || pedido.criado_em} />
       )}
       {pedido.status !== 'extraindo' && pedido.status !== 'criando' && ['gerando', 'regerando', 'aplicando'].includes(pedido.banners_situacao || '') && (
-        <Aviso tipo="info" titulo="Gerando os banners de identidade visual">{eventos[0]?.mensagem || 'A tela se atualiza sozinha quando terminar.'}</Aviso>
+        <PenduloTriplo titulo="Gerando os banners de identidade visual" mensagem={eventos[0]?.mensagem || 'A tela se atualiza sozinha quando terminar.'} />
       )}
       {(pedido.nomes_lidos_na_imagem || 0) > 0 && (
         <Aviso titulo={`${pedido.nomes_lidos_na_imagem} nomes de produto foram lidos nas fotos do site`}>O site não tinha o nome em texto; o sistema leu o que está escrito na foto. Confira cada nome antes de criar o portal.</Aviso>

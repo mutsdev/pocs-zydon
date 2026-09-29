@@ -15,6 +15,7 @@ export default function NovoPedido() {
   const navegar = useNavigate()
   const [cliente, setCliente] = useState('')
   const [site, setSite] = useState('')
+  const [foco, setFoco] = useState('')
   const [arquivo, setArquivo] = useState<File | null>(null)
   const [progresso, setProgresso] = useState<number | null>(null)
   const [enviando, setEnviando] = useState(false)
@@ -32,7 +33,7 @@ export default function NovoPedido() {
     setEnviando(true)
     let pedidoId = ''
     try {
-      const r = await acionar('pedido_abrir', { cliente: cliente.trim(), site: site.trim(), anexo_nome: arquivo?.name || '' })
+      const r = await acionar('pedido_abrir', { cliente: cliente.trim(), site: site.trim(), foco: foco.trim(), anexo_nome: arquivo?.name || '' })
       pedidoId = String(r.pedido_id)
       if (arquivo) {
         setProgresso(0)
@@ -59,6 +60,7 @@ export default function NovoPedido() {
           </div>
           <Input label="Cliente" placeholder="Ex.: Distribuidora JH" value={cliente} onChange={(e) => setCliente(e.target.value)} />
           <Input label="Site do cliente" placeholder={arquivo ? 'Opcional com anexo' : 'www.cliente.com.br'} value={site} onChange={(e) => setSite(e.target.value)} />
+          <Input label="Foco dos produtos (opcional)" placeholder="Ex.: peças e acessórios, não a bicicleta" value={foco} onChange={(e) => setFoco(e.target.value)} />
           <CampoAnexo arquivo={arquivo} onChange={setArquivo} desativado={enviando}
             ajuda="Sem site, ou com um site sem produtos? Anexe o catálogo: o sistema lê nome, preço e foto de cada produto." />
           {erro && <p className="text-sm" style={{ color: 'var(--color-danger)' }}>{erro}</p>}
