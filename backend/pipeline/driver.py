@@ -1263,6 +1263,93 @@ def cor_pedida(texto):
     return None
 
 
+PEDE_FOTOS = re.compile(r"salgad|produto|foto|imagem|comida|lanche|mostr|coxinha|pizza|doce|bebida", re.I)
+
+EMBRULHO_MONTAR = r"""
+import sys
+from pathlib import Path
+gerador = Path(sys.argv[1])
+sys.path.insert(0, str(gerador.parent))
+sys.argv = [str(gerador)] + sys.argv[2:]
+import gerar_banners
+import validar
+validar.checar_cena = lambda *a, **k: []
+__REMENDO_LOGO__
+sys.exit(gerar_banners.main(sys.argv[1:]))
+"""
+EMBRULHO_MONTAR = EMBRULHO_MONTAR.replace("__REMENDO_LOGO__", EMBRULHO_PALETA[
+    EMBRULHO_PALETA.index("import numpy as np"):EMBRULHO_PALETA.index("original = gerar_banners")])
+
+
+def _baixar_foto(url):
+    import requests
+    from PIL import Image
+    try:
+        r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                                   "AppleWebKit/537.36 Chrome/128 Safari/537.36"})
+        if r.status_code != 200:
+            return None
+        img = Image.open(io.BytesIO(r.content))
+        img.load()
+        return img.convert("RGB")
+    except Exception:
+        return None
+
+
+def _mosaico(fotos, largura, altura, colunas, linhas):
+    from PIL import Image, ImageOps
+    tela = Image.new("RGB", (largura, altura), (255, 255, 255))
+    celulas = [(c, l) for l in range(linhas) for c in range(colunas)]
+    for n, (c, l) in enumerate(celulas):
+        foto = fotos[n % len(fotos)]
+        x0, x1 = c * largura // colunas, (c + 1) * largura // colunas
+        y0, y1 = l * altura // linhas, (l + 1) * altura // linhas
+        tela.paste(ImageOps.fit(foto, (x1 - x0, y1 - y0), Image.LANCZOS), (x0, y0))
+    return tela
+
+
+def cenas_dos_produtos(caminho_catalogo, pasta_cenas):
+    """Cena do banner feita com as FOTOS REAIS dos produtos do catálogo (mosaico).
+    Devolve quantas fotos entraram; 0 = não deu para montar."""
+    try:
+        catalogo = json.loads(Path(caminho_catalogo).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return 0
+    urls = [p["imagem"] for p in _produtos_do_json(catalogo) if p.get("imagem")]
+    with selecao.ThreadPoolExecutor(8) as pool:
+        fotos = [f for f in pool.map(_baixar_foto, urls[:12]) if f is not None]
+    boas = sorted(fotos, key=lambda f: -min(f.size))
+    boas = [f for f in boas if min(f.size) >= 250] or boas
+    if len(boas) < 2:
+        return 0
+    pasta_cenas.mkdir(parents=True, exist_ok=True)
+    _mosaico(boas[:6], 1440, 1800, 2, 3).save(pasta_cenas / "login-produtos.jpg", quality=92)
+    _mosaico(boas[:4], 1056, 320, 4, 1).save(pasta_cenas / "cabecalho-produtos.jpg", quality=92)
+    return min(len(boas), 6)
+
+
+def montar_com_fotos(pasta, caminho_catalogo):
+    import atendimento
+    import subprocess
+    quantas = cenas_dos_produtos(caminho_catalogo, Path(pasta) / "cenas")
+    if not quantas:
+        evento("banners", "não consegui baixar fotos dos produtos; banners seguem só com a marca", "aviso")
+        return False
+    embrulho = Path(pasta) / "embrulho_montar.py"
+    embrulho.write_text(EMBRULHO_MONTAR, encoding="utf-8")
+    try:
+        p = subprocess.run([sys.executable, str(embrulho), str(atendimento.GERADOR), "montar", str(pasta),
+                            "--sem-juiz"], capture_output=True, text=True, timeout=180)
+    except subprocess.TimeoutExpired:
+        evento("banners", "montagem com fotos passou de 3 minutos; banners seguem só com a marca", "aviso")
+        return False
+    if p.returncode != 0:
+        evento("banners", "montagem com fotos falhou: " + ((p.stdout or "") + (p.stderr or ""))[-300:], "aviso")
+        return False
+    evento("banners", f"banners montados com {quantas} fotos dos produtos do catálogo")
+    return True
+
+
 def gerar_com_identidade(entrada, caminho, logo, variar=False, anterior=None, texto=""):
     """Banners na identidade do cliente (logo + site) e no gosto do executivo."""
     marca, apoio, origem = identidade_visual(entrada.get("site"), logo)
@@ -1286,6 +1373,8 @@ def gerar_com_identidade(entrada, caminho, logo, variar=False, anterior=None, te
                       f"{nome} {paleta['principal']}, destaque {paleta['destaque']}"
                       + (f"; gosto {gosto} ({fonte_gosto})" if gosto else ""))
     nova, saida = gerar_pecas_paleta(caminho, logo, entrada.get("cliente") or "", entrada.get("segmento"), paleta)
+    if nova and texto and PEDE_FOTOS.search(texto):
+        montar_com_fotos(nova, caminho)
     if nova:
         arquivo = Path(nova) / "paleta.json"
         try:

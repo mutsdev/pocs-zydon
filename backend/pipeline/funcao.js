@@ -394,6 +394,12 @@ async function banner(ev, execucao) {
   await gravarPecas(pedidoId, saida.pecas, saida.publicadas, saida.cor);
   await dml('UPDATE pedidos SET banner_cor = :c WHERE pedido_id = :p', { p: pedidoId, c: saida.cor || null });
   await encerrar('prontos');
+  const escolhas = Object.fromEntries(Object.entries(saida.publicadas || {})
+    .filter(([, pub]) => pub && pub.file_id).map(([peca, pub]) => [peca, pub.file_id]));
+  if (acao === 'regerar' && pedido.portal_id && Object.keys(escolhas).length) {
+    await registrar({ etapa: 'banners', mensagem: 'aplicando os banners refeitos no portal' });
+    return banner({ pedido_id: pedidoId, acao_banner: 'aplicar', escolhas }, execucao);
+  }
   return { ok: true, pecas: Object.keys(saida.pecas || {}) };
 }
 
