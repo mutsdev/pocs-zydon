@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Volume2, VolumeX } from 'lucide-react'
 
 function cor(nome: string, reserva: string) {
   return getComputedStyle(document.documentElement).getPropertyValue(nome).trim() || reserva
@@ -26,6 +27,145 @@ function novaPergunta(nivel: number): Pergunta {
 
 type Fase = 'inicio' | 'jogando' | 'pulo' | 'rolagem' | 'fim'
 const CHAVE_RECORDE = 'barcos-tabuada-recorde'
+const CHAVE_SOM = 'barcos-som-mudo'
+
+function lerMudo() {
+  try { return localStorage.getItem(CHAVE_SOM) === '1' } catch { return false }
+}
+
+interface Som { ativar: () => void; mar: (vel: number) => void; tensao: (progresso: number, jogando: boolean) => void; mordida: () => void; derrota: () => void; mudar: (mudo: boolean) => void; fechar: () => void }
+
+function criarSom(mudoInicial: boolean): Som {
+  let audio: AudioContext | null = null
+  let mestre: GainNode | null = null
+  let ruido: AudioBuffer | null = null
+  let marGanho: GainNode | null = null
+  let marFiltro: BiquadFilterNode | null = null
+  let tensaoGanho: GainNode | null = null
+  let mudo = mudoInicial
+
+  const ativar = () => {
+    if (audio) { if (audio.state === 'suspended') void audio.resume(); return }
+    const Construtor = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+    if (!Construtor) return
+    audio = new Construtor()
+    mestre = audio.createGain()
+    mestre.gain.value = mudo ? 0 : 1
+    mestre.connect(audio.destination)
+    ruido = audio.createBuffer(1, audio.sampleRate * 2, audio.sampleRate)
+    const dados = ruido.getChannelData(0)
+    let marrom = 0
+    for (let i = 0; i < dados.length; i++) {
+      marrom = (marrom + 0.02 * (Math.random() * 2 - 1)) / 1.02
+      dados[i] = marrom * 3.5
+    }
+    const fonteMar = audio.createBufferSource()
+    fonteMar.buffer = ruido
+    fonteMar.loop = true
+    fonteMar.playbackRate.value = 0.5
+    marFiltro = audio.createBiquadFilter()
+    marFiltro.type = 'lowpass'
+    marFiltro.frequency.value = 500
+    marGanho = audio.createGain()
+    marGanho.gain.value = 0
+    fonteMar.connect(marFiltro).connect(marGanho).connect(mestre)
+    fonteMar.start()
+    const onda = audio.createOscillator()
+    onda.type = 'sine'
+    onda.frequency.value = 0.13
+    const ondaGanho = audio.createGain()
+    ondaGanho.gain.value = 0.03
+    onda.connect(ondaGanho).connect(marGanho.gain)
+    onda.start()
+    const oscA = audio.createOscillator()
+    oscA.type = 'sine'
+    oscA.frequency.value = 55
+    const oscB = audio.createOscillator()
+    oscB.type = 'sine'
+    oscB.frequency.value = 58.27
+    tensaoGanho = audio.createGain()
+    tensaoGanho.gain.value = 0
+    oscA.connect(tensaoGanho)
+    oscB.connect(tensaoGanho)
+    tensaoGanho.connect(mestre)
+    oscA.start()
+    oscB.start()
+  }
+
+  const mar = (vel: number) => {
+    if (!audio || !marGanho || !marFiltro) return
+    const forca = Math.min(1, Math.max(0, (vel - 0.5) / 3.5))
+    const agora = audio.currentTime
+    marGanho.gain.setTargetAtTime(0.09 + forca * 0.16, agora, 0.4)
+    marFiltro.frequency.setTargetAtTime(380 + forca * 750, agora, 0.4)
+  }
+
+  const tensao = (progresso: number, jogando: boolean) => {
+    if (!audio || !tensaoGanho) return
+    const alvo = jogando ? progresso * progresso * 0.4 : 0
+    tensaoGanho.gain.setTargetAtTime(alvo, audio.currentTime, 0.12)
+  }
+
+  const croc = (quando: number, grave: number) => {
+    if (!audio || !mestre || !ruido) return
+    const t0 = quando
+    const estalo = audio.createBufferSource()
+    estalo.buffer = ruido
+    const f = audio.createBiquadFilter()
+    f.type = 'lowpass'
+    f.frequency.value = 900
+    const g = audio.createGain()
+    g.gain.setValueAtTime(0.7, t0)
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.14)
+    estalo.connect(f).connect(g).connect(mestre)
+    estalo.start(t0, Math.random())
+    estalo.stop(t0 + 0.16)
+    const baque = audio.createOscillator()
+    baque.type = 'sine'
+    baque.frequency.setValueAtTime(grave, t0)
+    baque.frequency.exponentialRampToValueAtTime(55, t0 + 0.16)
+    const bg = audio.createGain()
+    bg.gain.setValueAtTime(0.55, t0)
+    bg.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.2)
+    baque.connect(bg).connect(mestre)
+    baque.start(t0)
+    baque.stop(t0 + 0.22)
+  }
+
+  const mordida = () => {
+    if (!audio) return
+    const agora = audio.currentTime
+    croc(agora, 260)
+    croc(agora + 0.14, 200)
+  }
+
+  const derrota = () => {
+    if (!audio || !mestre) return
+    const notas = [392, 311.13, 233.08, 155.56]
+    notas.forEach((freq, i) => {
+      const t0 = audio!.currentTime + i * 0.22
+      const osc = audio!.createOscillator()
+      osc.type = 'triangle'
+      osc.frequency.value = freq
+      const g = audio!.createGain()
+      g.gain.setValueAtTime(0.0001, t0)
+      g.gain.exponentialRampToValueAtTime(0.3, t0 + 0.03)
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.24)
+      osc.connect(g).connect(mestre!)
+      osc.start(t0)
+      osc.stop(t0 + 0.26)
+    })
+  }
+
+  const mudar = (valor: boolean) => {
+    mudo = valor
+    if (audio && mestre) mestre.gain.setTargetAtTime(valor ? 0 : 1, audio.currentTime, 0.03)
+  }
+
+  const fechar = () => { tensao(0, false); void audio?.close(); audio = null }
+
+  return { ativar, mar, tensao, mordida, derrota, mudar, fechar }
+}
 
 function lerRecorde() {
   try { return Number(localStorage.getItem(CHAVE_RECORDE)) || 0 } catch { return 0 }
@@ -34,6 +174,22 @@ function lerRecorde() {
 export default function BarcosTabuada() {
   const tela = useRef<HTMLCanvasElement>(null)
   const [placar, setPlacar] = useState({ pontos: 0, recorde: lerRecorde() })
+  const [mudo, setMudo] = useState(lerMudo)
+  const som = useRef<Som | null>(null)
+  if (!som.current) som.current = criarSom(mudo)
+
+  useEffect(() => {
+    const atual = som.current
+    return () => atual?.fechar()
+  }, [])
+
+  const alternarSom = () => {
+    const novo = !mudo
+    setMudo(novo)
+    som.current?.ativar()
+    som.current?.mudar(novo)
+    try { localStorage.setItem(CHAVE_SOM, novo ? '1' : '0') } catch { /* sem armazenamento */ }
+  }
 
   useEffect(() => {
     const canvas = tela.current
@@ -108,6 +264,7 @@ export default function BarcosTabuada() {
         t = 0
       } else {
         afundando.push(i)
+        som.current?.mordida()
         tempoAfundar[i] = 0
         progresso = Math.min(0.97, progresso + 0.18)
         aviso = `${pergunta.texto} não é ${pergunta.opcoes[i]}`
@@ -280,6 +437,8 @@ export default function BarcosTabuada() {
       relogio += dt
       t += dt
       deslocamentoOnda += dt * 90 * velocidade()
+      som.current?.mar(velocidade())
+      som.current?.tensao(fase === 'jogando' ? progresso : 0, fase === 'jogando')
 
       ctx.fillStyle = fundo
       ctx.fillRect(0, 0, L, A)
@@ -293,6 +452,8 @@ export default function BarcosTabuada() {
           fase = 'fim'
           t = 0
           explodir(xAtual, yAtual, agua, 30)
+          som.current?.mordida()
+          window.setTimeout(() => som.current?.derrota(), 380)
           if (pontos > recorde) { recorde = pontos; try { localStorage.setItem(CHAVE_RECORDE, String(recorde)) } catch { /* sem armazenamento */ } }
           setPlacar({ pontos, recorde })
         }
@@ -429,6 +590,7 @@ export default function BarcosTabuada() {
     let pedido = requestAnimationFrame(laco)
 
     const clique = (e: MouseEvent) => {
+      som.current?.ativar()
       if (fase !== 'jogando') { escolher(0); return }
       const r = canvas.getBoundingClientRect()
       const x = e.clientX - r.left
@@ -438,6 +600,7 @@ export default function BarcosTabuada() {
       escolher(i)
     }
     const tecla = (e: KeyboardEvent) => {
+      som.current?.ativar()
       const alvo = e.target as HTMLElement | null
       if (alvo && (['INPUT', 'TEXTAREA', 'SELECT'].includes(alvo.tagName) || alvo.isContentEditable)) return
       if ((e.key === 'Enter' || e.key === ' ') && (fase === 'inicio' || fase === 'fim')) { e.preventDefault(); comecar(); return }
@@ -448,6 +611,7 @@ export default function BarcosTabuada() {
     window.addEventListener('keydown', tecla)
     return () => {
       cancelAnimationFrame(pedido)
+      som.current?.tensao(0, false)
       canvas.removeEventListener('click', clique)
       window.removeEventListener('keydown', tecla)
     }
@@ -463,6 +627,15 @@ export default function BarcosTabuada() {
         <span className="ml-auto text-sm tabular-nums font-medium" style={{ color: 'var(--color-primary-text)' }}>
           {placar.pontos} barcos · recorde {placar.recorde}
         </span>
+        <button
+          onClick={alternarSom}
+          aria-label={mudo ? 'Ligar o som' : 'Desligar o som'}
+          title={mudo ? 'Ligar o som' : 'Desligar o som'}
+          className="h-10 w-10 inline-flex items-center justify-center rounded-md cursor-pointer"
+          style={{ backgroundColor: 'var(--color-primary-bg)', color: 'var(--color-primary-text)' }}
+        >
+          {mudo ? <VolumeX size={18} /> : <Volume2 size={18} />}
+        </button>
       </div>
     </>
   )
