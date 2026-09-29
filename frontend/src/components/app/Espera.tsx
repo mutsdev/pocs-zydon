@@ -21,7 +21,16 @@ function rgb(hex: string) {
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
 }
 
-const PENDULOS = 240
+const QUANTIDADES = [2, 10, 50, 240, 500, 1000]
+const PADRAO_PENDULOS = 240
+const CHAVE_PENDULOS = 'caos-pendulos-quantidade'
+
+function lerQuantidade() {
+  try {
+    const n = Number(localStorage.getItem(CHAVE_PENDULOS))
+    return QUANTIDADES.includes(n) ? n : PADRAO_PENDULOS
+  } catch { return PADRAO_PENDULOS }
+}
 const G = 9.81
 
 function derivadas(s: number[]) {
@@ -41,8 +50,8 @@ function passoRK4(s: number[], h: number) {
   return s.map((v, i) => v + (h / 6) * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]))
 }
 
-function cenaCaos(ctx: CanvasRenderingContext2D, largura: number, altura: number) {
-  let estados = Array.from({ length: PENDULOS }, (_, i) => [Math.PI * 0.92 + i * 1e-9, Math.PI * 0.92, 0, 0])
+function cenaCaos(ctx: CanvasRenderingContext2D, largura: number, altura: number, quantidade: number) {
+  let estados = Array.from({ length: quantidade }, (_, i) => [Math.PI * 0.92 + i * 1e-9, Math.PI * 0.92, 0, 0])
   const fundo = rgb(cor('--color-surface', '#19181a'))
   let t = 0
   return () => {
@@ -60,7 +69,7 @@ function cenaCaos(ctx: CanvasRenderingContext2D, largura: number, altura: number
       const y1 = cy + l * Math.cos(s[0])
       const x2 = x1 + l * Math.sin(s[1])
       const y2 = y1 + l * Math.cos(s[1])
-      const matiz = 68 + (i / PENDULOS) * 140
+      const matiz = 68 + (i / Math.max(1, quantidade - 1)) * 140
       ctx.strokeStyle = `hsla(${matiz}, 95%, 58%, 0.35)`
       ctx.beginPath()
       ctx.moveTo(cx, cy)
@@ -72,7 +81,7 @@ function cenaCaos(ctx: CanvasRenderingContext2D, largura: number, altura: number
     })
     ctx.globalCompositeOperation = 'source-over'
     const [a1, a2] = estados.reduce((acc, s) => [Math.max(acc[0], s[0]), Math.min(acc[1], s[0])], [-Infinity, Infinity])
-    return { legenda: `${PENDULOS} pêndulos duplos que começaram a 0,000000001 rad um do outro`, extra: `divergência: ${((a1 - a2) * 57.3).toFixed(t < 3 ? 6 : 1)}°` }
+    return { legenda: `${quantidade.toLocaleString('pt-BR')} pêndulos duplos que começaram a 0,000000001 rad um do outro`, extra: `divergência: ${((a1 - a2) * 57.3).toFixed(t < 3 ? 6 : 1)}°` }
   }
 }
 
@@ -217,6 +226,12 @@ function cenaGalton(ctx: CanvasRenderingContext2D, largura: number, altura: numb
 function CenaCanvas({ cena }: { cena: 'caos' | 'galton' }) {
   const tela = useRef<HTMLCanvasElement>(null)
   const [info, setInfo] = useState({ legenda: '', extra: '' })
+  const [quantidade, setQuantidade] = useState(lerQuantidade)
+
+  const escolherQuantidade = (n: number) => {
+    setQuantidade(n)
+    try { localStorage.setItem(CHAVE_PENDULOS, String(n)) } catch { /* sem armazenamento */ }
+  }
 
   useEffect(() => {
     const canvas = tela.current
@@ -230,7 +245,7 @@ function CenaCanvas({ cena }: { cena: 'caos' | 'galton' }) {
     ctx.scale(escala, escala)
     ctx.fillStyle = cor('--color-surface', '#19181a')
     ctx.fillRect(0, 0, caixa.width, caixa.height)
-    const desenhar = cena === 'caos' ? cenaCaos(ctx, caixa.width, caixa.height) : cenaGalton(ctx, caixa.width, caixa.height)
+    const desenhar = cena === 'caos' ? cenaCaos(ctx, caixa.width, caixa.height, quantidade) : cenaGalton(ctx, caixa.width, caixa.height)
     let quadro = 0
     let pedido = 0
     const laco = () => {
@@ -240,10 +255,36 @@ function CenaCanvas({ cena }: { cena: 'caos' | 'galton' }) {
     }
     pedido = requestAnimationFrame(laco)
     return () => cancelAnimationFrame(pedido)
-  }, [cena])
+  }, [cena, quantidade])
 
   return (
     <>
+      {cena === 'caos' && (
+        <div className="flex flex-wrap items-center gap-2 px-5">
+          <span className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>Pêndulos</span>
+          <div role="radiogroup" aria-label="Quantidade de pêndulos" className="flex flex-wrap gap-1">
+            {QUANTIDADES.map((n) => {
+              const ativo = n === quantidade
+              return (
+                <button
+                  key={n}
+                  role="radio"
+                  aria-checked={ativo}
+                  onClick={() => escolherQuantidade(n)}
+                  className="h-10 md:h-8 min-w-12 px-3 rounded-md text-sm tabular-nums cursor-pointer transition-colors"
+                  style={{
+                    backgroundColor: ativo ? 'var(--color-primary-bg)' : 'transparent',
+                    color: ativo ? 'var(--color-primary-text)' : 'var(--color-text-secondary)',
+                    fontWeight: ativo ? 600 : 500,
+                  }}
+                >
+                  {n.toLocaleString('pt-BR')}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
       <canvas ref={tela} className="w-full h-96 md:h-[32rem] block" />
       <div className="flex flex-wrap items-center gap-3 px-5 pb-5">
         <span className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>{info.legenda}</span>
