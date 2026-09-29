@@ -464,22 +464,62 @@ def _imagem_inline(url):
         return None
 
 
-def _chamar_openrouter(mensagens):
-    """Chama o Gemini (plano gratuito) com o mesmo formato de mensagens de antes.
-    Imagens por URL sao baixadas e enviadas inline; a que nao baixa vira texto."""
+CLOUDFLARE_MODELOS = ("@cf/meta/llama-4-scout-17b-16e-instruct", "@cf/mistralai/mistral-small-3.1-24b-instruct")
+NVIDIA_MODELOS = ("meta/llama-4-maverick-17b-128e-instruct", "meta/llama-3.2-90b-vision-instruct")
+IAS_SEM_COTA = set()
+
+
+class SemCotaNestaIA(RuntimeError):
+    """Esta IA da fila respondeu sem cota ou fora do ar; passa para a próxima."""
+
+
+def _texto_json(texto):
+    texto = re.sub(r"^```(?:json)?|```$", "", (texto or "").strip()).strip()
+    if not texto.startswith("{"):
+        achado = re.search(r"\{.*\}", texto, re.S)
+        texto = achado.group(0) if achado else texto
+    return json.loads(texto)
+
+
+def _imagens_baixadas(mensagens):
+    urls = [c["image_url"]["url"] for m in mensagens if not isinstance(m["content"], str)
+            for c in m["content"] if c.get("type") == "image_url"]
+    with ThreadPoolExecutor(8) as pool:
+        return dict(zip(urls, pool.map(_imagem_inline, urls)))
+
+
+def _mensagens_inline(mensagens, baixadas):
+    """Formato OpenAI com as imagens em data URI (Cloudflare e NVIDIA não baixam URL de terceiros)."""
+    saida = []
+    for m in mensagens:
+        if isinstance(m["content"], str):
+            saida.append(m)
+            continue
+        partes = []
+        for c in m["content"]:
+            if c.get("type") == "text":
+                partes.append(c)
+            elif baixadas.get(c["image_url"]["url"]):
+                mime, dados = baixadas[c["image_url"]["url"]]
+                partes.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{dados}"}})
+            else:
+                partes.append({"type": "text", "text": "(imagem não pôde ser baixada)"})
+        saida.append({"role": m["role"], "content": partes})
+    return saida
+
+
+def _ia_gemini(mensagens, baixadas):
     import requests
+    import time
     chave = os.environ.get("GEMINI_API_KEY")
     if not chave:
-        return _chamar_openrouter_pago(mensagens)
+        raise SemCotaNestaIA("GEMINI_API_KEY não cadastrada")
     partes = []
     for mensagem in mensagens:
         conteudo = mensagem["content"]
         if isinstance(conteudo, str):
             partes.append({"text": conteudo})
             continue
-        urls = [c["image_url"]["url"] for c in conteudo if c.get("type") == "image_url"]
-        with ThreadPoolExecutor(8) as pool:
-            baixadas = dict(zip(urls, pool.map(_imagem_inline, urls)))
         for c in conteudo:
             if c.get("type") == "text":
                 partes.append({"text": c["text"]})
@@ -491,42 +531,121 @@ def _chamar_openrouter(mensagens):
     corpo_pedido = {"contents": [{"role": "user", "parts": partes}],
                     "generationConfig": {"temperature": 0, "maxOutputTokens": MAXIMO_TOKENS_SAIDA,
                                          "responseMimeType": "application/json"}}
-    import time
-    resposta, modelo_usado = None, MODELO_SELECAO
-    for modelo_usado in (MODELO_SELECAO,) + MODELOS_RESERVA:
+    ultimo = ""
+    for modelo in (MODELO_SELECAO,) + MODELOS_RESERVA:
+        if ("gemini", modelo) in IAS_SEM_COTA:
+            continue
         for tentativa in range(2):
             try:
-                resposta = requests.post(GEMINI_URL.format(modelo=modelo_usado), json=corpo_pedido,
+                resposta = requests.post(GEMINI_URL.format(modelo=modelo), json=corpo_pedido,
                                          headers={"x-goog-api-key": chave}, timeout=90)
             except requests.RequestException as erro:
-                evento("extracao", f"{modelo_usado} sem resposta ({type(erro).__name__})", "aviso")
-                resposta = None
+                ultimo = type(erro).__name__
                 continue
-            if resposta.status_code not in (429, 500, 503):
+            if resposta.status_code == 200:
+                corpo = resposta.json()
+                cand = (corpo.get("candidates") or [{}])[0]
+                texto = "".join(p.get("text", "") for p in (cand.get("content") or {}).get("parts") or []
+                                if not p.get("thought"))
+                uso = corpo.get("usageMetadata") or {}
+                return _texto_json(texto), {"modelo": modelo, "custo_usd": 0.0,
+                                            "tokens_entrada": uso.get("promptTokenCount") or 0,
+                                            "tokens_saida": (uso.get("candidatesTokenCount") or 0)
+                                            + (uso.get("thoughtsTokenCount") or 0)}
+            ultimo = f"HTTP {resposta.status_code}"
+            if resposta.status_code == 429:
+                IAS_SEM_COTA.add(("gemini", modelo))
                 break
-            time.sleep(8)
-        if resposta is not None and resposta.status_code not in (429, 500, 503):
-            break
-        evento("extracao", f"{modelo_usado} ocupado; tentando o modelo reserva", "aviso")
-    if resposta is None:
-        raise RuntimeError("Gemini sem resposta em nenhum dos modelos")
-    if resposta.status_code in (402, 429):
-        raise SemCreditoOpenRouter(
-            f"cota gratuita do Gemini esgotada (HTTP {resposta.status_code}): o modelo não pôde "
-            "escolher nem conferir os produtos agora. Reenvie o pedido mais tarde. "
-            f"Resposta: {resposta.text[:200]}")
-    if resposta.status_code != 200:
-        raise RuntimeError(f"Gemini HTTP {resposta.status_code}: {resposta.text[:300]}")
-    corpo = resposta.json()
-    candidato_resposta = (corpo.get("candidates") or [{}])[0]
-    texto = "".join(p.get("text", "") for p in (candidato_resposta.get("content") or {}).get("parts") or []
-                    if not p.get("thought"))
-    texto = re.sub(r"^```(?:json)?|```$", "", texto.strip()).strip()
-    uso = corpo.get("usageMetadata") or {}
-    return json.loads(texto), {"modelo": modelo_usado, "custo_usd": 0.0,
-                               "tokens_entrada": uso.get("promptTokenCount") or 0,
-                               "tokens_saida": (uso.get("candidatesTokenCount") or 0)
-                               + (uso.get("thoughtsTokenCount") or 0)}
+            if resposta.status_code not in (500, 503):
+                break
+            time.sleep(4)
+    raise SemCotaNestaIA(f"Gemini indisponível ({ultimo})")
+
+
+def _ia_openai_compativel(nome, url, chave, modelos, mensagens, baixadas, extra=None):
+    import requests
+    ultimo = ""
+    corpo_msgs = _mensagens_inline(mensagens, baixadas)
+    for modelo in modelos:
+        if (nome, modelo) in IAS_SEM_COTA:
+            continue
+        pedido = {"model": modelo, "messages": corpo_msgs, "temperature": 0,
+                  "max_tokens": MAXIMO_TOKENS_SAIDA, **(extra or {})}
+        try:
+            resposta = requests.post(url, json=pedido, timeout=150,
+                                     headers={"Authorization": f"Bearer {chave}"})
+        except requests.RequestException as erro:
+            ultimo = type(erro).__name__
+            continue
+        if resposta.status_code != 200:
+            ultimo = f"HTTP {resposta.status_code}: {resposta.text[:120]}"
+            if resposta.status_code in (402, 429):
+                IAS_SEM_COTA.add((nome, modelo))
+            continue
+        corpo = resposta.json()
+        texto = corpo["choices"][0]["message"].get("content") or ""
+        try:
+            dados = _texto_json(texto)
+        except ValueError:
+            ultimo = "resposta sem JSON"
+            continue
+        uso = corpo.get("usage") or {}
+        return dados, {"modelo": f"{nome}:{modelo}", "custo_usd": uso.get("cost") or 0.0,
+                       "tokens_entrada": uso.get("prompt_tokens") or 0,
+                       "tokens_saida": uso.get("completion_tokens") or 0}
+    raise SemCotaNestaIA(f"{nome} indisponível ({ultimo})")
+
+
+def _ia_cloudflare(mensagens, baixadas):
+    conta = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
+    token = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
+    if not (conta and token):
+        raise SemCotaNestaIA("chaves da Cloudflare não cadastradas")
+    url = f"https://api.cloudflare.com/client/v4/accounts/{conta}/ai/v1/chat/completions"
+    return _ia_openai_compativel("cloudflare", url, token, CLOUDFLARE_MODELOS, mensagens, baixadas)
+
+
+def _ia_nvidia(mensagens, baixadas):
+    chave = os.environ.get("NVIDIA_API_KEY", "").strip()
+    if not chave:
+        raise SemCotaNestaIA("NVIDIA_API_KEY não cadastrada")
+    return _ia_openai_compativel("nvidia", "https://integrate.api.nvidia.com/v1/chat/completions",
+                                 chave, NVIDIA_MODELOS, mensagens, baixadas)
+
+
+def _ia_openrouter(mensagens, baixadas):
+    if not os.environ.get("OPENROUTER_API_KEY"):
+        raise SemCotaNestaIA("OPENROUTER_API_KEY não cadastrada")
+    try:
+        return _chamar_openrouter_pago(mensagens)
+    except SemCreditoOpenRouter as erro:
+        raise SemCotaNestaIA(str(erro)[:160])
+    except RuntimeError as erro:
+        raise SemCotaNestaIA(str(erro)[:160])
+
+
+FILA_DE_IAS = (("Gemini", _ia_gemini), ("Cloudflare Workers AI", _ia_cloudflare),
+               ("NVIDIA", _ia_nvidia), ("OpenRouter", _ia_openrouter))
+
+
+def _chamar_openrouter(mensagens):
+    """Fila de IAs gratuitas: tenta cada uma na ordem; a que responde sem cota sai da fila
+    até o fim da execução. Só falha quando todas falharem, com o motivo de cada uma."""
+    baixadas = _imagens_baixadas(mensagens)
+    motivos = []
+    for nome, chamar in FILA_DE_IAS:
+        try:
+            resultado = chamar(mensagens, baixadas)
+        except SemCotaNestaIA as erro:
+            motivos.append(f"{nome}: {erro}")
+            continue
+        except ValueError as erro:
+            motivos.append(f"{nome}: resposta inválida ({erro})")
+            continue
+        if motivos:
+            evento("extracao", f"IA usada: {resultado[1]['modelo']} (antes: {' · '.join(motivos)})"[:480], "aviso")
+        return resultado
+    raise SemCreditoOpenRouter("nenhuma IA gratuita respondeu agora: " + " · ".join(motivos)[:600])
 
 
 INSTRUCAO_CONFERIR_FOTO = """Você confere fotos de produtos de um catálogo B2B do cliente "{cliente}".
