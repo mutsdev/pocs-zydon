@@ -250,7 +250,47 @@ def miniatura_logo(caminho, lado=360):
     return base64.b64encode(saida.getvalue()).decode()
 
 
+def logo_do_instagram(site):
+    """Foto de perfil do Instagram: na maioria dos clientes é a própria logo."""
+    import requests
+    achado = re.search(r"instagram\.com/([A-Za-z0-9._]+)", site or "")
+    if not achado or achado.group(1).lower() in {"p", "reel", "explore", "stories"}:
+        return ""
+    usuario = achado.group(1)
+    try:
+        r = requests.get(f"https://i.instagram.com/api/v1/users/web_profile_info/?username={usuario}",
+                         headers={"User-Agent": "Instagram 219.0.0.12.117 Android", "x-ig-app-id": "936619743392459"},
+                         timeout=20)
+        if r.status_code == 200:
+            usuario_dados = (r.json().get("data") or {}).get("user") or {}
+            url = usuario_dados.get("profile_pic_url_hd") or usuario_dados.get("profile_pic_url")
+            if url:
+                return url
+    except Exception:
+        pass
+    for ua in ("facebookexternalhit/1.1", "Mozilla/5.0 (compatible; Googlebot/2.1)"):
+        try:
+            r = requests.get(f"https://www.instagram.com/{usuario}/", headers={"User-Agent": ua}, timeout=20)
+            m = re.search(r'<meta property="og:image" content="([^"]+)"', r.text)
+            if m:
+                return m.group(1).replace("&amp;", "&")
+        except Exception:
+            pass
+    try:
+        r = requests.get(f"https://unavatar.io/instagram/{usuario}?fallback=false", timeout=30)
+        if r.status_code == 200 and r.headers.get("content-type", "").startswith("image/"):
+            return r.url
+    except Exception:
+        pass
+    return ""
+
+
 def _logo_da_home(site):
+    if re.search(r"instagram\.com/", site or ""):
+        achada = logo_do_instagram(site)
+        if achada:
+            evento("extracao", "logo = foto de perfil do Instagram")
+        return achada
     import extracao
     try:
         final, soup, _ = extracao._soup(selecao.normalizar_site(site))
@@ -481,7 +521,7 @@ def montar_catalogo(entrada):
         validos = da_busca[:24] + [v for v in validos if v["origem"] != "busca"]
     validos = validos[:selecao.MAXIMO_CANDIDATOS]
     if validos:
-        evento("extracao", f"{selecao.MODELO_SELECAO} conferindo se cada foto mostra o produto do nome")
+        evento("extracao", "IA (fila gratuita) conferindo se cada foto mostra o produto do nome")
         validos, descartes_fotos, custo_fotos = selecao.conferir_fotos(validos, cliente)
         for k in ("custo_usd", "tokens_entrada", "tokens_saida"):
             custo[k] += custo_fotos.get(k) or 0
@@ -503,7 +543,7 @@ def montar_catalogo(entrada):
             + ("o anexo precisa ter nome e foto de cada produto; mande outro PDF ou planilha"
                if fonte_anexo else "mande o catálogo em PDF ou planilha"),
             {"custo": custo, "descartes": descartes})
-    evento("extracao", f"{selecao.MODELO_SELECAO} escolhendo entre {len(validos)} candidatos")
+    evento("extracao", f"IA (fila gratuita) escolhendo entre {len(validos)} candidatos")
     escolha, custo_selecao = selecao.selecionar(validos, cliente, site or f"anexo {fonte_anexo}",
                                                 segmento_informado, foco)
     for k in ("custo_usd", "tokens_entrada", "tokens_saida"):
