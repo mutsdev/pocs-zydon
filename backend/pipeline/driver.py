@@ -951,6 +951,149 @@ def variacao_de_paleta(marca_hex, feedback_texto, anterior_hex=None):
     return nome, {"principal": _hex(fundo), "destaque": _hex(destaque), "neutra": _hex(neutra)}
 
 
+PALAVRAS_CLARO = ("clar", "branc", "leve", "suave", "pastel", "light", "limp")
+PALAVRAS_ESCURO = ("escur", "preto", "dark", "noturn")
+
+
+def _texto_simples(texto):
+    return unicodedata.normalize("NFKD", (texto or "").lower()).encode("ascii", "ignore").decode()
+
+
+def gosto_do_executivo(preferencias):
+    """'claro', 'escuro' ou '' pelos pedidos de mudança que o executivo já fez (recentes pesam mais)."""
+    placar = 0.0
+    for i, texto in enumerate(preferencias or []):
+        t = _texto_simples(texto)
+        peso = 1.0 / (1 + i * 0.3)
+        if any(p in t for p in PALAVRAS_CLARO):
+            placar += peso
+        if any(p in t for p in PALAVRAS_ESCURO):
+            placar -= peso
+    return "claro" if placar >= 0.9 else "escuro" if placar <= -0.9 else ""
+
+
+def _saturacao(rgb):
+    alto, baixo = max(rgb), min(rgb)
+    return 0 if alto == 0 else (alto - baixo) / alto
+
+
+def _matiz(rgb):
+    import colorsys
+    return colorsys.rgb_to_hsv(*(c / 255 for c in rgb))[0] * 360
+
+
+def _dist_matiz(a, b):
+    d = abs(_matiz(a) - _matiz(b)) % 360
+    return min(d, 360 - d)
+
+
+def cores_da_logo(logo):
+    """Cores de marca da logo (saturadas, sem branco/preto), da mais presente para a menos."""
+    from PIL import Image
+    try:
+        img = Image.open(logo).convert("RGBA")
+    except Exception:
+        return []
+    img.thumbnail((160, 160))
+    contagem = {}
+    for r, g, b, a in img.getdata():
+        if a < 200 or _saturacao((r, g, b)) < 0.4 or max(r, g, b) < 60:
+            continue
+        chave = (r // 24 * 24 + 12, g // 24 * 24 + 12, b // 24 * 24 + 12)
+        contagem[chave] = contagem.get(chave, 0) + 1
+    total = sum(contagem.values()) or 1
+    return [c for c, n in sorted(contagem.items(), key=lambda kv: -kv[1]) if n / total > 0.03][:4]
+
+
+def cores_do_site(site):
+    """Cores de identidade do site: theme-color, variáveis CSS e cores mais usadas nos estilos."""
+    import requests
+    from urllib.parse import urljoin
+    if not site or re.search(r"instagram\.com|facebook\.com|linktr\.ee", site):
+        return []
+    cab = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128 Safari/537.36"}
+    try:
+        base = selecao.normalizar_site(site)
+        pagina = requests.get(base, headers=cab, timeout=15).text
+    except Exception:
+        return []
+    textos = [pagina]
+    for href in re.findall(r'<link[^>]+rel="?stylesheet"?[^>]+href="([^"]+)"', pagina)[:4]:
+        try:
+            textos.append(requests.get(urljoin(base, href), headers=cab, timeout=10).text[:400000])
+        except Exception:
+            pass
+    contagem = {}
+    for m in re.findall(r'name="theme-color"\s+content="(#[0-9a-fA-F]{6})"', pagina):
+        contagem[m.upper()] = contagem.get(m.upper(), 0) + 40
+    for texto in textos:
+        for m in re.findall(r"#([0-9a-fA-F]{6})\b", texto):
+            contagem["#" + m.upper()] = contagem.get("#" + m.upper(), 0) + 1
+    saida = []
+    for hexa, _ in sorted(contagem.items(), key=lambda kv: -kv[1]):
+        rgb = _rgb(hexa)
+        if _saturacao(rgb) < 0.4 or max(rgb) < 60:
+            continue
+        if all(_dist_matiz(rgb, o) > 20 for o in saida):
+            saida.append(rgb)
+        if len(saida) >= 4:
+            break
+    return saida
+
+
+def identidade_visual(site, logo):
+    """(marca, apoio, origem): a cor da marca vem da logo e é confirmada/ajustada pelo site;
+    a cor de apoio é a segunda cor do site (ou da logo), nunca um matiz inventado."""
+    da_logo = cores_da_logo(logo) if logo else []
+    do_site = cores_do_site(site)
+    marca, apoio, origem = None, None, []
+    if da_logo:
+        marca = da_logo[0]
+        origem.append("logo")
+        parecida = next((c for c in do_site if _dist_matiz(c, marca) <= 18), None)
+        if parecida:
+            marca = parecida
+            origem.append("site")
+    elif do_site:
+        marca = do_site[0]
+        origem.append("site")
+    candidatas = [c for c in do_site + da_logo if marca is None or _dist_matiz(c, marca) > 40]
+    apoio = candidatas[0] if candidatas else None
+    return (_hex(marca) if marca else None, _hex(apoio) if apoio else None, "+".join(origem) or "nenhuma")
+
+
+def paleta_do_pedido(marca_hex, apoio_hex, gosto, anterior_hex=None, variar=False):
+    """Fundo pelo gosto do executivo (claro/escuro) ou, sem gosto, na cor da marca (estilo JH).
+    Destaque = cor de apoio do site quando legível, senão a própria marca. Nunca matiz inventado."""
+    import random
+    marca = _rgb(marca_hex)
+    apoio = _rgb(apoio_hex) if apoio_hex else None
+    claros = [("fundo branco", (255, 255, 255)), ("fundo claro neutro", (247, 248, 250)),
+              ("fundo claro na cor da marca", _misturar(marca, (255, 255, 255), 0.9)),
+              ("fundo creme", (250, 247, 240))]
+    escuros = [("fundo grafite", (28, 28, 30)), ("fundo marca escura", _misturar(marca, (0, 0, 0), 0.6))]
+    na_marca = [("fundo na cor da marca", marca)] + ([("fundo na cor de apoio do site", apoio)] if apoio else [])
+    if gosto == "claro":
+        opcoes = claros
+    elif gosto == "escuro":
+        opcoes = escuros
+    else:
+        opcoes = na_marca + (claros[:2] + escuros[:1] if variar else [])
+    anterior = anterior_hex.upper() if anterior_hex else None
+    restantes = [o for o in opcoes if _hex(o[1]) != anterior] or opcoes
+    nome, fundo = random.choice(restantes) if variar else restantes[0]
+    claro = _lum(fundo) > 0.4
+    destaque = None
+    for cor in ([marca, apoio] if fundo != marca else [apoio]):
+        if cor and _contraste(cor, fundo) >= 3:
+            destaque = cor
+            break
+    if destaque is None:
+        destaque = _legivel_sobre(marca if fundo != marca else (apoio or (255, 255, 255)), fundo)
+    neutra = (16, 20, 24) if claro else (247, 248, 250)
+    return nome, {"principal": _hex(fundo), "destaque": _hex(destaque), "neutra": _hex(neutra)}
+
+
 def gerar_pecas_paleta(caminho, logo, cliente, segmento, paleta):
     import atendimento
     pasta = Path(caminho).parent
@@ -979,6 +1122,58 @@ def gerar_pecas_simples(caminho, logo, cliente, segmento, cor=None):
     return atendimento._rodar_gerador(comando, atendimento.prefixo(Path(caminho).name))
 
 
+NOMES_DE_COR = {"laranja": "#F26B1D", "vermelh": "#D62828", "azul": "#1F5FBF", "amarel": "#F2B705",
+                "roxo": "#6A3FB5", "rosa": "#E0457B", "vinho": "#7A1F3D", "marsala": "#7A1F3D",
+                "verde": "#1E8C4E", "preto": "#1C1C1E", "cinza": "#6B7280", "marrom": "#7B4B2A", "dourad": "#C9A227"}
+
+
+def cor_pedida(texto):
+    """Cor que o executivo mandou USAR ("coloque laranja", "a cor deles é azul"); ignora
+    as que ele mandou tirar ("tira esse verde", "sem marsala")."""
+    t = _texto_simples(texto)
+    for trecho in re.split(r"[,.;]| e ", t):
+        if re.search(r"\b(tir|sem|nao|remov|evit)", trecho):
+            continue
+        for nome, hexa in NOMES_DE_COR.items():
+            if nome in trecho and nome not in ("preto",):
+                return hexa
+    return None
+
+
+def gerar_com_identidade(entrada, caminho, logo, variar=False, anterior=None, texto=""):
+    """Banners na identidade do cliente (logo + site) e no gosto do executivo."""
+    marca, apoio, origem = identidade_visual(entrada.get("site"), logo)
+    pedida = cor_pedida(texto)
+    if pedida and (not marca or _dist_matiz(_rgb(pedida), _rgb(marca)) > 25):
+        apoio, marca, origem = marca, pedida, "pedido do usuário"
+    if not marca:
+        marca = entrada.get("cor") or COR_LOGO_CLARA
+        origem = "padrão (logo sem cor e site sem cor de marca)"
+    atual = _texto_simples(texto)
+    gosto = ("claro" if any(p in atual for p in PALAVRAS_CLARO) else
+             "escuro" if any(p in atual for p in PALAVRAS_ESCURO) else "")
+    fonte_gosto = "pedido agora"
+    if not gosto:
+        gosto = gosto_do_executivo(entrada.get("preferencias"))
+        fonte_gosto = "histórico do executivo"
+    if not gosto and logo_clara(logo):
+        gosto, fonte_gosto = "escuro", "logo clara"
+    nome, paleta = paleta_do_pedido(marca, apoio, gosto, anterior, variar)
+    evento("banners", f"identidade: marca {marca}" + (f", apoio {apoio}" if apoio else "") + f" (de {origem}); "
+                      f"{nome} {paleta['principal']}, destaque {paleta['destaque']}"
+                      + (f"; gosto {gosto} ({fonte_gosto})" if gosto else ""))
+    nova, saida = gerar_pecas_paleta(caminho, logo, entrada.get("cliente") or "", entrada.get("segmento"), paleta)
+    if nova:
+        arquivo = Path(nova) / "paleta.json"
+        try:
+            dados = json.loads(arquivo.read_text(encoding="utf-8"))
+            dados["marca"] = marca
+            arquivo.write_text(json.dumps(dados, indent=2, ensure_ascii=False), encoding="utf-8")
+        except (OSError, ValueError):
+            pass
+    return nova, saida, paleta
+
+
 def previa(entrada):
     import atendimento
     pedido_id = entrada["pedido_id"]
@@ -992,11 +1187,7 @@ def previa(entrada):
             return {"sem_banner": f"sem logo e a logo de texto falhou ({type(erro).__name__}: {erro})"}
     caminho = gravar_catalogo(entrada["catalogo"], pedido_id)
     evento("banners", "gerando as peças (login e cabeçalho)")
-    cor = None
-    if logo_clara(logo):
-        cor = COR_LOGO_CLARA
-        evento("banners", f"logo clara (quase toda branca): painel dos banners em {cor} para a logo aparecer")
-    gerada, saida = gerar_pecas_simples(caminho, logo, entrada["cliente"], entrada.get("segmento"), cor)
+    gerada, saida, _ = gerar_com_identidade(entrada, caminho, logo, variar=False)
     if not gerada:
         return {"sem_banner": str(saida)[-800:]}
     return {"pecas": pecas_para_tela(gerada), "cor": cor_da_pasta(gerada),
@@ -1078,27 +1269,16 @@ def banner(entrada):
         logo = restaurar_logo(entrada, pasta)
         if not logo:
             logo = logo_tipografica(entrada.get("cliente"), pasta)
-        marca = entrada.get("cor") or cor_da_pasta(banners) or "#1A4FA0"
         texto = "; ".join(sorted(set(feedback.values()))) if feedback else ""
         anterior = None
         try:
             anterior = json.loads((Path(banners) / "paleta.json").read_text(encoding="utf-8")).get("principal")
         except (OSError, ValueError):
             pass
-        nome, paleta = variacao_de_paleta(marca, texto, anterior)
         if texto:
             evento("banners", "pedido de mudança: " + texto[:200])
-        evento("banners", f"banner novo do zero: {nome} {paleta['principal']}, destaque {paleta['destaque']}")
         caminho = gravar_catalogo(entrada["catalogo"], pedido_id)
-        nova, saida = gerar_pecas_paleta(caminho, logo, entrada.get("cliente") or "", entrada.get("segmento"), paleta)
-        if nova:
-            arquivo = Path(nova) / "paleta.json"
-            try:
-                dados = json.loads(arquivo.read_text(encoding="utf-8"))
-                dados["marca"] = marca
-                arquivo.write_text(json.dumps(dados, indent=2, ensure_ascii=False), encoding="utf-8")
-            except (OSError, ValueError):
-                pass
+        nova, saida, _ = gerar_com_identidade(entrada, caminho, logo, variar=True, anterior=anterior, texto=texto)
     elif acao == "recolorir":
         pecas = list(atendimento.DESTINOS_BANNER)
         nova, saida = atendimento.repintar_pecas(banners, entrada["cor"])

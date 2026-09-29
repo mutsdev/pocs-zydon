@@ -130,7 +130,7 @@ async function lerArquivo(pedidoId, tipo) {
 async function lerPedido(pedidoId) {
   const linhas = await sql(`SELECT p.pedido_id, p.cliente, p.site, p.segmento, p.segmento_origem,
       p.status, p.foco, p.portal_id, p.portal_url, p.banner_cor, p.anexo_url, p.anexo_nome, p.logo_url,
-      CAST(p.catalogo AS TEXT) AS catalogo, e.nome AS executivo
+      CAST(p.catalogo AS TEXT) AS catalogo, e.nome AS executivo, p.executivo_id
     FROM pedidos p JOIN executivos e ON e.id = p.executivo_id WHERE p.pedido_id = :p`, { p: pedidoId });
   if (!linhas.length) throw new Error(`pedido ${pedidoId} não existe`);
   const pedido = linhas[0];
@@ -140,6 +140,13 @@ async function lerPedido(pedidoId) {
   const logo = await lerArquivo(pedidoId, 'logo');
   pedido.logo = logo && logoNome.length ? { nome: logoNome[0].conteudo_base64, conteudo_base64: logo } : null;
   return pedido;
+}
+
+async function preferenciasDoExecutivo(executivoId) {
+  if (!executivoId) return [];
+  const linhas = await sql(`SELECT texto FROM feedback_banner WHERE executivo_id = CAST(:e AS INTEGER)
+    ORDER BY criado_em DESC LIMIT 20`, { e: String(executivoId) });
+  return linhas.map((l) => l.texto);
 }
 
 async function marcarExecucao(pedidoId, acao, execucao) {
@@ -232,7 +239,8 @@ async function previa(ev, execucao) {
   const registrar = registrador(pedidoId);
   const pedido = await lerPedido(pedidoId);
   await marcarExecucao(pedidoId, 'previa', execucao);
-  const saida = await rodarPython('previa', { pedido_id: pedidoId, cliente: pedido.cliente,
+  const saida = await rodarPython('previa', { pedido_id: pedidoId, cliente: pedido.cliente, site: pedido.site,
+    preferencias: await preferenciasDoExecutivo(pedido.executivo_id),
     segmento: pedido.segmento, catalogo: pedido.catalogo, logo: pedido.logo }, registrar);
   await registrar.fim();
   if (!saida.ok || saida.sem_banner) {
@@ -348,7 +356,13 @@ async function banner(ev, execucao) {
   await dml('UPDATE pedidos SET banners_situacao = :b WHERE pedido_id = :p',
     { p: pedidoId, b: acao === 'aplicar' ? 'aplicando' : 'regerando' });
   const banners = await lerArquivo(pedidoId, 'banners');
-  const saida = await rodarPython('banner', { pedido_id: pedidoId, acao_banner: acao, portal_id: pedido.portal_id,
+  const textoFeedback = String(ev.feedback || '').trim();
+  if (acao === 'regerar' && textoFeedback && pedido.executivo_id) {
+    await dml(`INSERT INTO feedback_banner (executivo_id, pedido_id, texto) VALUES (CAST(:e AS INTEGER), :p, :t)`,
+      { e: String(pedido.executivo_id), p: pedidoId, t: textoFeedback.slice(0, 500) });
+  }
+  const preferencias = await preferenciasDoExecutivo(pedido.executivo_id);
+  const saida = await rodarPython('banner', { site: pedido.site, preferencias, pedido_id: pedidoId, acao_banner: acao, portal_id: pedido.portal_id,
     escolhas: ev.escolhas, pecas: ev.pecas, feedback: ev.feedback, cor: ev.cor, banners_tar: banners,
     cliente: pedido.cliente, segmento: pedido.segmento, catalogo: pedido.catalogo, logo: pedido.logo }, registrar);
   await registrar.fim();
