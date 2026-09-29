@@ -73,6 +73,8 @@ export default function NuvensMatematica() {
     let destino = 1
     const estrelas = Array.from({ length: 50 }, () => ({ x: Math.random() * L, y: Math.random() * A * 3, r: Math.random() * 1.4 + 0.3 }))
     const particulas: { x: number; y: number; vx: number; vy: number; vida: number }[] = []
+    const fiapos: { x: number; y: number; vy: number; r: number; vida: number }[] = []
+    const AFUNDO_MAX = Math.min(46, A * 0.1)
 
     function nuvem(x: number, y: number, largura: number, alfa: number, destaque: boolean) {
       ctx!.save()
@@ -86,6 +88,16 @@ export default function NuvensMatematica() {
       }
       ctx!.fill()
       ctx!.restore()
+    }
+
+    function nuvemCor(x: number, y: number, largura: number) {
+      const partes: [number, number, number][] = [[-0.32, 0.08, 0.26], [-0.1, -0.12, 0.3], [0.16, -0.06, 0.27], [0.36, 0.1, 0.2], [0, 0.12, 0.3]]
+      ctx!.beginPath()
+      for (const [dx, dy, r] of partes) {
+        ctx!.moveTo(x + dx * largura + r * largura, y + dy * largura)
+        ctx!.arc(x + dx * largura, y + dy * largura, r * largura, 0, Math.PI * 2)
+      }
+      ctx!.fill()
     }
 
     function heroi(x: number, y: number, esticar: number) {
@@ -150,7 +162,32 @@ export default function NuvensMatematica() {
       }
       const yBase = baseY + deslocamento
       const yCima = baseY - salto + deslocamento
-      nuvem(colunas[atual], yBase + 18, 90, 0.9, false)
+      const peso = fase === 'pergunta' || fase === 'erro' ? progresso : 0
+      const tensao = Math.max(0, (peso - 0.35) / 0.65)
+      const afundo = peso * peso * AFUNDO_MAX
+      const tremorNuvem = Math.sin(agora / 16) * Math.pow(tensao, 1.5) * 7 + Math.sin(agora / 27) * Math.pow(tensao, 2) * 4
+      if (fase === 'pergunta' && tensao > 0 && Math.random() < tensao * 0.5) {
+        fiapos.push({ x: colunas[atual] + (Math.random() - 0.5) * 80, y: yBase + 30 + afundo, vy: 20 + Math.random() * 60, r: 3 + Math.random() * 6, vida: 1 })
+      }
+      for (let k = fiapos.length - 1; k >= 0; k--) {
+        const f = fiapos[k]
+        f.vy += 260 * dt; f.y += f.vy * dt; f.vida -= dt * 1.2
+        if (f.vida <= 0) { fiapos.splice(k, 1); continue }
+        ctx.globalAlpha = f.vida * 0.7
+        ctx.fillStyle = textoCor
+        ctx.beginPath(); ctx.arc(f.x, f.y, f.r * f.vida, 0, Math.PI * 2); ctx.fill()
+      }
+      ctx.globalAlpha = 1
+      if (fase !== 'queda') {
+        nuvem(colunas[atual] + tremorNuvem, yBase + 18 + afundo, 90, 0.9 - tensao * 0.25, false)
+        if (tensao > 0) {
+          ctx.save()
+          ctx.globalAlpha = tensao * 0.45
+          ctx.fillStyle = perigo
+          nuvemCor(colunas[atual] + tremorNuvem, yBase + 18 + afundo, 90)
+          ctx.restore()
+        }
+      }
       pergunta.opcoes.forEach((valor, i) => {
         const some = fase === 'erro' && i === errada ? Math.max(0, 1 - t / 0.7) : 1
         const deslizando = fase === 'erro' && i === errada ? t * 30 : 0
@@ -189,13 +226,18 @@ export default function NuvensMatematica() {
           setPlacar({ pontos, sequencia, recorde })
         }
       } else if (fase === 'queda') {
-        const quedaY = baseY + t * 160 + t * t * 900
+        const queda = t * 160 + t * t * 900
         const some = Math.max(0, 1 - t / 1.1)
+        const giro = Math.sin(t * 20) * 6 * some
         ctx.save()
         ctx.globalAlpha = some
-        heroi(colunas[atual], quedaY, 0)
+        nuvem(colunas[atual] + giro, yBase + 18 + AFUNDO_MAX + queda * 1.1, 90, 0.7, false)
+        ctx.fillStyle = perigo
+        ctx.globalAlpha = some * 0.45
+        nuvemCor(colunas[atual] + giro, yBase + 18 + AFUNDO_MAX + queda * 1.1, 90)
+        ctx.globalAlpha = some
+        heroi(colunas[atual], baseY + AFUNDO_MAX + queda, 0.4)
         ctx.restore()
-        nuvem(colunas[atual], yBase + 18, 90, 0.9 * some, false)
         if (t >= 1.1) {
           pergunta = novaPergunta(nivel)
           fase = 'pergunta'
@@ -206,8 +248,8 @@ export default function NuvensMatematica() {
         }
       } else {
         const tremor = fase === 'erro' ? Math.sin(t * 50) * 6 * Math.max(0, 1 - t / 0.5) : 0
-        const pulinho = fase === 'pergunta' ? Math.abs(Math.sin(agora / 350)) * 4 : 0
-        heroi(colunas[atual] + tremor, baseY - pulinho, 0)
+        const pulinho = fase === 'pergunta' ? Math.abs(Math.sin(agora / 350)) * 4 * (1 - tensao) : 0
+        heroi(colunas[atual] + tremor + tremorNuvem, baseY + afundo - pulinho, -tensao * 0.6)
         if (fase === 'erro' && t > 0.9) { fase = 'pergunta'; t = 0; errada = -1; progresso = 0 }
       }
 
@@ -280,7 +322,7 @@ export default function NuvensMatematica() {
     <>
       <canvas ref={tela} className="w-full h-96 md:h-[32rem] block cursor-pointer" />
       <div className="flex flex-wrap items-center gap-3 px-5 pb-5">
-        <span className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>Acerte a conta antes que o tempo acabe ou você cai da nuvem. Clique na nuvem ou use 1, 2, 3 (ou as setas).</span>
+        <span className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>Acerte a conta antes que a nuvem ceda ao seu peso: ela afunda, treme e despenca se você demorar. Clique na nuvem ou use 1, 2, 3 (ou as setas).</span>
         <span className="ml-auto text-sm tabular-nums font-medium" style={{ color: 'var(--color-primary-text)' }}>
           {placar.pontos} nuvens · sequência {placar.sequencia} · recorde {placar.recorde}
         </span>
