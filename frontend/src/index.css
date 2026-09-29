@@ -19,18 +19,18 @@
    ════════════════════════════════════════════════════════════════════ */
 :root {
   /* ── Cor principal ── */
-  --color-primary: #00e5c0;
-  --color-primary-hover: #00cfae;
-  --color-on-primary: #04211d;
-  --color-primary-text: #007564;
-  --color-primary-bg: #ebfdf9;
-  --color-primary-light: rgba(0, 229, 192, 0.60);  /* anel de foco */
+  --color-primary: #cdeb00;
+  --color-primary-hover: #bcd800;
+  --color-on-primary: #19181a;
+  --color-primary-text: #5a6800;
+  --color-primary-bg: #f3ffc9;
+  --color-primary-light: rgba(205, 235, 0, 0.55);  /* anel de foco */
 
   /* ── Neutros ── */
-  --color-bg: #f7f8fa;
-  --color-surface: #fdfdfe;          /* não é branco puro */
-  --color-nav: #fdfdfe;
-  --color-nav-text: #5b6472;
+  --color-bg: #f4f5f2;
+  --color-surface: #fdfdfc;          /* não é branco puro */
+  --color-nav: #fdfdfc;
+  --color-nav-text: #5d5d5d;
   --color-nav-active: var(--color-primary-text);
   --color-nav-hover: #f1f4fa;
   --color-border: #e3e6ec;
@@ -68,20 +68,21 @@
 }
 
 .theme-dark {
-  --color-primary: #00e5c0;
-  --color-primary-hover: #2af0d0;
-  --color-on-primary: #04211d;
-  --color-primary-text: #00e5c0;      /* no escuro o texto já pode ser vivo */
-  --color-primary-bg: #06251f;
+  --color-primary: #cdeb00;
+  --color-primary-hover: #dbf53a;
+  --color-on-primary: #19181a;
+  --color-primary-text: #cdeb00;      /* no escuro o texto já pode ser vivo */
+  --color-primary-bg: #2f3126;
+  --color-primary-light: rgba(205, 235, 0, 0.45);
 
-  --color-bg: #0a0b0d;
-  --color-surface: #121418;
-  --color-nav: #121418;
-  --color-nav-text: #9aa3af;
-  --color-nav-hover: #0d0f12;
-  --color-border: #1e2229;
-  --color-text: #e8eaed;               /* nunca branco puro */
-  --color-text-secondary: #9aa3af;
+  --color-bg: #121212;
+  --color-surface: #19181a;
+  --color-nav: #161a18;
+  --color-nav-text: #a9ad9b;
+  --color-nav-hover: #222320;
+  --color-border: #2c2d29;
+  --color-text: #f4f5f2;               /* nunca branco puro */
+  --color-text-secondary: #a9ad9b;
 
   --color-success: #34c98a; --color-success-bg: #08251a; --color-success-border: #17492f;
   --color-danger:  #f0655f; --color-danger-bg:  #2a1315; --color-danger-border:  #5a2528;
@@ -118,7 +119,7 @@ body {
   background-color: var(--color-bg);
   color: var(--color-text);
   @apply antialiased;
-  font-family: 'Figtree', 'Inter', system-ui, sans-serif;
+  font-family: 'Manrope', 'Inter', system-ui, sans-serif;
   font-size: 14px;                 /* corpo: texto sem classe já sai no tamanho certo */
 }
 

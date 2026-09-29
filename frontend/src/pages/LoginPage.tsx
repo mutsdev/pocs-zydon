@@ -5,6 +5,7 @@ import { mitra, SIGN_IN_LINK_NOT_CLAIMED, takeSignInLinkOutcome } from '../lib/m
 import { Card, CardContent } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
+import LogoZydon from '../components/app/LogoZydon';
 
 const loginErrorMessages: Record<string, string> = {
   APP_ACCESS_REQUIRED: 'Você ainda não tem acesso a este aplicativo.',
@@ -205,9 +206,9 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
 
   return (
     <div className="min-h-screen grid grid-cols-1 lg:grid-cols-2" style={{ backgroundColor: 'var(--color-bg)' }}>
-      <div className="hidden lg:flex flex-col justify-between p-6" style={{ backgroundColor: 'var(--color-primary-bg)' }}>
+      <div className="hidden lg:flex flex-col justify-between p-6" style={{ backgroundColor: 'var(--color-nav)' }}>
         <div className="flex items-center gap-2">
-          <svg width="32" height="32" viewBox="0 0 28 28" aria-hidden="true"><rect width="28" height="28" rx="7" fill="var(--color-primary)" /><path d="M8 9h12l-12 10h12" stroke="var(--color-on-primary)" strokeWidth="2.6" fill="none" strokeLinecap="round" strokeLinejoin="round" /></svg>
+          <LogoZydon tamanho={32} />
           <span className="text-base font-semibold" style={{ color: 'var(--color-text)' }}>POCs Zydon</span>
         </div>
         <div className="flex flex-col gap-3 max-w-md">

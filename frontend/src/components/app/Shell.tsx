@@ -4,6 +4,7 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import { BarChart3, LayoutList, LogOut, Menu, PlusCircle, Users, X } from 'lucide-react'
 import { clearSession } from '../../lib/mitra-auth'
 import { useSessao } from '../../lib/sessao'
+import LogoZydon from './LogoZydon'
 
 const ITENS = [
   { para: '/novo', rotulo: 'Novo pedido', icone: PlusCircle },
@@ -15,10 +16,7 @@ const ITENS = [
 function Marca() {
   return (
     <div className="flex items-center gap-2 px-3 h-9">
-      <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
-        <rect width="28" height="28" rx="7" fill="var(--color-primary)" />
-        <path d="M8 9h12l-12 10h12" stroke="var(--color-on-primary)" strokeWidth="2.6" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
+      <LogoZydon tamanho={26} />
       <div className="leading-tight">
         <div className="text-sm font-semibold" style={{ color: 'var(--color-text)' }}>POCs Zydon</div>
         <div className="text-meta" style={{ color: 'var(--color-text-secondary)' }}>Portais de demonstração</div>

@@ -1,4 +1,5 @@
 export const SF = {
+  anexo_parte: '5fd9c4d2-60a1-4c64-8c24-ca1b57d29cca',
   curadoria_salvar: '61451fd2-3b69-4f59-bc82-44d54c79e773',
   executivo_ativo: 'b4c68cd0-872b-475c-bc5f-3f9b4bc3e099',
   executivo_salvar: 'd42bc07d-3506-49d9-9376-1220825e332a',
