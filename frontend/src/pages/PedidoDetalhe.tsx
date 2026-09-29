@@ -298,7 +298,7 @@ export default function PedidoDetalhe() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {pecasAtuais.map((x) => (
                 <div key={x.id} className="flex flex-col gap-2">
-                  {x.previa_base64 ? <img src={`data:image/png;base64,${x.previa_base64}`} alt={x.peca} className="w-full rounded-md" /> :
+                  {x.previa_base64 ? <img src={`data:${x.previa_base64.startsWith("iVBOR") ? "image/png" : "image/jpeg"};base64,${x.previa_base64}`} alt={x.peca} className="w-full rounded-md" /> :
                     <div className="h-32 rounded-md flex items-center justify-center" style={{ backgroundColor: 'var(--color-bg)' }}><ImageOff size={20} /></div>}
                   <div className="flex flex-wrap items-center gap-2 text-sm">
                     <span className="font-medium">{x.peca}</span>

@@ -2,6 +2,7 @@ import Select from '../ui/Select'
 import type { Executivo, Filtros } from '../../lib/mitra-api'
 import { OPCOES_STATUS } from '../../lib/formatos'
 import { PERIODOS } from '../../lib/periodo'
+import { useSessao } from '../../lib/sessao'
 
 interface Props {
   filtros: Filtros & { periodo: string }
@@ -11,12 +12,13 @@ interface Props {
 }
 
 export default function BarraFiltros({ filtros, mudar, executivos, segmentos }: Props) {
+  const { admin } = useSessao()
   return (
     <>
-      <div className="w-full sm:w-44">
+      {admin && <div className="w-full sm:w-44">
         <Select label="Executivo" value={filtros.executivo} onChange={(v) => mudar({ ...filtros, executivo: v })}
           options={[{ value: '', label: 'Todos' }, ...executivos.map((e) => ({ value: String(e.id), label: e.nome }))]} />
-      </div>
+      </div>}
       <div className="w-full sm:w-44">
         <Select label="Segmento" value={filtros.segmento} onChange={(v) => mudar({ ...filtros, segmento: v })}
           options={[{ value: '', label: 'Todos' }, ...segmentos.map((s) => ({ value: s, label: s }))]} />

@@ -3,12 +3,13 @@ import type { ReactNode } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { BarChart3, LayoutList, LogOut, Menu, PlusCircle, Users, X } from 'lucide-react'
 import { clearSession } from '../../lib/mitra-auth'
+import { useSessao } from '../../lib/sessao'
 
 const ITENS = [
   { para: '/novo', rotulo: 'Novo pedido', icone: PlusCircle },
   { para: '/pedidos', rotulo: 'Pedidos', icone: LayoutList },
   { para: '/relatorios', rotulo: 'Relatórios', icone: BarChart3 },
-  { para: '/executivos', rotulo: 'Executivos', icone: Users },
+  { para: '/executivos', rotulo: 'Executivos', icone: Users, admin: true },
 ]
 
 function Marca() {
@@ -28,11 +29,12 @@ function Marca() {
 
 function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
   const navegar = useNavigate()
+  const sessao = useSessao()
   return (
     <nav className="flex flex-col h-full w-60 p-3" style={{ backgroundColor: 'var(--color-nav)', borderRight: '1px solid var(--color-border)' }}>
       <Marca />
       <div className="flex flex-col gap-1 mt-4">
-        {ITENS.map(({ para, rotulo, icone: Icone }) => (
+        {ITENS.filter((i) => !('admin' in i) || sessao.admin).filter((i) => i.para !== '/novo' || sessao.executivo_id).map(({ para, rotulo, icone: Icone }) => (
           <NavLink
             key={para}
             to={para}
@@ -49,9 +51,13 @@ function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
           </NavLink>
         ))}
       </div>
+      <div className="mt-auto px-3 py-2 leading-tight">
+        <div className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>{sessao.executivo || sessao.email}</div>
+        <div className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>{sessao.admin ? 'Administrador' : 'Executivo'}</div>
+      </div>
       <button
         onClick={() => { clearSession(); navegar('/login', { replace: true }) }}
-        className="mt-auto flex items-center gap-2 h-9 px-3 rounded-md text-sm cursor-pointer"
+        className=" flex items-center gap-2 h-9 px-3 rounded-md text-sm cursor-pointer"
         style={{ color: 'var(--color-nav-text)' }}
       >
         <LogOut size={18} /> Sair

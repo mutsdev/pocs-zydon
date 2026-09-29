@@ -1,6 +1,4 @@
 export const SF = {
-  admin_assumir: 'aebfcbfe-444f-48b2-b152-0f978732093b',
-  admin_status: 'fbd565d0-feed-4ad6-8bb9-98ca8cb2071d',
   curadoria_salvar: '61451fd2-3b69-4f59-bc82-44d54c79e773',
   executivo_ativo: 'b4c68cd0-872b-475c-bc5f-3f9b4bc3e099',
   executivo_salvar: 'd42bc07d-3506-49d9-9376-1220825e332a',
@@ -13,6 +11,7 @@ export const SF = {
   pedidos_listar: '82a7ceb8-6096-4f2c-be44-e1bf8f7fce3f',
   relatorio_pocs: '1f40e96c-252d-48cc-8e30-bedc3569ab56',
   segmentos_listar: '24f264c9-8bbe-4f0b-bb03-b2b7941e6895',
+  sessao: 'b728c777-ac78-463f-96fa-264b97d12018',
 } as const
 
 export type SfNome = keyof typeof SF
