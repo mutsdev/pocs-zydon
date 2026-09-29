@@ -69,6 +69,7 @@ export default function PedidoDetalhe() {
   const [progresso, setProgresso] = useState<number | null>(null)
   const statusAnterior = useRef<string | null>(null)
   const entradaLogo = useRef<HTMLInputElement>(null)
+  const topo = useRef<HTMLDivElement>(null)
   const [progressoLogo, setProgressoLogo] = useState<number | null>(null)
 
   const carregar = useCallback(async (silencioso = false) => {
@@ -325,6 +326,7 @@ export default function PedidoDetalhe() {
           mensagem={eventos[0]?.mensagem || (pedido.status === 'criando' ? 'Um portal por vez; se houver outro na fila, este espera a vez.' : 'A tela se atualiza sozinha.')}
           desde={pedido.status === 'criando' ? (pedido.acao_desde || pedido.criacao_inicio) : (pedido.acao_desde || pedido.criado_em)} />
       )}
+      <div ref={topo} className="scroll-mt-6" />
       {pedido.status !== 'extraindo' && pedido.status !== 'criando' && ['gerando', 'regerando', 'aplicando'].includes(pedido.banners_situacao || '') && (
         <Espera titulo={pedido.execucao_acao === 'trocar_logo' ? 'Trocando a logo e refazendo os banners' : 'Gerando os banners de identidade visual'} mensagem={eventos[0]?.mensagem || 'A tela se atualiza sozinha quando terminar.'} desde={pedido.acao_desde || pedido.execucao_desde} />
       )}
@@ -489,6 +491,8 @@ export default function PedidoDetalhe() {
               <div className="w-full sm:w-96"><Input label="O que mudar nos banners" placeholder="Ex.: fundo mais claro, sem pessoas" value={feedback} onChange={(e) => setFeedback(e.target.value)} /></div>
               <Button variant="secondary" className="h-10" disabled={!!ocupado || pedido.em_execucao || gerandoBanners}
                 onClick={async () => {
+                  setPedido((atual) => (atual ? { ...atual, banners_situacao: 'regerando', acao_desde: new Date().toISOString() } : atual))
+                  topo.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
                   await executar('regerar', { acao: 'banner', acao_banner: 'regerar', feedback, pecas: pecasAtuais.map((x) => x.peca) }, 'Criando banners novos. O botão volta quando terminar.')
                   setPedido((atual) => (atual ? { ...atual, banners_situacao: 'regerando', em_execucao: true, acao_desde: new Date().toISOString() } : atual))
                 }}>
