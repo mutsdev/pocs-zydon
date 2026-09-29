@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { Atom, Sparkles } from 'lucide-react'
+import { SkipForward } from 'lucide-react'
+import PenduloTriplo from './PenduloTriplo'
 
-type Cena = 'caos' | 'galton'
+type Cena = 'pendulo' | 'caos' | 'galton'
+const CENAS: Cena[] = ['pendulo', 'caos', 'galton']
+const NOMES: Record<Cena, string> = { pendulo: 'pêndulo triplo', caos: 'caos dos pêndulos', galton: 'máquina de Galton' }
 
 interface Props { titulo: string; mensagem?: string | null; desde?: string | null }
 
@@ -168,16 +171,9 @@ function cenaGalton(ctx: CanvasRenderingContext2D, largura: number, altura: numb
   }
 }
 
-export default function Espera({ titulo, mensagem, desde }: Props) {
+function CenaCanvas({ cena }: { cena: 'caos' | 'galton' }) {
   const tela = useRef<HTMLCanvasElement>(null)
-  const [cena, setCena] = useState<Cena>('caos')
   const [info, setInfo] = useState({ legenda: '', extra: '' })
-  const [agora, setAgora] = useState(Date.now())
-
-  useEffect(() => {
-    const troca = window.setTimeout(() => setCena((c) => (c === 'caos' ? 'galton' : 'caos')), 40000)
-    return () => window.clearTimeout(troca)
-  }, [cena])
 
   useEffect(() => {
     const canvas = tela.current
@@ -196,14 +192,42 @@ export default function Espera({ titulo, mensagem, desde }: Props) {
     let pedido = 0
     const laco = () => {
       const r = desenhar()
-      if (quadro++ % 15 === 0) { setInfo(r); setAgora(Date.now()) }
+      if (quadro++ % 15 === 0) setInfo(r)
       pedido = requestAnimationFrame(laco)
     }
     pedido = requestAnimationFrame(laco)
     return () => cancelAnimationFrame(pedido)
   }, [cena])
 
-  const decorrido = desde ? Math.max(0, Math.round((agora - new Date(desde).getTime()) / 1000)) : null
+  return (
+    <>
+      <canvas ref={tela} className="w-full h-80 md:h-96 block" />
+      <div className="flex flex-wrap items-center gap-3 px-5 pb-5">
+        <span className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>{info.legenda}</span>
+        <span className="ml-auto text-sm tabular-nums font-medium" style={{ color: 'var(--color-primary-text)' }}>{info.extra}</span>
+      </div>
+    </>
+  )
+}
+
+function duracao(segundos: number) {
+  return segundos < 60 ? `${segundos} s` : `${Math.floor(segundos / 60)} min ${String(segundos % 60).padStart(2, '0')} s`
+}
+
+export default function Espera({ titulo, mensagem, desde }: Props) {
+  const [cena, setCena] = useState<Cena>('pendulo')
+  const [agora, setAgora] = useState(Date.now())
+  const montado = useRef(Date.now())
+
+  useEffect(() => {
+    const relogio = window.setInterval(() => setAgora(Date.now()), 1000)
+    return () => window.clearInterval(relogio)
+  }, [])
+
+  const inicio = desde ? new Date(desde).getTime() : NaN
+  const base = Number.isFinite(inicio) ? Math.min(inicio, montado.current) : montado.current
+  const decorrido = Math.max(0, Math.round((agora - base) / 1000))
+  const proxima = CENAS[(CENAS.indexOf(cena) + 1) % CENAS.length]
   return (
     <div className="flex flex-col gap-3 rounded-lg overflow-hidden" style={{ backgroundColor: 'var(--color-surface)', boxShadow: 'var(--shadow-card)' }}>
       <div className="flex flex-wrap items-center gap-3 px-5 pt-5">
@@ -214,22 +238,18 @@ export default function Espera({ titulo, mensagem, desde }: Props) {
           </span>
           <h2 className="text-base font-semibold">{titulo}</h2>
         </div>
-        {decorrido !== null && <span className="text-sm tabular-nums" style={{ color: 'var(--color-text-secondary)' }}>{decorrido < 60 ? `${decorrido} s` : `${Math.floor(decorrido / 60)} min ${decorrido % 60} s`}</span>}
+        <span className="text-sm tabular-nums" style={{ color: 'var(--color-text-secondary)' }}>{duracao(decorrido)}</span>
         <button
-          onClick={() => setCena((c) => (c === 'caos' ? 'galton' : 'caos'))}
+          onClick={() => setCena(proxima)}
+          title={`Próximo: ${NOMES[proxima]}`}
           className="ml-auto inline-flex items-center gap-2 h-9 px-3 rounded-md text-sm cursor-pointer"
           style={{ color: 'var(--color-primary-text)', backgroundColor: 'var(--color-primary-bg)' }}
         >
-          {cena === 'caos' ? <Sparkles size={16} /> : <Atom size={16} />}
-          {cena === 'caos' ? 'Ver a máquina de Galton' : 'Ver o caos dos pêndulos'}
+          <SkipForward size={16} /> Próximo
         </button>
       </div>
       {mensagem && <p className="px-5 text-sm" style={{ color: 'var(--color-text-secondary)' }}>{mensagem}</p>}
-      <canvas ref={tela} className="w-full h-80 md:h-96 block cursor-pointer" onClick={() => setCena((c) => (c === 'caos' ? 'galton' : 'caos'))} />
-      <div className="flex flex-wrap items-center gap-3 px-5 pb-5">
-        <span className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>{info.legenda}</span>
-        <span className="ml-auto text-sm tabular-nums font-medium" style={{ color: 'var(--color-primary-text)' }}>{info.extra}</span>
-      </div>
+      {cena === 'pendulo' ? <PenduloTriplo /> : <CenaCanvas key={cena} cena={cena} />}
     </div>
   )
 }

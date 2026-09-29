@@ -69,7 +69,6 @@ export default function NovoPedido() {
               {enviando ? <Loader2 size={16} className="animate-spin" /> : <Globe size={16} />}
               {progresso !== null ? `Enviando o arquivo… ${Math.round(progresso * 100)}%` : enviando ? 'Abrindo pedido…' : arquivo ? 'Ler o catálogo' : 'Buscar produtos'}
             </Button>
-            <span className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>A busca leva de 10 s a 1 min.</span>
           </div>
         </form>
       </Card>

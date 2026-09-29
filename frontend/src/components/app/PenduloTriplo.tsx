@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowLeft, ArrowRight } from 'lucide-react'
 
-interface Props { titulo: string; mensagem?: string | null }
-
 function cor(nome: string, reserva: string) {
   const v = getComputedStyle(document.documentElement).getPropertyValue(nome).trim()
   return v || reserva
@@ -13,7 +11,7 @@ interface Ponto { x: number; y: number; px: number; py: number }
 const ELOS = 3
 const PASSOS = 8
 
-export default function PenduloTriplo({ titulo, mensagem }: Props) {
+export default function PenduloTriplo() {
   const tela = useRef<HTMLCanvasElement>(null)
   const teclas = useRef({ esquerda: false, direita: false })
   const arrasto = useRef<number | null>(null)
@@ -171,18 +169,7 @@ export default function PenduloTriplo({ titulo, mensagem }: Props) {
   const segurar = (lado: 'esquerda' | 'direita', valor: boolean) => { teclas.current[lado] = valor }
 
   return (
-    <div className="flex flex-col gap-3 rounded-lg overflow-hidden" style={{ backgroundColor: 'var(--color-surface)', boxShadow: 'var(--shadow-card)' }}>
-      <div className="flex flex-wrap items-center gap-3 px-5 pt-5">
-        <div className="flex items-center gap-2">
-          <span className="relative flex h-2.5 w-2.5">
-            <span className="absolute inline-flex h-full w-full rounded-full opacity-75 animate-ping" style={{ backgroundColor: 'var(--color-primary)' }} />
-            <span className="relative inline-flex h-2.5 w-2.5 rounded-full" style={{ backgroundColor: 'var(--color-primary)' }} />
-          </span>
-          <h2 className="text-base font-semibold">{titulo}</h2>
-        </div>
-        <span className="ml-auto text-sm tabular-nums" style={{ color: 'var(--color-text-secondary)' }}>Recorde em pé: {recorde.toFixed(1)} s</span>
-      </div>
-      {mensagem && <p className="px-5 text-sm" style={{ color: 'var(--color-text-secondary)' }}>{mensagem}</p>}
+    <>
       <canvas
         ref={tela}
         className="w-full h-80 md:h-96 block cursor-grab touch-none"
@@ -195,7 +182,8 @@ export default function PenduloTriplo({ titulo, mensagem }: Props) {
         <span className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
           Pêndulo triplo: use as setas ← → do teclado (ou arraste) para mover o carrinho{equilibrio > 0 ? ` · ${equilibrio.toFixed(1)} s em pé` : ''}
         </span>
-        <div className="ml-auto flex gap-2 md:hidden">
+        <span className="ml-auto text-sm tabular-nums font-medium" style={{ color: 'var(--color-primary-text)' }}>Recorde em pé: {recorde.toFixed(1)} s</span>
+        <div className="flex gap-2 md:hidden">
           {(['esquerda', 'direita'] as const).map((lado) => (
             <button key={lado} className="h-10 w-10 inline-flex items-center justify-center rounded-md cursor-pointer" style={{ backgroundColor: 'var(--color-primary-bg)', color: 'var(--color-primary-text)' }}
               onPointerDown={() => segurar(lado, true)} onPointerUp={() => segurar(lado, false)} onPointerLeave={() => segurar(lado, false)} aria-label={lado === 'esquerda' ? 'Mover para a esquerda' : 'Mover para a direita'}>
@@ -204,6 +192,6 @@ export default function PenduloTriplo({ titulo, mensagem }: Props) {
           ))}
         </div>
       </div>
-    </div>
+    </>
   )
 }
