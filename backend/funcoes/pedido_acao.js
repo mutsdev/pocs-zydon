@@ -9,8 +9,14 @@ const PERMITIDAS = {
 };
 const ACOES_BANNER = ['dispensar', 'aplicar', 'regerar'];
 
-module.exports = async (event) => {
+__GUARDA__
+
+module.exports = async (event, context) => {
   const ev = (event && event.input) ? event.input : (event || {});
+  const mitra = createClient();
+  await mitra.init();
+  const g = await guarda(mitra, context);
+  if (!g.ok) return g;
   const pedidoId = String(ev.pedido_id || '').trim();
   const acao = String(ev.acao || '').trim();
   const faltando = [];
@@ -22,10 +28,10 @@ module.exports = async (event) => {
     return { ok: false, erro: 'ACAO_INVALIDA', acao_banner: ev.acao_banner || null };
   }
 
-  const mitra = createClient();
-  await mitra.init();
   const sql = async (q, p = {}) => (await mitra.sql.executeQuery(q, p)).rows || [];
-  const linhas = await sql(`SELECT status, portal_id, execucao_atual, execucao_desde FROM pedidos WHERE pedido_id = :p`, { p: pedidoId });
+  const linhas = await sql(`SELECT status, portal_id, execucao_atual, execucao_desde FROM pedidos
+    WHERE pedido_id = :p AND (CAST(:adm AS BOOLEAN) OR executivo_id = CAST(NULLIF(:ex, '') AS INTEGER))`,
+    { p: pedidoId, adm: String(g.sessao.admin), ex: g.sessao.executivo_id ? String(g.sessao.executivo_id) : '' });
   if (!linhas.length) return { ok: false, erro: 'PEDIDO_DESCONHECIDO', pedido_id: pedidoId };
   const pedido = linhas[0];
   if (!PERMITIDAS[acao].includes(pedido.status)) {

@@ -3,18 +3,25 @@ const { createClient } = require('@mitralab.io/functions-sdk');
 
 const COMMIT = '7b3d073427e47ecf660280920bfba23c3178834a';
 
+__GUARDA__
+
 module.exports = async (event, context) => {
   const ev = (event && event.input) ? event.input : (event || {});
   const texto = (v) => (v === undefined || v === null ? '' : String(v)).trim();
-  const campos = { executivo: texto(ev.executivo), cliente: texto(ev.cliente), site: texto(ev.site) };
+  const mitra = createClient();
+  await mitra.init();
+  const g = await guarda(mitra, context);
+  if (!g.ok) return g;
+  if (!g.sessao.executivo_id) {
+    return { ok: false, erro: 'EXECUTIVO_NAO_CADASTRADO', mensagem: 'Peça ao João Pedro para te cadastrar.', email: g.sessao.email };
+  }
+  const campos = { executivo: String(g.sessao.executivo_id), cliente: texto(ev.cliente), site: texto(ev.site) };
   const faltando = Object.keys(campos).filter((k) => !campos[k]);
   if (faltando.length) return { ok: false, erro: 'CAMPOS_FALTANDO', faltando };
   let site = campos.site;
   if (!/^https?:\/\//i.test(site)) site = `https://${site}`;
   try { new URL(site); } catch (e) { return { ok: false, erro: 'SITE_INVALIDO', site: campos.site }; }
 
-  const mitra = createClient();
-  await mitra.init();
   const sql = async (q, p = {}) => (await mitra.sql.executeQuery(q, p)).rows || [];
   const dml = (q, p = {}) => mitra.sql.executeDml([{ sql: q, parameters: p }]);
 
@@ -22,7 +29,7 @@ module.exports = async (event, context) => {
   if (!executivo.length) return { ok: false, erro: 'EXECUTIVO_DESCONHECIDO', executivo: campos.executivo };
 
   const segmento = texto(ev.segmento);
-  const usuario = (context && (context.userId || (context.user && context.user.id))) || null;
+  const usuario = String(context.userId);
   const numero = await sql(`INSERT INTO contador_pedidos (dia, ultimo) VALUES (CAST(now() AS DATE), 1)
     ON CONFLICT (dia) DO UPDATE SET ultimo = contador_pedidos.ultimo + 1 RETURNING ultimo, to_char(dia, 'YYYY-MM-DD') AS dia`);
   const pedidoId = `poc-${numero[0].dia}-${String(numero[0].ultimo).padStart(3, '0')}`;
