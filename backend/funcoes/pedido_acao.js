@@ -84,6 +84,22 @@ module.exports = async (event, context) => {
   const lista = await mitra.functionsAdmin.list({ size: 100 });
   const pipeline = (lista.content || lista.items || []).find((f) => f.name === 'pipeline_poc');
   if (!pipeline) return { ok: false, erro: 'PIPELINE_AUSENTE' };
-  const execucao = await mitra.functions.executeAsync(pipeline.id, entrada);
+  const criarDeVerdade = acao === 'criar' && !entrada.simular;
+  if (criarDeVerdade) {
+    const tomado = await sql(`UPDATE pedidos SET status = 'criando', criacao_inicio = now(),
+        curadoria_fim = COALESCE(curadoria_fim, now()), atualizado_em = now()
+      WHERE pedido_id = :p AND status = 'curadoria' AND portal_id IS NULL RETURNING pedido_id`, { p: pedidoId });
+    if (!tomado.length) return { ok: false, erro: 'STATUS_NAO_PERMITE', status: 'criando', acao };
+  }
+  let execucao;
+  try {
+    execucao = await mitra.functions.executeAsync(pipeline.id, entrada);
+  } catch (erro) {
+    if (criarDeVerdade) {
+      await mitra.sql.executeDml([{ sql: `UPDATE pedidos SET status = 'curadoria', criacao_inicio = NULL
+        WHERE pedido_id = :p AND status = 'criando' AND portal_id IS NULL`, parameters: { p: pedidoId } }]);
+    }
+    return { ok: false, erro: 'PIPELINE_AUSENTE', mensagem: String(erro && erro.message || erro) };
+  }
   return { ok: true, pedido_id: pedidoId, acao, execucao: execucao.id };
 };
