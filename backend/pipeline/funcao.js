@@ -264,9 +264,9 @@ async function criar(ev, execucao) {
   const antes = await lerPedido(pedidoId);
   if (antes.portal_id) return { ok: true, duplicado: true, portal_id: antes.portal_id, url: antes.portal_url };
   if (!simular) {
-    const tomado = await sql(`UPDATE pedidos SET status = 'criando', criacao_inicio = now(),
+    const tomado = await sql(`UPDATE pedidos SET status = 'criando', criacao_inicio = COALESCE(criacao_inicio, now()),
         curadoria_fim = COALESCE(curadoria_fim, now()), atualizado_em = now()
-      WHERE pedido_id = :p AND status = 'curadoria' AND portal_id IS NULL RETURNING pedido_id`, { p: pedidoId });
+      WHERE pedido_id = :p AND status IN ('curadoria', 'criando') AND portal_id IS NULL RETURNING pedido_id`, { p: pedidoId });
     if (!tomado.length) return { ok: true, ignorado: `pedido em ${antes.status}: nada a criar` };
   }
   await marcarExecucao(pedidoId, simular ? 'simular' : 'criar', execucao);
@@ -309,7 +309,20 @@ async function criar(ev, execucao) {
     } else if (saida.publicar_erro) {
       await registrar({ etapa: 'banners', mensagem: `peças não publicadas: ${saida.publicar_erro}`, nivel: 'aviso' });
     }
-    return { ok: true, portal_id: res.portal_id, url: res.url };
+    let aplicacao = null;
+    if (saida.publicadas && Object.keys(saida.publicadas).length) {
+      const escolhas = Object.fromEntries(Object.entries(saida.publicadas)
+        .filter(([, pub]) => pub && pub.file_id).map(([peca, pub]) => [peca, pub.file_id]));
+      await registrar({ etapa: 'banners', mensagem: 'aplicando os banners no portal automaticamente' });
+      try {
+        aplicacao = await banner({ pedido_id: pedidoId, acao_banner: 'aplicar', escolhas }, execucao);
+      } catch (erro) {
+        aplicacao = { ok: false, erro: erro.message };
+        await registrar({ etapa: 'banners', mensagem: `aplicação automática falhou: ${erro.message}`, nivel: 'erro' });
+        await dml(`UPDATE pedidos SET banners_situacao = 'falhou', execucao_atual = NULL WHERE pedido_id = :p`, { p: pedidoId });
+      }
+    }
+    return { ok: true, portal_id: res.portal_id, url: res.url, banners: aplicacao };
   } finally {
     await dml("UPDATE travas SET pedido_id = NULL, execucao_id = NULL WHERE nome = 'criacao_portal' AND pedido_id = :p",
       { p: pedidoId });
