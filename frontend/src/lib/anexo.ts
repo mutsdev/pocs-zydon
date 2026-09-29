@@ -19,7 +19,7 @@ function paraBase64(arquivo: File): Promise<string> {
   })
 }
 
-export async function enviarAnexo(pedidoId: string, arquivo: File, aoProgresso?: (fracao: number) => void) {
+export async function enviarAnexo(pedidoId: string, arquivo: File, aoProgresso?: (fracao: number) => void, extra: Record<string, unknown> = {}) {
   const conteudo = await paraBase64(arquivo)
   const total = Math.max(1, Math.ceil(conteudo.length / PARTE))
   for (let i = 0; i < total; i += 1) {
@@ -27,7 +27,7 @@ export async function enviarAnexo(pedidoId: string, arquivo: File, aoProgresso?:
     if (!r.length) throw new ErroApi('ANEXO_RECUSADO', 'O pedido não aceita anexo agora. Atualize a página e tente de novo.')
     aoProgresso?.((i + 1) / total)
   }
-  await acionar('pedido_acao', { pedido_id: pedidoId, acao: 'extrair', anexo_nome: arquivo.name, anexo_partes: total })
+  await acionar('pedido_acao', { ...extra, pedido_id: pedidoId, acao: 'extrair', anexo_nome: arquivo.name, anexo_partes: total })
 }
 
 export const ACEITOS_LOGO = '.png,.jpg,.jpeg,.svg,.webp'

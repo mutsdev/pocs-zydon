@@ -976,8 +976,9 @@ def completar_ate_o_alvo(itens, candidatos, motivos, categorias):
     alternando categoria do site para espalhar. Nunca com 'nao_e_produto'."""
     alvo = min(MAXIMO_PRODUTOS, len(candidatos))
     usados = {n for n, _ in itens}
+    curto = len(candidatos) <= MAXIMO_PRODUTOS
     sobra = [n for n in range(len(candidatos)) if n not in usados
-             and motivos.get(n, ("",))[0] in ("limite", "sem_motivo")]
+             and (curto or motivos.get(n, ("",))[0] in ("limite", "sem_motivo"))]
     ja = {}
     for n, _ in itens:
         chave = sem_acento(candidatos[n]["categoria"])

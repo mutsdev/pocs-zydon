@@ -5,7 +5,7 @@ const { createClient } = require('@mitralab.io/functions-sdk');
 
 const PERMITIDAS = {
   criar: ['curadoria'],
-  extrair: ['falhou', 'precisa_catalogo', 'aguardando_anexo'],
+  extrair: ['falhou', 'precisa_catalogo', 'aguardando_anexo', 'curadoria'],
   banner: ['curadoria', 'concluido'],
   trocar_logo: ['curadoria', 'concluido'],
   telufia: ['concluido'],
@@ -48,7 +48,22 @@ module.exports = async (event, context) => {
     && Date.now() - new Date(pedido.execucao_desde).getTime() < MARCA_EXPIRA_MS;
   if (marcaViva) return { ok: false, erro: 'EM_EXECUCAO', desde: pedido.execucao_desde };
 
+  if (acao === 'extrair' && pedido.portal_id) return { ok: false, erro: 'STATUS_NAO_PERMITE', status: 'concluido', acao };
   const entrada = { acao, pedido_id: pedidoId };
+  if (acao === 'extrair' && (ev.site !== undefined || ev.observacao !== undefined || ev.sem_anexo)) {
+    let novoSite = String(ev.site || '').trim();
+    if (novoSite && !/^https?:\/\//i.test(novoSite)) novoSite = `https://${novoSite}`;
+    if (novoSite) { try { new URL(novoSite); } catch (e) { return { ok: false, erro: 'SITE_INVALIDO', site: ev.site }; } }
+    await mitra.sql.executeDml([{ sql: `UPDATE pedidos SET
+        site = CASE WHEN CAST(:ts AS BOOLEAN) THEN NULLIF(:s, '') ELSE site END,
+        foco = CASE WHEN CAST(:to AS BOOLEAN) THEN NULLIF(:o, '') ELSE foco END,
+        anexo_nome = CASE WHEN CAST(:sa AS BOOLEAN) THEN NULL ELSE anexo_nome END,
+        atualizado_em = now() WHERE pedido_id = :p`,
+    parameters: { p: pedidoId, s: novoSite, ts: String(ev.site !== undefined), o: String(ev.observacao || '').trim().slice(0, 500),
+      to: String(ev.observacao !== undefined), sa: String(!!ev.sem_anexo && !ev.anexo_nome) } }]);
+    await mitra.sql.executeDml([{ sql: `INSERT INTO pedido_eventos (pedido_id, etapa, mensagem) VALUES (:p, 'pedido', :m)`,
+      parameters: { p: pedidoId, m: `busca refeita pelo usuário${novoSite ? ` · site: ${novoSite}` : ''}${ev.anexo_nome ? ` · anexo: ${ev.anexo_nome}` : ''}${ev.observacao ? ` · observação: ${String(ev.observacao).slice(0, 200)}` : ''}` } }]);
+  }
   if (acao === 'extrair' && ev.anexo_nome) {
     const total = Math.max(0, parseInt(ev.anexo_partes, 10) || 0);
     await mitra.sql.executeDml([{ sql: `DELETE FROM pedido_arquivos WHERE pedido_id = :p AND tipo = 'anexo'
@@ -99,7 +114,7 @@ module.exports = async (event, context) => {
   }
   if (acao === 'extrair') {
     const tomado = await sql(`UPDATE pedidos SET status = 'extraindo', erro = NULL, erro_codigo = NULL, atualizado_em = now()
-      WHERE pedido_id = :p AND status IN ('falhou', 'precisa_catalogo', 'aguardando_anexo') RETURNING pedido_id`, { p: pedidoId });
+      WHERE pedido_id = :p AND portal_id IS NULL AND status IN ('falhou', 'precisa_catalogo', 'aguardando_anexo', 'curadoria') RETURNING pedido_id`, { p: pedidoId });
     if (!tomado.length) return { ok: false, erro: 'STATUS_NAO_PERMITE', status: 'extraindo', acao };
   }
   let execucao;

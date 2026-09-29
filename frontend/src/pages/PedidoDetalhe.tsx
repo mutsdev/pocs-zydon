@@ -156,6 +156,29 @@ export default function PedidoDetalhe() {
     }
   }
 
+  async function refazerBusca(dados: { site: string; observacao: string; arquivo: File | null }) {
+    if (!dados.site.trim() && !dados.arquivo) { addToast('error', 'Informe um site ou anexe um catálogo.'); return false }
+    if (dados.arquivo) { const problema = validarArquivo(dados.arquivo); if (problema) { addToast('error', problema); return false } }
+    setOcupado('refazer')
+    setProgresso(dados.arquivo ? 0 : null)
+    const extra = { site: dados.site.trim(), observacao: dados.observacao.trim() }
+    try {
+      if (dados.arquivo) await enviarAnexo(id, dados.arquivo, setProgresso, extra)
+      else await acionar('pedido_acao', { pedido_id: id, acao: 'extrair', sem_anexo: true, ...extra })
+      setPedido((a) => (a ? { ...a, status: 'extraindo', site: extra.site, foco: extra.observacao, acao_desde: new Date().toISOString() } : a))
+      addToast('success', 'Nova busca iniciada.')
+      topo.current?.scrollIntoView({ behavior: 'smooth' })
+      await carregar(true)
+      return true
+    } catch (e) {
+      addToast('error', e instanceof ErroApi ? e.message : 'Não foi possível refazer a busca.')
+      return false
+    } finally {
+      setOcupado(null)
+      setProgresso(null)
+    }
+  }
+
   async function trocarLogo(novo: File | null) {
     if (!novo) return
     const problema = validarLogo(novo)
@@ -378,6 +401,10 @@ export default function PedidoDetalhe() {
             </div>
           </div>
         </Aviso>
+      )}
+      {['curadoria', 'precisa_catalogo', 'falhou'].includes(pedido.status) && !pedido.portal_id && !pedido.em_execucao && (
+        <RefazerBusca siteAtual={pedido.site || ''} observacaoAtual={pedido.foco || ''} ocupado={!!ocupado}
+          progresso={ocupado === 'refazer' ? progresso : null} aoRefazer={refazerBusca} />
       )}
       {pedido.status === 'aguardando_anexo' && !pedido.em_execucao && (
         <Aviso titulo="O anexo não terminou de chegar">
@@ -674,5 +701,50 @@ function CelulaVariacoes({ eixo, valores, sugerida, observacao, editavel, semGra
         </button>
       )}
     </div>
+  )
+}
+
+function RefazerBusca({ siteAtual, observacaoAtual, ocupado, progresso, aoRefazer }: {
+  siteAtual: string; observacaoAtual: string; ocupado: boolean; progresso: number | null
+  aoRefazer: (dados: { site: string; observacao: string; arquivo: File | null }) => Promise<boolean>
+}) {
+  const [aberto, setAberto] = useState(false)
+  const [site, setSite] = useState(siteAtual)
+  const [observacao, setObservacao] = useState(observacaoAtual)
+  const [arquivo, setArquivo] = useState<File | null>(null)
+  if (!aberto) {
+    return (
+      <div className="flex flex-wrap items-center gap-3">
+        <Button variant="secondary" disabled={ocupado} onClick={() => { setSite(siteAtual); setObservacao(observacaoAtual); setAberto(true) }}>
+          <RefreshCw size={16} /> Refazer a busca com outro site, PDF ou planilha
+        </Button>
+      </div>
+    )
+  }
+  return (
+    <Card className="p-5 flex flex-col gap-4 max-w-2xl">
+      <div className="flex flex-col gap-1">
+        <h2 className="text-base font-semibold">Refazer a busca</h2>
+        <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
+          Troque o site, anexe o catálogo ou ajuste a observação. A curadoria atual é substituída pelos produtos da nova busca.
+        </p>
+      </div>
+      <Input label="Site do cliente" placeholder={arquivo ? 'Opcional com anexo' : 'www.cliente.com.br'} value={site} onChange={(e) => setSite(e.target.value)} disabled={ocupado} />
+      <CampoAnexo arquivo={arquivo} onChange={setArquivo} rotulo="Catálogo do cliente (opcional)" desativado={ocupado} />
+      <label className="flex flex-col gap-1.5">
+        <span className="text-sm font-medium" style={{ color: 'var(--color-text-secondary)' }}>Observação (opcional)</span>
+        <textarea rows={3} maxLength={500} value={observacao} onChange={(e) => setObservacao(e.target.value)} disabled={ocupado}
+          placeholder="Ex.: só produtos femininos. Foco nas peças, não na bicicleta."
+          className="w-full rounded-lg border px-3 py-2 text-sm outline-none focus:ring-2"
+          style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-surface)', color: 'var(--color-text)' }} />
+      </label>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button disabled={ocupado || (!site.trim() && !arquivo)} onClick={async () => { if (await aoRefazer({ site, observacao, arquivo })) { setArquivo(null); setAberto(false) } }}>
+          {ocupado ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+          {progresso !== null ? `Enviando o arquivo… ${Math.round(progresso * 100)}%` : ocupado ? 'Iniciando…' : 'Refazer a busca'}
+        </Button>
+        <Button variant="ghost" disabled={ocupado} onClick={() => setAberto(false)}>Cancelar</Button>
+      </div>
+    </Card>
   )
 }

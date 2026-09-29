@@ -165,7 +165,7 @@ async function extrair(ev, execucao) {
   const pedidoId = ev.pedido_id;
   const registrar = registrador(pedidoId);
   const pedido = await lerPedido(pedidoId);
-  if (!['extraindo', 'falhou', 'precisa_catalogo', 'aguardando_anexo'].includes(pedido.status)) {
+  if (pedido.portal_id || !['extraindo', 'falhou', 'precisa_catalogo', 'aguardando_anexo', 'curadoria'].includes(pedido.status)) {
     return { ok: true, ignorado: `pedido já está em ${pedido.status}` };
   }
   await dml(`UPDATE pedidos SET status = 'extraindo', erro = NULL, erro_codigo = NULL, commit_codigo = :c, atualizado_em = now()
