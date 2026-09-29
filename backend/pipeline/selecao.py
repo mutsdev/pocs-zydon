@@ -1220,35 +1220,56 @@ MARKETPLACES = re.compile(
 CAPTCHA = re.compile(r"confirme seu acesso|captcha|are you a robot|access denied", re.I)
 
 
-TAVILY_ESGOTADO = {"sim": False}
+BARROSO_URL = "https://keys.barroso.tec.br/v1/responses"
+MODELO_BUSCA = "barroso-chat"
+BARROSO_FORA = {"sim": False}
+URL_NO_TEXTO = re.compile(r"https?://[^\s<>\"')\]]+")
 
 
-def buscar_tavily(consulta, limite=10):
-    """URLs da API de busca do Tavily (plano gratuito). Sem chave, cota esgotada ou erro, devolve [] e a busca segue pelo DuckDuckGo/Bing."""
+def buscar_barroso(consulta, limite=10):
+    """URLs achadas pela busca na web do gateway Barroso (modelo barroso-chat com a
+    ferramenta web_search). O modelo só devolve ENDEREÇOS; cada página é lida e conferida
+    depois, como qualquer resultado de busca. Sem chave ou com erro, devolve [] e a busca
+    segue pelo DuckDuckGo/Bing."""
     import requests
-    chave = os.environ.get("TAVILY_API_KEY", "").strip()
-    if not chave or TAVILY_ESGOTADO["sim"]:
+    chave = os.environ.get("BARROSO_API_KEY", "").strip()
+    if not chave or BARROSO_FORA["sim"]:
         return []
+    pedido = {"model": MODELO_BUSCA, "tools": [{"type": "web_search"}],
+              "input": (f"Pesquise na web: {consulta}\n"
+                        f"Responda SOMENTE com até {limite} URLs de páginas reais que apareceram na busca, "
+                        "uma por linha, sem comentários e sem parâmetros de rastreamento. "
+                        "Prefira páginas de lojas e sites de empresas brasileiras; nada de redes sociais, "
+                        "notícias, Wikipédia ou marketplaces.")}
     try:
-        r = requests.post("https://api.tavily.com/search",
-                          json={"query": consulta, "max_results": min(max(limite, 5), 20),
-                                "search_depth": "basic", "country": "brazil"},
-                          headers={"Authorization": "Bearer " + chave}, timeout=20)
+        r = requests.post(BARROSO_URL, json=pedido, headers={"Authorization": "Bearer " + chave}, timeout=120)
     except requests.RequestException as erro:
-        evento("extracao", "Tavily fora do ar (" + type(erro).__name__ + "); usando a busca comum", "aviso")
+        evento("extracao", "busca do gateway fora do ar (" + type(erro).__name__ + "); usando a busca comum", "aviso")
         return []
-    if r.status_code in (429, 432, 433):
-        TAVILY_ESGOTADO["sim"] = True
-        evento("extracao", "cota do Tavily esgotada; usando a busca comum ate o fim deste pedido", "aviso")
+    if r.status_code in (401, 402, 403, 429):
+        BARROSO_FORA["sim"] = True
+        evento("extracao", f"busca do gateway recusada (HTTP {r.status_code}); usando a busca comum até o fim deste pedido", "aviso")
         return []
     if r.status_code != 200:
-        evento("extracao", "Tavily respondeu HTTP " + str(r.status_code) + "; usando a busca comum", "aviso")
+        evento("extracao", f"busca do gateway respondeu HTTP {r.status_code}; usando a busca comum", "aviso")
         return []
+    try:
+        corpo = r.json() or {}
+    except ValueError:
+        return []
+    texto = corpo.get("output_text") or ""
+    if not texto:
+        for item in corpo.get("output") or []:
+            for parte in item.get("content") or []:
+                texto += (parte.get("text") or "") + "\n"
     urls = []
-    for item in (r.json() or {}).get("results") or []:
-        href = (item.get("url") or "").strip()
-        if href.startswith("http") and not MARKETPLACES.search(href) and href not in urls:
+    for href in URL_NO_TEXTO.findall(texto):
+        href = href.rstrip(".,;:")
+        if not MARKETPLACES.search(href) and not MERCADO_LIVRE.search(href) and href not in urls:
             urls.append(href)
+    custo = corpo.get("cost")
+    evento("extracao", f"busca na web pelo gateway ({MODELO_BUSCA}): {len(urls)} links para \"{consulta[:80]}\""
+           + (f", custo US$ {float(custo):.4f}" if isinstance(custo, (int, float)) else ""))
     return urls[:limite]
 
 
@@ -1367,9 +1388,9 @@ def variacoes_da_consulta(consulta):
 
 
 def buscar_na_web(consulta, limite=10):
-    """Tavily primeiro; sem resultado, DuckDuckGo; o Bing só entra quando ainda há menos de 3 links."""
+    """Gateway Barroso primeiro; sem resultado, DuckDuckGo; o Bing só entra quando ainda há menos de 3 links."""
     import time
-    urls = buscar_tavily(consulta, limite)
+    urls = buscar_barroso(consulta, limite)
     if len(urls) >= 3:
         return urls
     urls = buscar_duckduckgo(consulta, limite) or urls
