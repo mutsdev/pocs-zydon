@@ -64,6 +64,7 @@ const MENSAGENS: Record<string, string> = {
   LOGO_FORMATO: 'Envie a logo em PNG, JPG, SVG ou WEBP.',
   LOGO_RECUSADA: 'O pedido não aceita trocar a logo agora.',
   EXECUTIVO_NAO_CADASTRADO: 'Peça ao João Pedro para te cadastrar.',
+  SO_ADMIN: 'Só o administrador pode apagar pedidos.',
 }
 
 function mensagemDeErro(saida: Record<string, unknown>) {

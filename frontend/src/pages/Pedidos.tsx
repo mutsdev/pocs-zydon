@@ -1,14 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { ExternalLink, PlusCircle, RefreshCw, Search } from 'lucide-react'
+import { ExternalLink, PlusCircle, RefreshCw, Search, Trash2 } from 'lucide-react'
 import { Card } from '../components/ui/Card'
 import Badge from '../components/ui/Badge'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
+import ConfirmDialog from '../components/ui/ConfirmDialog'
+import { ToastContainer } from '../components/ui/Toast'
+import { useToast } from '../hooks/useToast'
+import { useSessao } from '../lib/sessao'
 import BarraFiltros from '../components/app/Filtros'
 import { Aviso, Esqueleto, Pagina, Vazio } from '../components/app/Pagina'
 import { useApoio } from '../hooks/useApoio'
-import { consultar, FILTROS_VAZIOS } from '../lib/mitra-api'
+import { acionar, consultar, ErroApi, FILTROS_VAZIOS } from '../lib/mitra-api'
 import type { PedidoLinha } from '../lib/mitra-api'
 import { dataHora, FONTE, PRECO, STATUS } from '../lib/formatos'
 import { intervalo } from '../lib/periodo'
@@ -18,6 +22,10 @@ const PAGINA = 30
 export default function Pedidos() {
   const { executivos, segmentos } = useApoio()
   const navegar = useNavigate()
+  const { admin } = useSessao()
+  const { toasts, addToast, removeToast } = useToast()
+  const [apagar, setApagar] = useState<PedidoLinha | null>(null)
+  const [apagando, setApagando] = useState(false)
   const [filtros, setFiltros] = useState({ ...FILTROS_VAZIOS, periodo: '' })
   const [busca, setBusca] = useState('')
   const [buscaAtiva, setBuscaAtiva] = useState('')
@@ -83,9 +91,29 @@ export default function Pedidos() {
     return () => obs.disconnect()
   }, [carregar, carregando, fim, linhas])
 
+  async function confirmarExclusao() {
+    if (!apagar) return
+    setApagando(true)
+    try {
+      await acionar('pedido_excluir', { pedido_id: apagar.pedido_id })
+      const alvo = apagar.pedido_id
+      setLinhas((atual) => (atual ? atual.filter((x) => x.pedido_id !== alvo) : atual))
+      addToast('success', `Pedido de ${apagar.cliente} apagado.`)
+      setApagar(null)
+    } catch (e) {
+      addToast('error', e instanceof ErroApi ? e.message : 'Não foi possível apagar o pedido.')
+    } finally {
+      setApagando(false)
+    }
+  }
+
   return (
     <Pagina titulo="Pedidos" subtitulo="Todos os portais de POC, do pedido ao link."
       acao={<Button onClick={() => navegar('/novo')}><PlusCircle size={16} /> Novo pedido</Button>}>
+      <ToastContainer toasts={toasts} onRemove={removeToast} />
+      <ConfirmDialog isOpen={!!apagar} onClose={() => !apagando && setApagar(null)} onConfirm={confirmarExclusao} loading={apagando}
+        title="Apagar pedido" confirmLabel="Apagar"
+        message={apagar ? `O pedido ${apagar.pedido_id} de ${apagar.cliente} será apagado junto com a linha do tempo, os anexos e os banners. O portal já criado na Zydon não é removido. Esta ação não pode ser desfeita.` : ''} />
       <div className="flex flex-wrap items-end gap-3">
         <div className="w-full sm:w-64">
           <Input label="Cliente" placeholder="Buscar cliente" value={busca} onChange={(e) => setBusca(e.target.value)} />
@@ -111,6 +139,7 @@ export default function Pedidos() {
                   <th className="px-3 py-3 font-medium">Preço</th>
                   <th className="px-3 py-3 font-medium">Status</th>
                   <th className="px-3 py-3 font-medium">Portal</th>
+                  {admin && <th className="px-3 py-3" />}
                 </tr>
               </thead>
               <tbody>
@@ -147,6 +176,15 @@ export default function Pedidos() {
                         </a>
                       ) : <Link to={`/pedidos/${p.pedido_id}`} className="text-sm cursor-pointer" style={{ color: 'var(--color-text-secondary)' }}>Ver</Link>}
                     </td>
+                    {admin && (
+                      <td className="px-3 py-3 text-right" onClick={(e) => e.stopPropagation()}>
+                        <button type="button" title="Apagar pedido" aria-label="Apagar pedido" onClick={() => setApagar(p)}
+                          className="inline-flex h-9 w-9 items-center justify-center rounded-md cursor-pointer transition-colors hover:bg-[var(--color-danger-bg)]"
+                          style={{ color: 'var(--color-danger)' }}>
+                          <Trash2 size={16} />
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>

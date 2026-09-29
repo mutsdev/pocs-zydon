@@ -8,6 +8,7 @@ export const SF = {
   pedido_abrir: '2958f983-0c43-4088-8423-ee45e3dce08c',
   pedido_acao: '30e3d129-e9c3-4e1a-ba3c-ef715ae8edcb',
   pedido_eventos: '09b33f93-24f3-4886-a981-39d563ad43ee',
+  pedido_excluir: '4923e2fd-136e-4b63-8b63-9b8d8dddaa75',
   pedido_ler: '8bbd20ec-6cab-4df9-b435-41ee125d6794',
   pedido_pecas: 'cc655493-6be9-4aeb-9a88-c760182f5c9a',
   pedidos_listar: '82a7ceb8-6096-4f2c-be44-e1bf8f7fce3f',

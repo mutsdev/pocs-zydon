@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useLocation, useParams } from 'react-router-dom'
-import { ArrowLeft, ExternalLink, FileText, FlaskConical, ImageOff, ImageUp, Loader2, RefreshCw, Rocket, Save, Wand2 } from 'lucide-react'
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
+import { ArrowLeft, ExternalLink, FileText, FlaskConical, ImageOff, ImageUp, Loader2, RefreshCw, Rocket, Save, Trash2, Wand2 } from 'lucide-react'
 import { Card } from '../components/ui/Card'
 import Badge from '../components/ui/Badge'
 import Button from '../components/ui/Button'
 import Checkbox from '../components/ui/Checkbox'
 import Input from '../components/ui/Input'
+import ConfirmDialog from '../components/ui/ConfirmDialog'
 import { ToastContainer } from '../components/ui/Toast'
 import { useToast } from '../hooks/useToast'
 import { Aviso, Esqueleto, Pagina } from '../components/app/Pagina'
@@ -54,6 +55,9 @@ export default function PedidoDetalhe() {
   const { id = '' } = useParams()
   const { toasts, addToast, removeToast } = useToast()
   const sessao = useSessao()
+  const navegar = useNavigate()
+  const [confirmarApagar, setConfirmarApagar] = useState(false)
+  const [apagando, setApagando] = useState(false)
   const [pedido, setPedido] = useState<Pedido | null>(null)
   const [eventos, setEventos] = useState<Evento[]>([])
   const [pecas, setPecas] = useState<Peca[]>([])
@@ -247,6 +251,18 @@ export default function PedidoDetalhe() {
     }
   }
 
+  async function apagarPedido() {
+    setApagando(true)
+    try {
+      await acionar('pedido_excluir', { pedido_id: id })
+      navegar('/pedidos', { replace: true })
+    } catch (e) {
+      setApagando(false)
+      setConfirmarApagar(false)
+      addToast('error', e instanceof ErroApi ? e.message : 'Não foi possível apagar o pedido.')
+    }
+  }
+
   if (erro && !pedido) return <Pagina titulo="Pedido"><Aviso tipo="danger" titulo={erro} /></Pagina>
   if (!pedido) return <Pagina titulo="Pedido"><Card><Esqueleto linhas={8} /></Card></Pagina>
 
@@ -258,8 +274,12 @@ export default function PedidoDetalhe() {
         <Button variant="secondary" onClick={() => carregar()} disabled={atualizando}>
           {atualizando ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />} Atualizar
         </Button>
+        {sessao.admin && <Button variant="danger" onClick={() => setConfirmarApagar(true)}><Trash2 size={16} /> Apagar</Button>}
       </>}>
       <ToastContainer toasts={toasts} onRemove={removeToast} />
+      <ConfirmDialog isOpen={confirmarApagar} onClose={() => !apagando && setConfirmarApagar(false)} onConfirm={apagarPedido} loading={apagando}
+        title="Apagar pedido" confirmLabel="Apagar"
+        message={`O pedido ${pedido.pedido_id} de ${pedido.cliente} será apagado junto com a linha do tempo, os anexos e os banners. O portal já criado na Zydon não é removido. Esta ação não pode ser desfeita.`} />
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
         <Card className="p-5 flex flex-col gap-2">
