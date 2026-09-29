@@ -19,8 +19,9 @@ export default function NovoPedido() {
   const { executivos } = useApoio()
   const [dono, setDono] = useState('')
   const opcoesDono = executivos
-    .filter((e) => e.ativo && e.id !== sessao.executivo_id)
-    .map((e) => ({ value: String(e.id), label: e.cargo ? `${e.nome} · ${e.cargo}` : e.nome }))
+    .filter((e) => e.ativo)
+    .map((e) => ({ value: e.id === sessao.executivo_id ? '' : String(e.id), label: e.id === sessao.executivo_id ? `${e.nome} · teste` : e.cargo ? `${e.nome} · ${e.cargo}` : e.nome }))
+    .sort((a, b) => (a.value === '' ? -1 : b.value === '' ? 1 : 0))
   const [cliente, setCliente] = useState('')
   const [site, setSite] = useState('')
   const [observacao, setObservacao] = useState('')
@@ -33,10 +34,6 @@ export default function NovoPedido() {
   async function enviar(ev: React.FormEvent) {
     ev.preventDefault()
     setErro(null)
-    if (sessao.admin && !dono) {
-      setErro('Escolha para qual usuário é o portal.')
-      return
-    }
     if (!cliente.trim() || (!site.trim() && !arquivo)) {
       setErro('Informe o cliente e o site, ou anexe o catálogo quando o cliente não tiver site.')
       return
@@ -46,7 +43,7 @@ export default function NovoPedido() {
     setEnviando(true)
     let pedidoId = ''
     try {
-      const r = await acionar('pedido_abrir', { ...(sessao.admin ? { executivo: dono } : {}), cliente: cliente.trim(), site: site.trim(), observacao: observacao.trim(), variacoes: variacoes === 'sim', anexo_nome: arquivo?.name || '' })
+      const r = await acionar('pedido_abrir', { ...(sessao.admin && dono ? { executivo: dono } : {}), cliente: cliente.trim(), site: site.trim(), observacao: observacao.trim(), variacoes: variacoes === 'sim', anexo_nome: arquivo?.name || '' })
       pedidoId = String(r.pedido_id)
       if (arquivo) {
         setProgresso(0)
@@ -69,9 +66,9 @@ export default function NovoPedido() {
         <form onSubmit={enviar} className="flex flex-col gap-4">
           {sessao.admin ? (
             <div className="flex flex-col gap-1.5">
-              <Select label="Para qual usuário é o portal" placeholder="Escolha o usuário" value={dono} onChange={setDono}
+              <Select label="Para qual usuário é o portal (opcional)" placeholder="Vazio = fica com você, para testes" value={dono} onChange={setDono}
                 options={opcoesDono} disabled={enviando} />
-              <span className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>O pedido fica com esse usuário, que passa a vê-lo na lista dele.</span>
+              <span className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>Se escolher alguém, o pedido fica com esse usuário, que passa a vê-lo na lista dele. Vazio, fica com você.</span>
             </div>
           ) : (
             <div className="flex flex-col gap-1.5">
