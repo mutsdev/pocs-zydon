@@ -235,7 +235,20 @@ def conferir_logo(logo):
         if caminho.suffix.lower() == ".svg":
             caminho = svg_para_png(caminho)
         limiares = mod_regua.carregar()
-        mod_logo.normalizar(caminho, {**limiares["logo"], **limiares.get("logo_portal", {})})
+        regua_logo = {**limiares["logo"], **limiares.get("logo_portal", {})}
+        try:
+            mod_logo.normalizar(caminho, regua_logo)
+        except Exception as erro:
+            if "pequena demais" not in str(erro):
+                raise
+            from PIL import Image
+            img = Image.open(caminho).convert("RGBA")
+            fator = max(2, -(-400 // max(img.size)))
+            img = img.resize((img.width * fator, img.height * fator), Image.LANCZOS)
+            caminho = caminho.with_name(caminho.stem + "_ampliada.png")
+            img.save(caminho, "PNG")
+            mod_logo.normalizar(caminho, regua_logo)
+            evento("extracao", f"logo pequena (foto de perfil) ampliada para {img.width}x{img.height}")
         return str(caminho), None
     except Exception as erro:
         return None, (f"a logo achada ({Path(str(logo)).name}) não foi usada: {type(erro).__name__}: {erro}")
@@ -447,6 +460,21 @@ def montar_catalogo(entrada):
     if foco:
         evento("extracao", f"foco do pedido: {foco}")
     validos, descartes, fonte_anexo = [], [], None
+    tipos_da_empresa = []
+    if site and re.search(r"instagram\.com/|facebook\.com/|linktr\.ee/", site):
+        evento("extracao", f"{site} é rede social: pesquisando no Google o site oficial e o que {cliente} vende")
+        descoberta = selecao.descobrir_empresa(cliente, site)
+        tipos_da_empresa = descoberta.get("tipos") or []
+        if descoberta.get("site_oficial"):
+            evento("extracao", f"site oficial achado no Google: {descoberta['site_oficial']}")
+            site = descoberta["site_oficial"]
+        else:
+            evento("extracao", "o Google não mostrou site oficial; buscando os produtos pela web")
+            site = ""
+        if tipos_da_empresa:
+            evento("extracao", "produtos que a empresa vende, segundo o Google: " + ", ".join(tipos_da_empresa))
+        if not segmento_informado and descoberta.get("segmento"):
+            segmento_informado = descoberta["segmento"]
     coleta = {"site": selecao.normalizar_site(site) if site else "", "plataforma": "nenhuma"}
     if entrada.get("anexo"):
         import anexo
@@ -497,6 +525,10 @@ def montar_catalogo(entrada):
             aprovados, descartes_nomeados = selecao.filtrar_candidatos(nomeados)
             validos += aprovados
             descartes += descartes_fotos + descartes_nomeados
+    if len(validos) < selecao.MINIMO_PRODUTOS and not tipos_da_empresa and not fonte_anexo:
+        tipos_da_empresa = selecao.descobrir_empresa(cliente, site).get("tipos") or []
+        if tipos_da_empresa:
+            evento("extracao", "produtos que a empresa vende, segundo o Google: " + ", ".join(tipos_da_empresa))
     if len(validos) < selecao.MINIMO_PRODUTOS or foco:
         evento("extracao", f"site com só {len(validos)} produtos: buscando na web produtos do mesmo tipo")
         categorias_site = []
@@ -509,7 +541,7 @@ def montar_catalogo(entrada):
         nomes_conhecidos = [v["nome"] for v in validos if v.get("nome_lido_na_imagem")] + [v["nome"] for v in validos]
         brutos = selecao.buscar_candidatos_web(cliente, segmento_informado, categorias_site,
                                                site or "https://sem-site.invalid/", nomes_conhecidos,
-                                               foco=foco)
+                                               foco=foco, tipos=tipos_da_empresa)
         if len(brutos) < selecao.MINIMO_PRODUTOS:
             brutos += selecao.buscar_candidatos(cliente, segmento_informado)
         achados, descartes_busca = selecao.filtrar_candidatos(brutos)

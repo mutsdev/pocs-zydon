@@ -1311,6 +1311,39 @@ def buscar_google_gemini(consulta, limite=12):
     return saida[:limite]
 
 
+PRODUTO_NA_URL = re.compile(r"/p$|/p/|/produto|/product|/dp/|MLB-?\d|\d{4,}|-[a-z0-9]+-[a-z0-9]+-[a-z0-9]+-[a-z0-9]+", re.I)
+NAO_E_PRODUTO = re.compile(r"(?i)/(blog|conta|login|carrinho|cart|checkout|categoria|category|busca|search|politica|"
+                           r"atendimento|institucional|ajuda|marca|marcas|lista)(/|$)|\.(css|js|png|jpe?g|svg|webp)$")
+
+
+def links_de_produto(url, chaves, limite=8):
+    """Página de categoria de loja (leroymerlin.com.br/lampadas-de-led): devolve links de
+    produto do mesmo site cujo endereço cite as palavras do tipo buscado."""
+    import requests
+    from urllib.parse import urljoin
+    try:
+        pagina = requests.get(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                              "AppleWebKit/537.36 Chrome/128 Safari/537.36"}, timeout=20).text
+    except requests.RequestException:
+        return []
+    host = urlparse(url).hostname or ""
+    saida = []
+    for href in re.findall(r'href="([^"#]+)"', pagina):
+        completo = urljoin(url, href).split("?")[0]
+        alvo = urlparse(completo)
+        caminho = sem_acento(alvo.path)
+        if (alvo.hostname or "").replace("www.", "") != host.replace("www.", "") and "mercadolivre" not in (alvo.hostname or ""):
+            continue
+        if completo in saida or completo.rstrip("/") == url.rstrip("/") or NAO_E_PRODUTO.search(alvo.path):
+            continue
+        if not PRODUTO_NA_URL.search(alvo.path) or not any(c in caminho for c in chaves):
+            continue
+        saida.append(completo)
+        if len(saida) >= limite:
+            break
+    return saida
+
+
 def links_da_marca(url, marca, limite=12):
     """Página de loja que lista vários produtos da marca (super.angeloni.com.br/bonfiore):
     devolve os links de produto que citam a marca no endereço."""
@@ -1345,12 +1378,15 @@ def assunto_dos_achados(achados, marca):
     return max(contagem.items(), key=lambda kv: kv[1])[0] if contagem else ""
 
 
-def buscar_candidatos_web(cliente, segmento, categorias, site, nomes=(), limite=24, foco=""):
+def buscar_candidatos_web(cliente, segmento, categorias, site, nomes=(), limite=24, foco="", tipos=()):
     """Busca na web por termos do próprio site. Página de outra marca vira candidato
     [busca]; o modelo marca do_cliente e o pedido fica com produtos_similares."""
     host = urlparse(normalizar_site(site)).hostname or ""
     pares, vistos = [], set()
     termos = termos_de_busca(cliente, segmento, categorias, nomes, foco)
+    if tipos and not foco:
+        termos = list(dict.fromkeys([f"{t} {cliente}" for t in tipos[:3]] + [f"{t} comprar" for t in tipos[:3]]
+                                    + termos))[:8]
     evento("extracao", "termos de busca: " + " · ".join(termos))
     for termo in termos:
         for url in buscar_na_web(termo):
@@ -1361,7 +1397,7 @@ def buscar_candidatos_web(cliente, segmento, categorias, site, nomes=(), limite=
     marca = [p for p in palavras_chave(cliente) if len(p) >= 4]
     achados, fora, lidas = [], 0, set()
 
-    def ler(lista):
+    def ler(lista, frouxo=False):
         nonlocal fora
         lista = [(u, t) for u, t in lista if u not in lidas]
         lidas.update(u for u, _ in lista)
@@ -1371,7 +1407,10 @@ def buscar_candidatos_web(cliente, segmento, categorias, site, nomes=(), limite=
         for (url, termo), r in zip(lista, registros):
             if not r:
                 continue
-            if not relevante(r["name"], termo, cliente, r.get("url") or url):
+            chaves_termo = [c[:5] for c in palavras_chave(termo) if c not in ("comprar",) and len(c) >= 3]
+            aceito = (any(c in sem_acento(r["name"]) for c in chaves_termo) if frouxo
+                      else relevante(r["name"], termo, cliente, r.get("url") or url))
+            if not aceito:
                 fora += 1
                 continue
             chave = (sem_acento(r["name"]), r.get("image"))
@@ -1382,6 +1421,16 @@ def buscar_candidatos_web(cliente, segmento, categorias, site, nomes=(), limite=
                                      r.get("description"), "busca"))
 
     ler(pares)
+    if len(achados) < 12 and tipos:
+        extras = []
+        for url, termo in pares[:12]:
+            chaves = [c[:5] for c in palavras_chave(termo) if c not in palavras_chave(cliente) and len(c) >= 3]
+            if chaves:
+                extras += [(link, termo) for link in links_de_produto(url, chaves) if host not in link]
+        extras = [e for e in dict.fromkeys(extras) if e[0] not in lidas]
+        if extras:
+            evento("extracao", f"busca na web: {len(extras)} produtos dentro de páginas de categoria das lojas")
+            ler(extras[:40], frouxo=True)
     if len(achados) < 12 and marca:
         listas = [(u, t) for u, t in pares if any(m in sem_acento(urlparse(u).path) for m in marca)]
         extras = []
@@ -1446,3 +1495,117 @@ def coletar_titulos_de_linha(base):
         if re.search(r"(?i)\blinha\b", t) and len(t) < 70 and not SECAO_INSTITUCIONAL.search(t):
             titulos.append(t)
     return titulos[:4]
+
+
+def descobrir_empresa(cliente, site=""):
+    """Instagram ou site sem catálogo: pergunta ao Google (via Gemini) qual é o site oficial
+    da empresa e que tipos de produto ela vende. Só ENDEREÇOS e TIPOS voltam; os produtos
+    continuam vindo das páginas lidas e conferidas. Sem chave ou com erro, devolve {}."""
+    import requests
+    chave = os.environ.get("GEMINI_API_KEY")
+    if not chave:
+        return {}
+    perfil = ""
+    m = re.search(r"instagram\.com/([A-Za-z0-9._]+)", site or "")
+    if m:
+        perfil = f" (Instagram @{m.group(1)})"
+    pergunta = (f"Pesquise no Google a empresa brasileira {cliente}{perfil}. "
+                "Responda SOMENTE um JSON: {\"site_oficial\": \"https://... ou vazio\", "
+                "\"tipos_de_produto\": [\"3 a 5 tipos de produto que ela vende, 2 a 4 palavras cada\"], "
+                "\"segmento\": \"ramo em poucas palavras\"}. site_oficial não pode ser rede social nem marketplace.")
+    pedido = {"contents": [{"role": "user", "parts": [{"text": pergunta}]}],
+              "tools": [{"google_search": {}}], "generationConfig": {"temperature": 0}}
+    for modelo in (MODELO_SELECAO,) + MODELOS_RESERVA:
+        try:
+            r = requests.post(GEMINI_URL.format(modelo=modelo), json=pedido,
+                              headers={"x-goog-api-key": chave}, timeout=90)
+        except requests.RequestException:
+            continue
+        if r.status_code != 200:
+            evento("extracao", f"descoberta da empresa via {modelo}: HTTP {r.status_code} {r.text[:200]}", "aviso")
+            continue
+        texto = " ".join(pt.get("text", "") for c in r.json().get("candidates") or []
+                         for pt in (c.get("content") or {}).get("parts") or [])
+        achado = re.search(r"\{.*\}", texto, re.S)
+        if not achado:
+            evento("extracao", f"descoberta da empresa via {modelo}: resposta sem JSON: {texto[:300]}", "aviso")
+            continue
+        try:
+            dados = json.loads(achado.group(0))
+        except ValueError:
+            continue
+        oficial = str(dados.get("site_oficial") or "").strip()
+        if oficial and (re.search(r"instagram|facebook|linktr|wa\.me|whatsapp|mercadolivre|shopee|amazon", oficial, re.I)
+                        or not oficial.startswith("http")):
+            oficial = ""
+        tipos = [str(t).strip() for t in dados.get("tipos_de_produto") or [] if str(t).strip()][:5]
+        evento("extracao", f"descoberta da empresa via {modelo}: {json.dumps(dados, ensure_ascii=False)[:400]}")
+        return {"site_oficial": oficial or _site_pelo_perfil(site, cliente), "tipos": tipos,
+                "segmento": str(dados.get("segmento") or "").strip()}
+    return _descobrir_sem_google(cliente, site)
+
+
+def _nome_no_instagram(site):
+    import requests
+    m = re.search(r"instagram\.com/([A-Za-z0-9._]+)", site or "")
+    if not m:
+        return ""
+    try:
+        r = requests.get(f"https://www.instagram.com/{m.group(1)}/",
+                         headers={"User-Agent": "facebookexternalhit/1.1"}, timeout=20)
+        t = re.search(r'<meta property="og:title" content="([^"]+)"', r.text)
+        return html.unescape(t.group(1)).split("(")[0].strip() if t else ""
+    except Exception:
+        return ""
+
+
+def _titulo_cita(pagina, cliente):
+    """O título ou o nome do site tem que trazer o nome do cliente inteiro (focoled.com é "Mundo Lucido")."""
+    partes = re.findall(r"<title[^>]*>([^<]*)|og:site_name\" content=\"([^\"]*)", pagina[:20000], re.I)
+    alvo = re.sub(r"[^a-z0-9]", "", sem_acento(" ".join(a + b for a, b in partes)))
+    nome = re.sub(r"[^a-z0-9]", "", sem_acento(cliente))
+    return bool(nome) and nome in alvo
+
+
+def _site_pelo_perfil(site, cliente=""):
+    """Domínios prováveis a partir do @ (focoledoficial -> focoled.com.br). Site em
+    manutenção ou sem página não conta."""
+    import requests
+    m = re.search(r"instagram\.com/([A-Za-z0-9._]+)", site or "")
+    if not m:
+        return ""
+    base = re.sub(r"[._]", "", m.group(1).lower())
+    raizes = list(dict.fromkeys([base, re.sub(r"(oficial|official|loja|store|br)$", "", base),
+                                 re.sub(r"^(loja|use|sou)", "", base)]))
+    for raiz in raizes:
+        for dominio in (f"{raiz}.com.br", f"www.{raiz}.com.br", f"{raiz}.com"):
+            try:
+                r = requests.get(f"https://{dominio}/", headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+            except Exception:
+                continue
+            if r.status_code == 200 and len(r.text) > 3000 and not re.search(
+                    r"(?i)manuten[cç][aã]o|em breve|coming soon|parked|domain for sale", r.text[:6000]) \
+                    and _titulo_cita(r.text, cliente or raiz):
+                evento("extracao", f"site achado pelo @ do perfil: {r.url}")
+                return r.url
+    return ""
+
+
+def _descobrir_sem_google(cliente, site):
+    """Cota do Google esgotada: a fila de IAs gratuitas diz que TIPOS de produto uma empresa
+    com esse nome e perfil vende. Só termos de busca; produto, foto e preço continuam vindo
+    das páginas lidas."""
+    nome = _nome_no_instagram(site)
+    oficial = _site_pelo_perfil(site, cliente)
+    pergunta = (f"Empresa brasileira: {cliente}. Nome no perfil: {nome or cliente}. Perfil: {site or '-'}. "
+                "Pelo nome, diga que tipos de produto ela provavelmente vende. Responda SOMENTE JSON: "
+                "{\"tipos_de_produto\": [\"3 a 5 tipos, 2 a 4 palavras cada, termos que um comprador "
+                "digitaria numa loja online\"], \"segmento\": \"ramo em poucas palavras\"}")
+    try:
+        dados, _ = _chamar_openrouter([{"role": "user", "content": pergunta}])
+    except Exception as erro:
+        evento("extracao", f"descoberta sem Google falhou: {type(erro).__name__}: {str(erro)[:200]}", "aviso")
+        return {"site_oficial": oficial, "tipos": [], "segmento": ""}
+    tipos = [str(t).strip() for t in (dados or {}).get("tipos_de_produto") or [] if str(t).strip()][:5]
+    evento("extracao", f"descoberta sem Google (fila de IAs): {', '.join(tipos) or 'nada'}")
+    return {"site_oficial": oficial, "tipos": tipos, "segmento": str((dados or {}).get("segmento") or "").strip()}
