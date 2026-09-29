@@ -230,7 +230,7 @@ def filtrar_candidatos(candidatos):
     descartes, vistos, antes = [], set(), []
     for c in candidatos:
         motivo = None
-        if not str(c.get("url") or "").startswith(("http://", "https://")):
+        if not str(c.get("url") or "").startswith(("http://", "https://", "anexo:")):
             motivo = "sem URL de origem"
         elif not str(c.get("imagem") or "").startswith(("http://", "https://")):
             motivo = "sem imagem da fonte"
@@ -417,7 +417,7 @@ def montar_pela_selecao(coleta, candidatos, escolha, cliente, segmento, descrica
     motivos = ler_descartes(escolha, candidatos, usados)
     completados = completar_ate_o_alvo(itens, candidatos, motivos, categorias)
     for n in completados:
-        do_cliente[n] = candidatos[n]["origem"] == "site"
+        do_cliente[n] = candidatos[n]["origem"] in ("site", "anexo")
         motivos.pop(n, None)
     descartes_modelo = [{"nome": candidatos[n]["nome"], "tipo": tipo, "motivo": f"modelo: {motivo}"}
                         for n, (tipo, motivo) in sorted(motivos.items())]
@@ -440,11 +440,15 @@ def montar_pela_selecao(coleta, candidatos, escolha, cliente, segmento, descrica
     for req, (n, ci) in zip(requisicoes, itens):
         c = candidatos[n]
         req["_origem_url"] = c["url"]
+        if c.get("file_id"):
+            req["_file_id"] = c["file_id"]
         entrada = {"sku": req["payload"]["sku"], "nome": req["payload"]["name"],
                    "origem_url": c["url"], "imagem": c["imagem"], "fonte": c["origem"],
-                   "do_cliente": do_cliente[n], "completado": n in completados}
+                   "do_cliente": do_cliente[n], "completado": n in completados,
+                   "nome_lido_na_imagem": bool(c.get("nome_lido_na_imagem"))}
         if not req.get("_preco_estimado"):
-            entrada.update(origem="publico", regra="lido na página do produto")
+            entrada.update(origem="publico", regra=("lido no anexo do cliente" if c["origem"] == "anexo"
+                                                   else "lido na página do produto"))
         elif publicos:
             entrada.update(origem="estimado",
                            regra=f"mediana dos {len(publicos)} preços públicos do mesmo site")
@@ -528,3 +532,281 @@ def situacao_preco(precos):
     if not precos or not any(p.get("preco") for p in precos):
         return "ausente"
     return "publico" if all(p["origem"] == "publico" for p in precos) else "estimado"
+
+
+NOME_DE_ARQUIVO = re.compile(r"^[\w\-. ]*\d{5,}[\w\-. ]*$|^(img|image|foto|dsc|whatsapp)[\w\-. ]*$", re.I)
+SECAO_INSTITUCIONAL = re.compile(
+    r"depoiment|avalia|quem|sobre|contato|encontre|pergunta|copyright|diferencia|endere", re.I)
+
+
+def coletar_fotos_sem_nome(base, limite=24):
+    """Fotos de produto sem nome útil (Acqua & Corte: carrossel "Linha de Discos
+    Diamantados" com fotos do Instagram "5555..._n.jpg"). Categoria = o título da
+    seção (h2) acima da foto. O nome só entra se for LIDO NA IMAGEM (nomear_pela_imagem)."""
+    import requests
+    from bs4 import BeautifulSoup
+    try:
+        pagina = requests.get(base, headers={"User-Agent": "Mozilla/5.0"}, timeout=20).text
+    except requests.RequestException:
+        return []
+    sopa = BeautifulSoup(pagina, "html.parser")
+    secao, fotos, vistas = "", [], set()
+    for el in sopa.find_all(["h2", "img"]):
+        if el.name == "h2":
+            titulo = limpar_texto(el.get_text(" ", strip=True))
+            if len(titulo) <= 60 or not secao:
+                secao = titulo[:80]
+            continue
+        src = el.get("data-src") or el.get("data-lazy-src") or el.get("src") or ""
+        src = urljoin(base, src.strip())
+        arquivo = src.split("?")[0].rsplit("/", 1)[-1]
+        alt = limpar_texto(el.get("alt"))
+        if (not src.startswith("http") or src in vistas or IMAGEM_NAO_E_PRODUTO.search(src)
+                or not secao or SECAO_INSTITUCIONAL.search(secao)):
+            continue
+        if alt and not NOME_DE_ARQUIVO.match(alt) and nome_valido(alt, base):
+            continue
+        if not NOME_DE_ARQUIVO.match(arquivo.rsplit(".", 1)[0]):
+            continue
+        vistas.add(src)
+        fotos.append(candidato("", base, src, None, secao, "", "site"))
+    evento("extracao", f"fotos sem nome no site: {len(fotos)}")
+    return fotos[:limite]
+
+
+INSTRUCAO_NOME_NA_IMAGEM = """Cada imagem abaixo é uma foto do site do cliente {cliente}, na seção "{secao}".
+Para cada uma, diga o NOME DO PRODUTO somente se ele estiver ESCRITO e legível na própria foto
+(embalagem, rótulo, etiqueta, texto do produto). Nunca invente: se não houver texto legível
+que nomeie o produto, devolva null. Foto de pessoa, ambiente, loja ou arte sem produto: null.
+Responda SOMENTE JSON: {{"itens": [{{"n": 0, "nome": "Disco Diamantado Omega C2 Turbo" ou null}}]}}"""
+
+
+def nomear_pela_imagem(fotos, cliente):
+    """(candidatos nomeados, descartes, custo). O modelo só transcreve o texto da foto."""
+    custo = {"custo_usd": 0.0, "tokens_entrada": 0, "tokens_saida": 0}
+    if not fotos:
+        return [], [], custo
+    secao = fotos[0].get("categoria") or ""
+    conteudo = [{"type": "text", "text": INSTRUCAO_NOME_NA_IMAGEM.format(cliente=cliente, secao=secao)}]
+    for n, f in enumerate(fotos):
+        conteudo += [{"type": "text", "text": f"Foto {n} (seção {f['categoria']}):"},
+                     {"type": "image_url", "image_url": {"url": f["imagem"]}}]
+    try:
+        resposta, custo = _chamar_openrouter([{"role": "user", "content": conteudo}])
+    except SemCreditoOpenRouter:
+        raise
+    except Exception as erro:
+        evento("extracao", f"leitura do nome nas fotos falhou: {erro}", "aviso")
+        return [], [{"nome": f["imagem"].rsplit("/", 1)[-1], "motivo": "foto sem nome e leitura falhou"}
+                    for f in fotos], custo
+    nomes = {}
+    for item in resposta.get("itens") or []:
+        try:
+            nomes[int(item.get("n"))] = limpar_texto(item.get("nome") or "")
+        except (TypeError, ValueError, AttributeError):
+            continue
+    nomeados, descartes = [], []
+    for n, f in enumerate(fotos):
+        nome = nomes.get(n) or ""
+        if nome and nome.lower() != "null" and nome_valido(nome, f["url"]):
+            nomeados.append(dict(f, nome=nome[:110], nome_lido_na_imagem=True,
+                                 descricao=f"{nome} — nome lido na foto do site."))
+        else:
+            descartes.append({"nome": f["imagem"].rsplit("/", 1)[-1][:60],
+                              "motivo": "foto sem nome legível na imagem"})
+    evento("extracao", f"nomes lidos nas fotos: {len(nomeados)} de {len(fotos)}")
+    return nomeados, descartes, custo
+
+
+MARKETPLACES = re.compile(
+    r"mercadolivre|mercadolibre|shopee|amazon\.|magazineluiza|magalu|americanas|aliexpress|"
+    r"casasbahia|submarino|olx\.|wikipedia|youtube|facebook|instagram|letras\.mus|reclameaqui|"
+    r"linkedin|tiktok|pinterest|google\.", re.I)
+CAPTCHA = re.compile(r"confirme seu acesso|captcha|are you a robot|access denied", re.I)
+
+
+def buscar_duckduckgo(consulta, limite=10):
+    """URLs orgânicas do DuckDuckGo HTML (Google/Bing devolvem página de bloqueio)."""
+    import requests
+    from urllib.parse import parse_qs, unquote
+    from bs4 import BeautifulSoup
+    try:
+        r = requests.get("https://html.duckduckgo.com/html/", params={"q": consulta, "kl": "br-pt"},
+                         headers={"User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                                                 "(KHTML, like Gecko) Chrome/128.0 Safari/537.36"),
+                                  "Referer": "https://html.duckduckgo.com/"}, timeout=20)
+    except requests.RequestException:
+        return []
+    urls = []
+    for a in BeautifulSoup(r.text, "html.parser").select("a.result__a"):
+        href = a.get("href") or ""
+        if "uddg=" in href:
+            href = unquote(parse_qs(urlparse(href).query).get("uddg", [""])[0])
+        if href.startswith("http") and not MARKETPLACES.search(href) and href not in urls:
+            urls.append(href)
+    return urls[:limite]
+
+
+def singular(texto):
+    """"Discos Diamantados" -> "disco diamantado"; "metais" -> "metal" (busca por produto, não categoria)."""
+    palavras = []
+    for p in sem_acento(texto).split():
+        if p.endswith("ais"):
+            p = p[:-3] + "al"
+        elif p.endswith("oes"):
+            p = p[:-3] + "ao"
+        elif len(p) > 3 and p.endswith("s") and not p.endswith("ss"):
+            p = p[:-1]
+        palavras.append(p)
+    return " ".join(palavras)
+
+
+def buscar_bing(consulta, limite=10):
+    """URLs orgânicas do Bing Brasil; o link vem em /ck/a?u=a1<base64 do destino>."""
+    import base64
+    import requests
+    from urllib.parse import parse_qs
+    from bs4 import BeautifulSoup
+    try:
+        r = requests.get("https://www.bing.com/search",
+                         params={"q": consulta, "setlang": "pt-br", "cc": "br"},
+                         headers={"User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                                                 "(KHTML, like Gecko) Chrome/128.0 Safari/537.36"),
+                                  "Accept-Language": "pt-BR,pt;q=0.9"}, timeout=20)
+    except requests.RequestException:
+        return []
+    urls = []
+    for a in BeautifulSoup(r.text, "html.parser").select("li.b_algo h2 a"):
+        href = a.get("href") or ""
+        destino = parse_qs(urlparse(href).query).get("u", [""])[0]
+        if destino.startswith("a1"):
+            b = destino[2:] + "=" * (-len(destino[2:]) % 4)
+            try:
+                href = base64.urlsafe_b64decode(b).decode("utf-8", "ignore")
+            except ValueError:
+                continue
+        href = href.split("?msockid")[0]
+        if href.startswith("http") and not MARKETPLACES.search(href) and href not in urls:
+            urls.append(href)
+    return urls[:limite]
+
+
+def variacoes_da_consulta(consulta):
+    """O Bing às vezes responde a um termo com 1 ou 2 links fora do assunto ("disco
+    diamantado" -> loja de vinil). Variações: sem "comprar", com "de corte"/"preço"."""
+    base = re.sub(r"\s+comprar$", "", consulta).strip()
+    palavras = base.split()
+    saida = [consulta, f"{base} preço", f"{base} loja"]
+    if len(palavras) >= 2:
+        saida.append(f"{palavras[0]} de corte {' '.join(palavras[1:])}")
+    return saida
+
+
+def buscar_na_web(consulta, limite=10):
+    import time
+    melhor = []
+    for variacao in variacoes_da_consulta(consulta):
+        urls = buscar_bing(variacao, limite)
+        if len(urls) > len(melhor):
+            melhor = urls
+        if len(urls) >= 3:
+            return urls
+        time.sleep(0.5)
+    return melhor if len(melhor) >= 3 else (buscar_duckduckgo(consulta, limite) or melhor)
+
+
+PALAVRAS_VAZIAS = {"preco", "comprar", "produto", "produtos", "linha", "nossa", "conheca", "tambem",
+                   "para", "com", "sem", "de", "da", "do", "das", "dos", "e", "em", "a", "o"}
+
+
+def palavras_chave(texto):
+    return [p for p in re.findall(r"[a-z0-9]+", singular(texto)) if len(p) >= 3 and p not in PALAVRAS_VAZIAS]
+
+
+def termos_de_busca(cliente, segmento, categorias, nomes=()):
+    """Termos específicos: nomes de produto já conhecidos (lidos no site ou na foto)
+    e linhas do site com duas palavras ou mais ("disco diamantado"). Palavra solta
+    ("metal") traz enciclopédia, então fica de fora."""
+    termos = []
+    for n in list(nomes)[:3]:
+        chave = " ".join(palavras_chave(n)[:5])
+        if len(chave.split()) >= 2:
+            termos.append(f"{chave} comprar")
+    for c in categorias:
+        c = re.sub(r"(?i)^(linha de|conheça também nossa linha de|nossa linha de)\s+", "", c or "").strip()
+        chave = " ".join(palavras_chave(c)[:4])
+        if len(chave.split()) >= 2 and not SECAO_INSTITUCIONAL.search(c):
+            termos.append(f"{chave} comprar")
+    if segmento and len(palavras_chave(segmento)) >= 2:
+        termos.append(f"{' '.join(palavras_chave(segmento)[:4])} comprar")
+    termos.append(f"{cliente} produtos")
+    vistos, saida = set(), []
+    for t in termos:
+        if sem_acento(t) not in vistos:
+            vistos.add(sem_acento(t))
+            saida.append(t)
+    return saida[:5]
+
+
+def relevante(nome, termo, cliente, url=""):
+    """A página achada só vale se o nome do produto repete palavras do termo buscado;
+    no termo com o nome do cliente, o nome ou o endereço tem que citar o cliente."""
+    if sem_acento(cliente) in sem_acento(termo):
+        marca = [p for p in palavras_chave(cliente) if len(p) >= 4]
+        alvo = sem_acento(nome) + " " + sem_acento(url)
+        return bool(marca) and any(p in alvo for p in marca)
+    chaves = set(palavras_chave(termo))
+    comuns = chaves & set(palavras_chave(nome))
+    return len(comuns) >= min(2, len(chaves - {"corte", "loja"}))
+
+
+def _ler_pagina_busca(url):
+    registro = _ler_pagina(url)
+    if not registro or CAPTCHA.search(registro.get("name") or "") or CAPTCHA.search(registro.get("description") or ""):
+        return None
+    return registro
+
+
+def buscar_candidatos_web(cliente, segmento, categorias, site, nomes=(), limite=24):
+    """Busca na web por termos do próprio site. Página de outra marca vira candidato
+    [busca]; o modelo marca do_cliente e o pedido fica com produtos_similares."""
+    host = urlparse(normalizar_site(site)).hostname or ""
+    pares, vistos = [], set()
+    termos = termos_de_busca(cliente, segmento, categorias, nomes)
+    evento("extracao", "termos de busca: " + " · ".join(termos))
+    for termo in termos:
+        for url in buscar_na_web(termo):
+            if url not in vistos and host not in url:
+                vistos.add(url)
+                pares.append((url, termo))
+    pares = pares[:limite]
+    with ThreadPoolExecutor(8) as pool:
+        registros = list(pool.map(_ler_pagina_busca, [u for u, _ in pares]))
+    achados, fora = [], 0
+    for (url, termo), r in zip(pares, registros):
+        if not r:
+            continue
+        if not relevante(r["name"], termo, cliente, r.get("url") or url):
+            fora += 1
+            continue
+        achados.append(candidato(r["name"], r["url"], r["image"], r.get("price"), r.get("category"),
+                                 r.get("description"), "busca"))
+    evento("extracao", f"busca na web: {len(achados)} produtos em {len(pares)} páginas "
+                       f"({fora} páginas fora do assunto descartadas)")
+    return achados
+
+
+def coletar_titulos_de_linha(base):
+    """Títulos de seção que nomeiam linhas de produto ("Linha de Discos Diamantados")."""
+    import requests
+    from bs4 import BeautifulSoup
+    try:
+        pagina = requests.get(base, headers={"User-Agent": "Mozilla/5.0"}, timeout=20).text
+    except requests.RequestException:
+        return []
+    titulos = []
+    for h in BeautifulSoup(pagina, "html.parser").find_all(["h2", "h3"]):
+        t = limpar_texto(h.get_text(" ", strip=True))
+        if re.search(r"(?i)\blinha\b", t) and len(t) < 70 and not SECAO_INSTITUCIONAL.search(t):
+            titulos.append(t)
+    return titulos[:4]

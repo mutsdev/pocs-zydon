@@ -199,17 +199,34 @@ def _logo_pelo_arquivo(soup, base):
 
 def montar_catalogo(entrada):
     """Coleta, filtra, seleciona por IA e monta. Levanta PrecisaCatalogo."""
-    cliente, site = entrada["cliente"], entrada["site"]
+    cliente, site = entrada["cliente"], str(entrada.get("site") or "").strip()
     segmento_informado = str(entrada.get("segmento") or "").strip()
-    evento("extracao", f"lendo {site}")
-    try:
-        coleta, candidatos = selecao.coletar_candidatos(site)
-    except Exception as erro:
-        coleta, candidatos = {"site": selecao.normalizar_site(site), "plataforma": "nenhuma"}, []
-        evento("extracao", f"coleta no site falhou: {type(erro).__name__}: {erro}", "aviso")
-    validos, descartes = selecao.filtrar_candidatos(candidatos)
-    evento("extracao", f"{len(validos)} candidatos válidos no site, {len(descartes)} descartados")
-    if len(validos) < selecao.MAXIMO_PRODUTOS:
+    validos, descartes, fonte_anexo = [], [], None
+    coleta = {"site": selecao.normalizar_site(site) if site else "", "plataforma": "nenhuma"}
+    if entrada.get("anexo"):
+        import anexo
+        evento("extracao", f"lendo o anexo {entrada['anexo']['nome']}")
+        fonte_anexo, do_anexo, descartes_anexo = anexo.candidatos_do_anexo(
+            entrada["anexo"]["nome"], entrada["anexo"]["conteudo_base64"])
+        validos, descartes_filtro = selecao.filtrar_candidatos(do_anexo)
+        descartes += descartes_anexo + descartes_filtro
+        coleta["plataforma"] = fonte_anexo
+        evento("extracao", f"anexo: {len(validos)} produtos válidos")
+    if site and len(validos) < selecao.MAXIMO_PRODUTOS:
+        evento("extracao", f"lendo {site}")
+        try:
+            coleta_site, candidatos = selecao.coletar_candidatos(site)
+            if not fonte_anexo:
+                coleta = coleta_site
+        except Exception as erro:
+            candidatos = []
+            evento("extracao", f"coleta no site falhou: {type(erro).__name__}: {erro}", "aviso")
+        do_site, descartes_site = selecao.filtrar_candidatos(candidatos)
+        vistos = {selecao.sem_acento(v["nome"]) for v in validos}
+        validos += [v for v in do_site if selecao.sem_acento(v["nome"]) not in vistos]
+        descartes += descartes_site
+        evento("extracao", f"{len(do_site)} candidatos válidos no site, {len(descartes_site)} descartados")
+    if site and len(validos) < selecao.MAXIMO_PRODUTOS:
         secoes, descartes_secoes = selecao.filtrar_candidatos(
             selecao.coletar_secoes(selecao.normalizar_site(site)))
         vistos = {v["imagem"] for v in validos} | {selecao.sem_acento(v["nome"]) for v in validos}
@@ -220,23 +237,54 @@ def montar_catalogo(entrada):
             descartes += descartes_secoes
             if coleta.get("plataforma") in (None, "nenhuma"):
                 coleta["plataforma"] = "secoes"
-    if len(validos) < selecao.MINIMO_PRODUTOS:
-        evento("extracao", "site sem catálogo suficiente: buscando na web")
-        achados, descartes_busca = selecao.filtrar_candidatos(
-            selecao.buscar_candidatos(cliente, segmento_informado))
-        vistos = {v["imagem"] for v in validos}
-        validos += [a for a in achados if a["imagem"] not in vistos]
-        descartes += descartes_busca
-    validos = validos[:selecao.MAXIMO_CANDIDATOS]
     custo = {"modelo": selecao.MODELO_SELECAO, "custo_usd": 0.0, "tokens_entrada": 0,
              "tokens_saida": 0, "com_imagens": False}
+    if site and len(validos) < selecao.MAXIMO_PRODUTOS:
+        fotos = selecao.coletar_fotos_sem_nome(selecao.normalizar_site(site))
+        vistos = {v["imagem"] for v in validos}
+        fotos = [f for f in fotos if f["imagem"] not in vistos]
+        if fotos:
+            evento("extracao", f"lendo o nome do produto em {len(fotos)} fotos sem nome do site")
+            nomeados, descartes_fotos, custo_fotos = selecao.nomear_pela_imagem(fotos, cliente)
+            for k in ("custo_usd", "tokens_entrada", "tokens_saida"):
+                custo[k] += custo_fotos.get(k) or 0
+            aprovados, descartes_nomeados = selecao.filtrar_candidatos(nomeados)
+            validos += aprovados
+            descartes += descartes_fotos + descartes_nomeados
+    if len(validos) < selecao.MINIMO_PRODUTOS:
+        evento("extracao", f"site com só {len(validos)} produtos: buscando na web produtos do mesmo tipo")
+        categorias_site = []
+        for v in validos:
+            if v.get("categoria") and v["categoria"] not in categorias_site:
+                categorias_site.append(v["categoria"])
+        for secao in (selecao.coletar_titulos_de_linha(selecao.normalizar_site(site)) if site else []):
+            if secao not in categorias_site:
+                categorias_site.append(secao)
+        nomes_conhecidos = [v["nome"] for v in validos if v.get("nome_lido_na_imagem")] + [v["nome"] for v in validos]
+        brutos = selecao.buscar_candidatos_web(cliente, segmento_informado, categorias_site,
+                                               site or "https://sem-site.invalid/", nomes_conhecidos)
+        if len(brutos) < selecao.MINIMO_PRODUTOS:
+            brutos += selecao.buscar_candidatos(cliente, segmento_informado)
+        achados, descartes_busca = selecao.filtrar_candidatos(brutos)
+        vistos = {v["imagem"] for v in validos} | {selecao.sem_acento(v["nome"]) for v in validos}
+        validos += [a for a in achados if a["imagem"] not in vistos
+                    and selecao.sem_acento(a["nome"]) not in vistos]
+        descartes += descartes_busca
+    validos = validos[:selecao.MAXIMO_CANDIDATOS]
     if len(validos) < selecao.MINIMO_PRODUTOS:
         raise selecao.PrecisaCatalogo(
-            f"só {len(validos)} produtos com URL de origem e imagem válida no site e na busca "
-            f"(mínimo {selecao.MINIMO_PRODUTOS}); mande o catálogo em PDF ou planilha",
+            f"só {len(validos)} produtos com URL de origem e imagem válida "
+            f"{'no anexo, ' if fonte_anexo else ''}no site e na busca "
+            f"(mínimo {selecao.MINIMO_PRODUTOS}); "
+            + ("o anexo precisa ter nome e foto de cada produto; mande outro PDF ou planilha"
+               if fonte_anexo else "mande o catálogo em PDF ou planilha"),
             {"custo": custo, "descartes": descartes})
     evento("extracao", f"{selecao.MODELO_SELECAO} escolhendo entre {len(validos)} candidatos")
-    escolha, custo = selecao.selecionar(validos, cliente, site, segmento_informado)
+    escolha, custo_selecao = selecao.selecionar(validos, cliente, site or f"anexo {fonte_anexo}",
+                                                segmento_informado)
+    for k in ("custo_usd", "tokens_entrada", "tokens_saida"):
+        custo_selecao[k] = (custo_selecao.get(k) or 0) + (custo.get(k) or 0)
+    custo = custo_selecao
     evento("extracao", f"seleção: {len(escolha.get('selecionados') or [])} produtos, "
                        f"custo US$ {custo['custo_usd']:.4f}")
     segmento_modelo = str(escolha.get("segmento") or "").strip()
@@ -253,7 +301,9 @@ def montar_catalogo(entrada):
             "regra_preco": regra_preco, "candidatos": validos,
             "custo": custo, "descartes": descartes, "segmento_modelo": segmento_modelo,
             "candidatos_validos": len(validos),
-            "fonte": "busca" if any(p["fonte"] == "busca" for p in precos) else "site"}
+            "nomes_lidos_na_imagem": sum(1 for p in precos if p.get("nome_lido_na_imagem")),
+            "fonte": (("pdf" if fonte_anexo == "pdf" else "planilha") if any(p["fonte"] == "anexo" for p in precos)
+                      else "busca" if any(p["fonte"] == "busca" for p in precos) else "site")}
 
 
 def extrair(entrada):
@@ -288,18 +338,22 @@ def extrair(entrada):
     if estimados:
         observacoes.append(f"{estimados} de {len(precos)} preços são ESTIMADOS (sem preço na página); "
                            f"{montado['regra_preco']}")
+    if montado.get("nomes_lidos_na_imagem"):
+        observacoes.append(f"{montado['nomes_lidos_na_imagem']} nomes de produto foram LIDOS NA FOTO do site "
+                           "(o site não tinha o nome em texto); confira na curadoria")
     if montado["similares"]:
         observacoes.append("há produtos SIMILARES achados na busca que NÃO são da marca do cliente")
         evento("extracao", "produtos similares de outras marcas no catálogo", "aviso")
 
-    logo_url = _logo_da_home(entrada["site"])
+    logo_url = _logo_da_home(entrada["site"]) if entrada.get("site") else None
     logo = atendimento.baixar_logo(logo_url, atendimento.prefixo(caminho.name)) if logo_url else None
     logo, aviso_logo = conferir_logo(logo)
     if aviso_logo:
         observacoes.append(aviso_logo)
         evento("extracao", aviso_logo, "aviso")
     if not logo:
-        observacoes.append("nenhuma logo identificável foi encontrada no site")
+        observacoes.append("nenhuma logo identificável foi encontrada no site" if entrada.get("site")
+                           else "pedido sem site: sem logo, portal sai sem banner de identidade")
         logo_url = None
 
     categorias = next(e for e in catalogo["etapas"] if e.get("endpoint") == "categories")["requests"]
@@ -311,6 +365,7 @@ def extrair(entrada):
               "modelo": montado["custo"]["modelo"], "custo_usd": montado["custo"]["custo_usd"],
               "tokens": montado["custo"]["tokens_entrada"] + montado["custo"]["tokens_saida"],
               "candidatos_validos": montado["candidatos_validos"],
+              "nomes_lidos_na_imagem": montado.get("nomes_lidos_na_imagem", 0),
               "descartes": montado["descartes"][:80],
               "observacoes": " · ".join(observacoes)}
     saida = {"catalogo": catalogo, "resumo": resumo, "logo_url": logo_url,
@@ -464,12 +519,27 @@ def previa(entrada):
             "banners_tar": empacotar(gerada), "gerador": str(saida)[-1500:]}
 
 
+def renovar_imagens_do_anexo(catalogo):
+    """Imagem tirada do anexo mora em resource-files com URL assinada de ~2h:
+    pede URL nova pelo file_id antes de criar o portal."""
+    pedidos = [r for e in catalogo.get("etapas") or [] if e.get("endpoint") == "products"
+               for r in e.get("requests") or [] if r.get("_file_id")]
+    if not pedidos:
+        return
+    import anexo
+    hospedagem = anexo.Hospedagem()
+    for r in pedidos:
+        r["temp_image_url"] = hospedagem.renovar(r["_file_id"])
+    evento("criacao", f"{len(pedidos)} imagens do anexo com URL renovada")
+
+
 def criar(entrada):
     import atendimento
     pedido_id = entrada["pedido_id"]
     pasta = pasta_pedido(pedido_id)
     logo = restaurar_logo(entrada, pasta)
     banners = restaurar_banners(entrada, pasta)
+    renovar_imagens_do_anexo(entrada["catalogo"])
     caminho = gravar_catalogo(entrada["catalogo"], pedido_id)
     simular = bool(entrada.get("simular"))
     evento("criacao", "simulação: valida sem criar nada" if simular else "criando o portal na org pocs")

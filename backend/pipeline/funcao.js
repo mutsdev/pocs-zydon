@@ -9,6 +9,8 @@ const path = require('path');
 const COMMIT = '__COMMIT__';
 const DRIVER_PY = __DRIVER__;
 const SELECAO_PY = __SELECAO__;
+const ANEXO_PY = __ANEXO__;
+const PACOTES_EXTRAS = ['pypdfium2', 'openpyxl', 'python-docx', 'xlrd'];
 const FAIXAS_JSON = __FAIXAS__;
 const RAIZ = '/tmp/zydon-pocs';
 const REPO = `${RAIZ}/repo-${COMMIT}`;
@@ -42,9 +44,14 @@ raiz.rename(destino)
       { stdio: 'pipe', timeout: 600000 });
     fs.writeFileSync(`${REPO}/.pronto`, new Date().toISOString());
   }
+  if (!fs.existsSync(`${RAIZ}/.extras`)) {
+    execFileSync('python3', ['-m', 'pip', 'install', '-q', ...PACOTES_EXTRAS], { stdio: 'pipe', timeout: 600000 });
+    fs.writeFileSync(`${RAIZ}/.extras`, PACOTES_EXTRAS.join(' '));
+  }
   fs.mkdirSync(`${RAIZ}/driver`, { recursive: true });
   fs.writeFileSync(`${RAIZ}/driver/driver.py`, DRIVER_PY);
   fs.writeFileSync(`${RAIZ}/driver/selecao.py`, SELECAO_PY);
+  fs.writeFileSync(`${RAIZ}/driver/anexo.py`, ANEXO_PY);
   fs.writeFileSync(`${RAIZ}/driver/faixas_preco.json`, FAIXAS_JSON);
   fs.mkdirSync(TRABALHO, { recursive: true });
 }
@@ -118,7 +125,7 @@ async function lerArquivo(pedidoId, tipo) {
 
 async function lerPedido(pedidoId) {
   const linhas = await sql(`SELECT p.pedido_id, p.cliente, p.site, p.segmento, p.segmento_origem,
-      p.status, p.portal_id, p.portal_url, p.banner_cor, p.anexo_url, p.logo_url,
+      p.status, p.portal_id, p.portal_url, p.banner_cor, p.anexo_url, p.anexo_nome, p.logo_url,
       CAST(p.catalogo AS TEXT) AS catalogo, e.nome AS executivo
     FROM pedidos p JOIN executivos e ON e.id = p.executivo_id WHERE p.pedido_id = :p`, { p: pedidoId });
   if (!linhas.length) throw new Error(`pedido ${pedidoId} não existe`);
@@ -146,15 +153,20 @@ async function extrair(ev, execucao) {
   const pedidoId = ev.pedido_id;
   const registrar = registrador(pedidoId);
   const pedido = await lerPedido(pedidoId);
-  if (!['extraindo', 'falhou', 'precisa_catalogo'].includes(pedido.status)) {
+  if (!['extraindo', 'falhou', 'precisa_catalogo', 'aguardando_anexo'].includes(pedido.status)) {
     return { ok: true, ignorado: `pedido já está em ${pedido.status}` };
   }
   await dml(`UPDATE pedidos SET status = 'extraindo', erro = NULL, erro_codigo = NULL, commit_codigo = :c, atualizado_em = now()
     WHERE pedido_id = :p`, { p: pedidoId, c: COMMIT });
   await marcarExecucao(pedidoId, 'extrair', execucao);
+  const conteudoAnexo = pedido.anexo_nome ? await lerArquivo(pedidoId, 'anexo') : null;
+  if (pedido.anexo_nome && !conteudoAnexo) {
+    await falhar(pedidoId, `o anexo ${pedido.anexo_nome} não chegou inteiro; envie de novo`, registrar);
+    return { ok: false, erro: 'ANEXO_AUSENTE' };
+  }
   const saida = await rodarPython('extrair', { pedido_id: pedidoId, cliente: pedido.cliente,
-    site: pedido.site, segmento: pedido.segmento_origem === 'informado' ? pedido.segmento : '',
-    executivo: pedido.executivo }, registrar);
+    site: pedido.site || '', segmento: '', executivo: pedido.executivo,
+    anexo: conteudoAnexo ? { nome: pedido.anexo_nome, conteudo_base64: conteudoAnexo } : null }, registrar);
   await registrar.fim();
   if (!saida.ok) { await falhar(pedidoId, saida.erro, registrar); return saida; }
   if (saida.sem_credito) {
@@ -184,11 +196,12 @@ async function extrair(ev, execucao) {
       segmento = :s, segmento_origem = :so, logo_url = :l, modelo_ia = :mo,
       custo_ia_usd = CAST(:cu AS NUMERIC), tokens_ia = CAST(:t AS INTEGER),
       produtos_similares = CAST(:sim AS BOOLEAN), observacoes = :o, extracao_fim = now(),
+      nomes_lidos_na_imagem = CAST(:nl AS INTEGER),
       banners_situacao = :b, atualizado_em = now() WHERE pedido_id = :p`,
   { p: pedidoId, cat: JSON.stringify(saida.catalogo), r: JSON.stringify(r), np: String(r.produtos),
     nc: String(r.categorias), f: r.fonte, pr: r.preco, s: r.segmento, so: r.segmento_origem,
     l: saida.logo_url || null, mo: r.modelo, cu: String(r.custo_usd || 0), t: String(r.tokens || 0),
-    sim: String(!!r.produtos_similares), o: r.observacoes || null,
+    sim: String(!!r.produtos_similares), o: r.observacoes || null, nl: String(r.nomes_lidos_na_imagem || 0),
     b: saida.logo ? 'gerando' : 'sem_banner' });
   if (saida.logo) await previa({ pedido_id: pedidoId }, execucao);
   await dml('UPDATE pedidos SET execucao_atual = NULL WHERE pedido_id = :p', { p: pedidoId });
