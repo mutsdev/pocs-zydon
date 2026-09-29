@@ -81,7 +81,9 @@ export default function BarcosTabuada() {
     let particulas: { x: number; y: number; vx: number; vy: number; vida: number; cor: string }[] = []
     let velho: { x: number; y: number; comido: number } | null = null
 
-    const limitePara = (n: number) => Math.max(3.2, 9 - Math.floor(n / 4) * 0.7)
+    const limitePara = (n: number) => Math.max(2.8, 9 * Math.pow(0.93, n))
+    const velocidade = () => (fase === 'inicio' || fase === 'fim' ? 0.5 : 1 + pontos * 0.15)
+    let espumas = Array.from({ length: 34 }, () => ({ x: Math.random() * L, y: A * 0.24 + Math.random() * A * 0.74, tam: 6 + Math.random() * 18 }))
 
     function comecar() {
       fase = 'jogando'
@@ -222,10 +224,44 @@ export default function BarcosTabuada() {
         ctx!.globalAlpha = 0.14 + f * 0.04
         ctx!.beginPath()
         for (let x = 0; x <= L; x += 8) {
-          const yy = y + Math.sin((x + deslocamentoOnda + f * 40) / 38 + tempo * 1.4) * 4
+          const yy = y + Math.sin((x + deslocamentoOnda * (0.6 + f * 0.25) + f * 40) / 38 + tempo * 0.6) * 4
           if (x === 0) ctx!.moveTo(x, yy)
           else ctx!.lineTo(x, yy)
         }
+        ctx!.stroke()
+      }
+      ctx!.restore()
+    }
+
+    function espuma(dt: number) {
+      const vel = velocidade()
+      ctx!.save()
+      ctx!.strokeStyle = agua
+      ctx!.lineCap = 'round'
+      ctx!.lineWidth = 2
+      for (const e of espumas) {
+        const profundidade = 0.5 + (e.y / A) * 0.8
+        e.x -= dt * 150 * vel * profundidade
+        if (e.x < -e.tam) { e.x = L + Math.random() * 40; e.y = A * 0.24 + Math.random() * A * 0.74 }
+        ctx!.globalAlpha = 0.18 + profundidade * 0.12
+        ctx!.beginPath(); ctx!.moveTo(e.x, e.y); ctx!.lineTo(e.x + e.tam * (0.6 + vel * 0.25), e.y); ctx!.stroke()
+      }
+      ctx!.restore()
+    }
+
+    function esteira(x: number, y: number, alfa: number) {
+      const vel = velocidade()
+      ctx!.save()
+      ctx!.strokeStyle = agua
+      ctx!.lineCap = 'round'
+      ctx!.lineWidth = 2
+      for (let k = 0; k < 3; k++) {
+        const fase0 = ((relogio * 2.2 * vel + k / 3) % 1)
+        const xx = x - largBarco * 0.45 - fase0 * largBarco * (0.5 + vel * 0.2)
+        ctx!.globalAlpha = alfa * (1 - fase0) * 0.55
+        ctx!.beginPath()
+        ctx!.moveTo(xx, y + altCasco - 2 - k * 5)
+        ctx!.lineTo(xx - 14 - vel * 6, y + altCasco - 2 - k * 5 + (k - 1) * 3)
         ctx!.stroke()
       }
       ctx!.restore()
@@ -243,11 +279,12 @@ export default function BarcosTabuada() {
       anterior = agora
       relogio += dt
       t += dt
-      deslocamentoOnda += dt * 30
+      deslocamentoOnda += dt * 90 * velocidade()
 
       ctx.fillStyle = fundo
       ctx.fillRect(0, 0, L, A)
       ondas(relogio)
+      espuma(dt)
 
       if (fase === 'jogando') {
         progresso += dt / limite
@@ -272,13 +309,14 @@ export default function BarcosTabuada() {
       const suave = pr * pr * (3 - 2 * pr)
 
       if (velho) {
-        velho.x -= dt * 260
+        velho.x -= dt * 260 * velocidade()
         velho.comido = Math.min(1, velho.comido + dt * 2)
         casco(velho.x, velho.y + balanco(9), velho.comido, Math.max(0, 1 - velho.comido), velho.comido)
         if (velho.comido >= 1) velho = null
       }
 
       if (fase !== 'rolagem' && fase !== 'fim') {
+        esteira(xAtual, yAtual + balanco(0), 1)
         casco(xAtual, yAtual + balanco(0), fase === 'inicio' ? 0 : progresso, 1, 0)
       } else if (fase === 'fim') {
         casco(xAtual, yAtual + balanco(0), 1, Math.max(0, 1 - t), Math.min(1, t))
@@ -302,6 +340,7 @@ export default function BarcosTabuada() {
           const entrada = fase === 'jogando' && t < 0.35 && pontos > 0 ? (1 - t / 0.35) * (L - xOpcoes + largBarco) : 0
           x += entrada
           if (alfa <= 0) return
+          if (!afundar) esteira(x, y + balanco(i + 1), alfa)
           casco(x, y + balanco(i + 1), 0, alfa, afundar)
           if (!(fase === 'rolagem' && i === destino)) rotulo(x, y + balanco(i + 1), valor, i + 1, alfa, afundar, afundando.includes(i))
         })
@@ -369,6 +408,11 @@ export default function BarcosTabuada() {
         ctx.beginPath(); ctx.roundRect(L / 2 - barraL / 2, 58, barraL, 6, 3); ctx.fill()
         ctx.fillStyle = restante < 0.3 ? perigo : primaria
         ctx.beginPath(); ctx.roundRect(L / 2 - barraL / 2, 58, Math.max(0, barraL * restante), 6, 3); ctx.fill()
+        ctx.textAlign = 'left'
+        ctx.fillStyle = secundario
+        ctx.font = '500 12px Figtree, sans-serif'
+        ctx.fillText(`velocidade ${velocidade().toFixed(2).replace('.', ',')}×`, 16, 20)
+        ctx.textAlign = 'center'
         if (tempoAviso > 0) {
           tempoAviso -= dt
           ctx.globalAlpha = Math.min(1, tempoAviso * 2)
@@ -414,7 +458,7 @@ export default function BarcosTabuada() {
       <canvas ref={tela} className="w-full h-96 md:h-[32rem] block cursor-pointer" />
       <div className="flex flex-wrap items-center gap-3 px-5 pb-5">
         <span className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
-          Resolva a conta de vezes e pule para o barco com a resposta antes que o tubarão coma o seu. Clique no barco ou use 1, 2, 3. Errar dá mais tempo ao tubarão.
+          Resolva a conta de vezes e pule para o barco com a resposta antes que o tubarão coma o seu. Clique no barco ou use 1, 2, 3. A cada acerto o mar fica mais rápido e o tempo mais curto; errar dá vantagem ao tubarão.
         </span>
         <span className="ml-auto text-sm tabular-nums font-medium" style={{ color: 'var(--color-primary-text)' }}>
           {placar.pontos} barcos · recorde {placar.recorde}

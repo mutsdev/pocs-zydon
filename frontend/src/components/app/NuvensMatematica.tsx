@@ -29,7 +29,7 @@ function novaPergunta(nivel: number): Pergunta {
   return { texto, resposta, opcoes: [...opcoes].sort(() => Math.random() - 0.5) }
 }
 
-type Fase = 'pergunta' | 'pulo' | 'erro'
+type Fase = 'pergunta' | 'pulo' | 'erro' | 'queda'
 
 export default function NuvensMatematica() {
   const tela = useRef<HTMLCanvasElement>(null)
@@ -65,6 +65,9 @@ export default function NuvensMatematica() {
     let fase: Fase = 'pergunta'
     let atual = 1
     let t = 0
+    let progresso = 0
+    let limite = 9
+    const limitePara = (n: number) => Math.max(2.8, 9 * Math.pow(0.94, n))
     let camera = 0
     let errada = -1
     let destino = 1
@@ -102,12 +105,14 @@ export default function NuvensMatematica() {
     }
 
     escolher.current = (i: number) => {
-      if (fase !== 'pergunta') return
+      if (fase !== 'pergunta' && fase !== 'queda') return
+      if (fase === 'queda') return
       if (pergunta.opcoes[i] === pergunta.resposta) {
         fase = 'pulo'; t = 0; destino = i
       } else {
         fase = 'erro'; t = 0; errada = i
         sequencia = 0
+        progresso = 0
         setPlacar({ pontos, sequencia, recorde })
       }
     }
@@ -117,6 +122,17 @@ export default function NuvensMatematica() {
       const dt = Math.min(0.05, (agora - anterior) / 1000)
       anterior = agora
       t += dt
+      if (fase === 'pergunta') {
+        progresso += dt / limite
+        if (progresso >= 1) {
+          progresso = 1
+          fase = 'queda'
+          t = 0
+          sequencia = 0
+          recorde = Math.max(recorde, pontos)
+          setPlacar({ pontos, sequencia, recorde })
+        }
+      }
       ctx.fillStyle = fundo
       ctx.fillRect(0, 0, L, A)
       for (const e of estrelas) {
@@ -168,13 +184,31 @@ export default function NuvensMatematica() {
           pergunta = novaPergunta(nivel)
           fase = 'pergunta'
           t = 0
+          progresso = 0
+          limite = limitePara(pontos)
           setPlacar({ pontos, sequencia, recorde })
+        }
+      } else if (fase === 'queda') {
+        const quedaY = baseY + t * 160 + t * t * 900
+        const some = Math.max(0, 1 - t / 1.1)
+        ctx.save()
+        ctx.globalAlpha = some
+        heroi(colunas[atual], quedaY, 0)
+        ctx.restore()
+        nuvem(colunas[atual], yBase + 18, 90, 0.9 * some, false)
+        if (t >= 1.1) {
+          pergunta = novaPergunta(nivel)
+          fase = 'pergunta'
+          t = 0
+          progresso = 0
+          limite = limitePara(pontos)
+          errada = -1
         }
       } else {
         const tremor = fase === 'erro' ? Math.sin(t * 50) * 6 * Math.max(0, 1 - t / 0.5) : 0
-        const pulinho = Math.abs(Math.sin(agora / 350)) * 4
+        const pulinho = fase === 'pergunta' ? Math.abs(Math.sin(agora / 350)) * 4 : 0
         heroi(colunas[atual] + tremor, baseY - pulinho, 0)
-        if (fase === 'erro' && t > 0.9) { fase = 'pergunta'; t = 0; errada = -1 }
+        if (fase === 'erro' && t > 0.9) { fase = 'pergunta'; t = 0; errada = -1; progresso = 0 }
       }
 
       for (let k = particulas.length - 1; k >= 0; k--) {
@@ -191,7 +225,30 @@ export default function NuvensMatematica() {
       ctx.font = '600 28px Figtree, sans-serif'
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
-      ctx.fillText(`${pergunta.texto} = ?`, L / 2, 36)
+      ctx.fillText(`${pergunta.texto} = ?`, L / 2, 30)
+      if (fase === 'pergunta' || fase === 'queda') {
+        const barraL = Math.min(260, L * 0.6)
+        const restante = Math.max(0, 1 - progresso)
+        ctx.fillStyle = fase === 'queda' ? perigo : (restante < 0.3 ? perigo : primaria)
+        ctx.beginPath()
+        const yBarra = 52
+        if (typeof ctx.roundRect === 'function') { ctx.roundRect(L / 2 - barraL / 2, yBarra, barraL, 6, 3) }
+        else { ctx.rect(L / 2 - barraL / 2, yBarra, barraL, 6) }
+        ctx.fill()
+        ctx.save()
+        ctx.beginPath()
+        if (typeof ctx.roundRect === 'function') { ctx.roundRect(L / 2 - barraL / 2, yBarra, Math.max(0, barraL * restante), 6, 3) }
+        else { ctx.rect(L / 2 - barraL / 2, yBarra, Math.max(0, barraL * restante), 6) }
+        ctx.clip()
+        ctx.fillStyle = fundo
+        ctx.fillRect(L / 2 - barraL / 2, yBarra, barraL, 6)
+        ctx.restore()
+        if (fase === 'queda') {
+          ctx.fillStyle = perigo
+          ctx.font = '600 13px Figtree, sans-serif'
+          ctx.fillText('Tempo esgotado — você caiu!', L / 2, 72)
+        }
+      }
       pedido = requestAnimationFrame(laco)
     }
     let pedido = requestAnimationFrame(laco)
@@ -223,7 +280,7 @@ export default function NuvensMatematica() {
     <>
       <canvas ref={tela} className="w-full h-96 md:h-[32rem] block cursor-pointer" />
       <div className="flex flex-wrap items-center gap-3 px-5 pb-5">
-        <span className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>Acerte a conta para pular de nuvem em nuvem. Clique na nuvem ou use 1, 2, 3 (ou as setas).</span>
+        <span className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>Acerte a conta antes que o tempo acabe ou você cai da nuvem. Clique na nuvem ou use 1, 2, 3 (ou as setas).</span>
         <span className="ml-auto text-sm tabular-nums font-medium" style={{ color: 'var(--color-primary-text)' }}>
           {placar.pontos} nuvens · sequência {placar.sequencia} · recorde {placar.recorde}
         </span>
