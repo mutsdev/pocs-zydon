@@ -535,6 +535,32 @@ def logo_tipografica(cliente, pasta):
 PRAZO_BUSCA_SEGUNDOS = 140
 
 
+def _logo_inicial(entrada):
+    """Logo do site (ou do Instagram), procurada em paralelo com a busca de produtos:
+    não depende do catálogo. (logo, url, origem, aviso)."""
+    import atendimento
+    site = entrada.get("site")
+    if not site:
+        return None, None, None, None
+    logo_url = _logo_da_home(site)
+    if not logo_url:
+        return None, None, None, None
+    original = selecao._imagem_cheia(logo_url)
+    if original != logo_url:
+        evento("extracao", "logo do Wix: usando o arquivo original (a versão da página vem em AVIF)")
+        logo_url = original
+    prefixo = atendimento.prefixo(nome_arquivo(entrada.get("cliente"), entrada.get("pedido_id")))
+    bruta = atendimento.baixar_logo(logo_url, prefixo)
+    logo, aviso_logo = conferir_logo(bruta)
+    if logo:
+        evento("extracao", "logo do site encontrada (em paralelo com a busca de produtos)")
+        return logo, logo_url, "site", aviso_logo
+    if bruta and re.search(r"instagram\.com/", site):
+        evento("extracao", "logo = foto de perfil do Instagram, usada mesmo pequena (não passou na régua)")
+        return str(foto_de_perfil_como_logo(bruta)), logo_url, "instagram", None
+    return None, logo_url, None, aviso_logo
+
+
 def montar_catalogo(entrada):
     """Coleta, filtra, seleciona por IA e monta. Levanta PrecisaCatalogo."""
     cliente, site = entrada["cliente"], str(entrada.get("site") or "").strip()
@@ -726,6 +752,11 @@ def extrair(entrada):
     import atendimento
     pedido_id = entrada["pedido_id"]
     observacoes = []
+    from concurrent.futures import ThreadPoolExecutor
+    paralelo = ThreadPoolExecutor(2)
+    logo_futura = paralelo.submit(_logo_inicial, entrada)
+    cores_futuras = paralelo.submit(cores_do_site, entrada.get("site")) if entrada.get("site") else None
+    paralelo.shutdown(wait=False)
     try:
         montado = montar_catalogo(entrada)
     except selecao.SemCreditoOpenRouter as erro:
@@ -767,20 +798,16 @@ def extrair(entrada):
         observacoes.append("há produtos SIMILARES achados na busca que NÃO são da marca do cliente")
         evento("extracao", "produtos similares de outras marcas no catálogo", "aviso")
 
-    logo_url = _logo_da_home(entrada["site"]) if entrada.get("site") else None
-    if logo_url:
-        original = selecao._imagem_cheia(logo_url)
-        if original != logo_url:
-            evento("extracao", "logo do Wix: usando o arquivo original (a versão da página vem em AVIF)")
-            logo_url = original
-    logo = atendimento.baixar_logo(logo_url, atendimento.prefixo(caminho.name)) if logo_url else None
-    bruta = logo
-    logo, aviso_logo = conferir_logo(logo)
-    logo_origem = "site" if logo else None
-    if not logo and bruta and re.search(r"instagram\.com/", entrada.get("site") or ""):
-        logo = str(foto_de_perfil_como_logo(bruta))
-        logo_origem, aviso_logo = "instagram", None
-        evento("extracao", "logo = foto de perfil do Instagram, usada mesmo pequena (não passou na régua)")
+    try:
+        logo, logo_url, logo_origem, aviso_logo = logo_futura.result(timeout=90)
+    except Exception as erro:
+        logo, logo_url, logo_origem, aviso_logo = None, None, None, None
+        evento("extracao", f"busca da logo no site falhou ({type(erro).__name__}); tentando pela web", "aviso")
+    if cores_futuras is not None:
+        try:
+            cores_futuras.result(timeout=30)
+        except Exception:
+            pass
     if not logo:
         site_achado, logo_web = logo_pela_web(entrada.get("cliente"), entrada.get("site"),
                                                   [p["nome"] for p in precos])
@@ -1038,6 +1065,46 @@ def extrair(logo, cor_informada=None):
     base.update(paleta)
     return base
 gerar_banners.mod_paleta.extrair = extrair
+import shutil, time
+from concurrent.futures import ThreadPoolExecutor
+import gerador as mod_gerador
+import formatos as mod_formatos
+_gerar_e_montar_original = gerar_banners._gerar_e_montar
+def _encher_paralelo(pasta, pal, contexto, alvos, semente):
+    def uma(alvo):
+        return mod_gerador.encher(pasta / "cenas", pal, contexto, quantas=1, semente=semente, ecoar=print, alvos=[alvo])
+    with ThreadPoolExecutor(max(1, len(alvos))) as pool:
+        partes = list(pool.map(uma, alvos))
+    return [laudo for parte in partes for laudo in parte]
+def _gerar_e_montar(args, pasta, pal, contexto):
+    alvos = [f.chave for f in gerar_banners._formatos_pedidos(getattr(args, "formatos", None)) if f in mod_formatos.COM_CENA]
+    if not alvos or args.candidatas < 1 or args.so_fallback:
+        return _gerar_e_montar_original(args, pasta, pal, contexto)
+    inicio = time.time()
+    try:
+        laudos = _encher_paralelo(pasta, pal, contexto, alvos, 1)
+    except mod_gerador.SemChave as erro:
+        print(f"[ERRO] {erro}")
+        return 2
+    print(f"  cenas em paralelo: {sum(1 for l in laudos if l.get('ok'))}/{len(laudos)} em {time.time() - inicio:.0f}s")
+    codigo = gerar_banners.montar(args)
+    try:
+        pecas = json.loads((pasta / "manifesto.json").read_text(encoding="utf-8")).get("pecas") or {}
+    except (OSError, ValueError):
+        return codigo
+    reprovados = [a for a in alvos if (pecas.get(a) or {}).get("origem") != "aprovado"]
+    if codigo or not reprovados:
+        return codigo
+    guardadas = pasta / "cenas-reprovadas"
+    guardadas.mkdir(exist_ok=True)
+    for arquivo in list((pasta / "cenas").iterdir()):
+        if any(arquivo.stem.lower().startswith(a) for a in reprovados):
+            shutil.move(str(arquivo), str(guardadas / f"{int(time.time() * 1000)}-{arquivo.name}"))
+    print(f"REPESCAGEM {','.join(reprovados)}")
+    _encher_paralelo(pasta, pal, contexto, reprovados, 101)
+    args.formatos = ",".join(reprovados)
+    return gerar_banners.montar(args)
+gerar_banners._gerar_e_montar = _gerar_e_montar
 sys.exit(gerar_banners.main(sys.argv[1:]))
 """
 
@@ -1165,11 +1232,27 @@ def cores_da_logo(logo):
 
 
 def cores_do_site(site):
+    """Cores de identidade do site, guardadas em disco: a extração lê em paralelo com a
+    busca e a geração do banner reaproveita sem baixar o site de novo."""
+    import hashlib
+    if not site or re.search(r"instagram\.com|facebook\.com|linktr\.ee", site):
+        return []
+    guardado = TRABALHO / "cores" / (hashlib.md5(site.strip().lower().encode()).hexdigest() + ".json")
+    try:
+        return [tuple(c) for c in json.loads(guardado.read_text(encoding="utf-8"))]
+    except (OSError, ValueError):
+        pass
+    cores = _cores_do_site(site)
+    if cores:
+        guardado.parent.mkdir(parents=True, exist_ok=True)
+        guardado.write_text(json.dumps(cores), encoding="utf-8")
+    return cores
+
+
+def _cores_do_site(site):
     """Cores de identidade do site: theme-color, variáveis CSS e cores mais usadas nos estilos."""
     import requests
     from urllib.parse import urljoin
-    if not site or re.search(r"instagram\.com|facebook\.com|linktr\.ee", site):
-        return []
     cab = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128 Safari/537.36"}
     try:
         base = selecao.normalizar_site(site)
@@ -1268,9 +1351,10 @@ def gerar_pecas_paleta(caminho, logo, cliente, segmento, paleta, cena_ia=False, 
                "--segmento", segmento or atendimento.SEGMENTO_PADRAO,
                "--catalogo", str(caminho), "--regua-logo", "portal",
                "--cor", paleta["principal"]]
-    comando += ["--candidatas", "2"] if cena_ia else ["--candidatas", "0", "--so-fallback"]
+    comando += ["--candidatas", "1"] if cena_ia else ["--candidatas", "0", "--so-fallback"]
     if cena_ia:
-        evento("banners", "teste: cena do banner desenhada por IA (2 tentativas por peça)")
+        evento("banners", "cena do banner desenhada por IA: login e cabeçalho ao mesmo tempo, "
+                          "segunda tentativa só para a peça reprovada")
     return atendimento._rodar_gerador(comando, atendimento.prefixo(Path(caminho).name))
 
 
