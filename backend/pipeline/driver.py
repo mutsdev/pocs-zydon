@@ -1222,8 +1222,9 @@ def identidade_visual(site, logo):
 
 
 def paleta_do_pedido(marca_hex, apoio_hex, gosto, anterior_hex=None, variar=False):
-    """Fundo pelo gosto do executivo (claro/escuro) ou, sem gosto, na cor da marca (estilo JH).
-    Destaque = cor de apoio do site quando legível, senão a própria marca. Nunca matiz inventado."""
+    """Cor principal (fundo) = cor da marca, a mesma regra de identidade_visual (logo + site,
+    ou a cor que o usuário pediu). Só vira claro/escuro quando o usuário pede isso no refazer.
+    Destaque = cor de apoio do site quando legível, senão branco/escuro legível. Nunca matiz inventado."""
     import random
     marca = _rgb(marca_hex)
     apoio = _rgb(apoio_hex) if apoio_hex else None
@@ -1237,10 +1238,10 @@ def paleta_do_pedido(marca_hex, apoio_hex, gosto, anterior_hex=None, variar=Fals
     elif gosto == "escuro":
         opcoes = escuros
     else:
-        opcoes = na_marca + (claros[:2] + escuros[:1] if variar else [])
+        opcoes = na_marca[:1]
     anterior = anterior_hex.upper() if anterior_hex else None
     restantes = [o for o in opcoes if _hex(o[1]) != anterior] or opcoes
-    nome, fundo = random.choice(restantes) if variar else restantes[0]
+    nome, fundo = random.choice(restantes) if variar and gosto else restantes[0]
     claro = _lum(fundo) > 0.4
     destaque = None
     for cor in ([marca, apoio] if fundo != marca else [apoio]):
@@ -1406,11 +1407,6 @@ def gerar_com_identidade(entrada, caminho, logo, variar=False, anterior=None, te
     gosto = ("claro" if any(p in atual for p in PALAVRAS_CLARO) else
              "escuro" if any(p in atual for p in PALAVRAS_ESCURO) else "")
     fonte_gosto = "pedido agora"
-    if not gosto:
-        gosto = gosto_do_executivo(entrada.get("preferencias"))
-        fonte_gosto = "histórico do executivo"
-    if not gosto and logo_clara(logo):
-        gosto, fonte_gosto = "escuro", "logo clara"
     nome, paleta = paleta_do_pedido(marca, apoio, gosto, anterior, variar)
     evento("banners", f"identidade: marca {marca}" + (f", apoio {apoio}" if apoio else "") + f" (de {origem}); "
                       f"{nome} {paleta['principal']}, destaque {paleta['destaque']}"
