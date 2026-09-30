@@ -56,7 +56,7 @@ raiz.rename(destino)
   fs.mkdirSync(TRABALHO, { recursive: true });
 }
 
-function rodarPython(acao, entrada, aoEvento) {
+function rodarPython(acao, entrada, aoEvento, aoParcial) {
   const id = `${acao}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const arqEntrada = `${TRABALHO}/${id}-entrada.json`;
   const arqSaida = `${TRABALHO}/${id}-saida.json`;
@@ -76,6 +76,8 @@ function rodarPython(acao, entrada, aoEvento) {
       for (const linha of linhas) {
         if (linha.startsWith('EVENTO ')) {
           try { const ev = JSON.parse(linha.slice(7)); eventos.push(ev.mensagem); aoEvento(ev); } catch (e) { /* linha quebrada */ }
+        } else if (linha.startsWith('PARCIAL ')) {
+          try { if (aoParcial) aoParcial(JSON.parse(linha.slice(8))); } catch (e) { /* linha quebrada */ }
         } else { log = (log + linha + '\n').slice(-6000); }
       }
     };
@@ -176,13 +178,21 @@ async function extrair(ev, execucao) {
     await falhar(pedidoId, `o anexo ${pedido.anexo_nome} não chegou inteiro; envie de novo`, registrar);
     return { ok: false, erro: 'ANEXO_AUSENTE' };
   }
+  let parcial = null;
+  const aoParcial = (dados) => { if (!parcial) parcial = gravarCuradoria(pedidoId, dados).catch(() => { parcial = null; }); };
   const saida = await rodarPython('extrair', { pedido_id: pedidoId, cliente: pedido.cliente,
     site: pedido.site || '', segmento: '', foco: pedido.foco || '', variacoes: pedido.variacoes === true || pedido.variacoes === 't' || pedido.variacoes === 'true',
     executivo: pedido.executivo, cena_ia: await comCenaIa(pedidoId),
     barroso_tudo: (await sql(`SELECT valor FROM configuracao WHERE chave = 'busca_barroso_tudo'`, {})).some((l) => l.valor === 'sim'),
     preferencias: await preferenciasDoExecutivo(pedido.executivo_id),
-    anexo: conteudoAnexo ? { nome: pedido.anexo_nome, conteudo_base64: conteudoAnexo } : null }, registrar);
+    anexo: conteudoAnexo ? { nome: pedido.anexo_nome, conteudo_base64: conteudoAnexo } : null }, registrar, aoParcial);
   await registrar.fim();
+  const jaGravada = parcial ? await parcial : false;
+  if (!saida.ok && jaGravada) {
+    await registrar({ etapa: 'banners', mensagem: `banner não terminou: ${saida.erro}`, nivel: 'aviso' });
+    await dml(`UPDATE pedidos SET banners_situacao = 'sem_banner', execucao_atual = NULL WHERE pedido_id = :p`, { p: pedidoId });
+    return { ok: true, status: 'curadoria' };
+  }
   if (!saida.ok) { await falhar(pedidoId, saida.erro, registrar); return saida; }
   if (saida.sem_credito) {
     await registrar({ etapa: 'extracao', mensagem: saida.sem_credito, nivel: 'erro' });
@@ -202,6 +212,19 @@ async function extrair(ev, execucao) {
     return { ok: true, status: 'precisa_catalogo', motivo: saida.precisa_catalogo };
   }
   const r = saida.resumo;
+  if (!jaGravada) await gravarCuradoria(pedidoId, saida);
+  if (saida.banner && saida.banner.banners_tar) {
+    await salvarArquivo(pedidoId, 'banners', saida.banner.banners_tar);
+    await gravarPecas(pedidoId, saida.banner.pecas, null, saida.banner.cor);
+    await dml(`UPDATE pedidos SET banners_situacao = 'prontos', banner_cor = :c, atualizado_em = now()
+      WHERE pedido_id = :p`, { p: pedidoId, c: saida.banner.cor || null });
+  } else if (saida.logo) await previa({ pedido_id: pedidoId }, execucao);
+  await dml('UPDATE pedidos SET execucao_atual = NULL WHERE pedido_id = :p', { p: pedidoId });
+  return { ok: true, status: 'curadoria', produtos: r.produtos, preco: r.preco };
+}
+
+async function gravarCuradoria(pedidoId, saida) {
+  const r = saida.resumo;
   if (saida.logo) {
     await salvarArquivo(pedidoId, 'logo', saida.logo.conteudo_base64);
     await salvarArquivo(pedidoId, 'logo_nome', saida.logo.nome);
@@ -218,20 +241,13 @@ async function extrair(ev, execucao) {
       custo_ia_usd = CAST(:cu AS NUMERIC), tokens_ia = CAST(:t AS INTEGER),
       produtos_similares = CAST(:sim AS BOOLEAN), observacoes = :o, extracao_fim = now(),
       nomes_lidos_na_imagem = CAST(:nl AS INTEGER),
-      banners_situacao = :b, atualizado_em = now() WHERE pedido_id = :p`,
+      banners_situacao = :b, atualizado_em = now() WHERE pedido_id = :p AND status IN ('extraindo', 'curadoria')`,
   { p: pedidoId, np: String(r.produtos),
     nc: String(r.categorias), f: r.fonte, pr: r.preco, s: r.segmento, so: r.segmento_origem,
     l: saida.logo_url || null, mo: r.modelo, cu: String(r.custo_usd || 0), t: String(r.tokens || 0),
     sim: String(!!r.produtos_similares), o: r.observacoes || null, nl: String(r.nomes_lidos_na_imagem || 0),
     b: saida.logo ? 'gerando' : 'sem_banner' });
-  if (saida.banner && saida.banner.banners_tar) {
-    await salvarArquivo(pedidoId, 'banners', saida.banner.banners_tar);
-    await gravarPecas(pedidoId, saida.banner.pecas, null, saida.banner.cor);
-    await dml(`UPDATE pedidos SET banners_situacao = 'prontos', banner_cor = :c, atualizado_em = now()
-      WHERE pedido_id = :p`, { p: pedidoId, c: saida.banner.cor || null });
-  } else if (saida.logo) await previa({ pedido_id: pedidoId }, execucao);
-  await dml('UPDATE pedidos SET execucao_atual = NULL WHERE pedido_id = :p', { p: pedidoId });
-  return { ok: true, status: 'curadoria', produtos: r.produtos, preco: r.preco };
+  return true;
 }
 
 async function gravarPecas(pedidoId, pecas, publicadas, cor) {

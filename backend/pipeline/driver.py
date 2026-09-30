@@ -605,6 +605,8 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
             coleta["plataforma"] = "barroso-chat"
             if not segmento_informado and segmento_barroso:
                 segmento_informado = segmento_barroso
+            if ao_ter_candidatos:
+                ao_ter_candidatos([v["nome"] for v in achados[:selecao.alvo_pedido()]], segmento_informado)
         else:
             evento("extracao", "modo barroso-chat não trouxe produto válido; seguindo a busca normal", "aviso")
     if entrada.get("anexo"):
@@ -721,7 +723,12 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
             unicos.append(v)
         return unicos
 
-    validos = sem_repetidos(conferir(validos))
+    if pelo_barroso:
+        evento("extracao", "modo barroso-chat: fotos tiradas da própria página do produto; "
+                           "a seleção olha as imagens, sem conferência separada")
+        validos = sem_repetidos(validos)
+    else:
+        validos = sem_repetidos(conferir(validos))
     if len(validos) < selecao.minimo_pedido() and not ja_buscou["web"]:
         novos, descartes_busca = buscar_pela_web(
             validos, f"só {len(validos)} produtos passaram na conferência das fotos")
@@ -940,6 +947,9 @@ def extrair(entrada):
     saida["logo_origem"] = logo_origem
     avisos_logo = [o for o in observacoes if "logo" in o]
     saida["logo_aviso"] = " · ".join(avisos_logo)[:800] or None
+    if banner.get("fio") and banner["fio"].is_alive():
+        evento("extracao", "produtos prontos para a curadoria; o banner termina em seguida")
+        print("PARCIAL " + json.dumps(saida, ensure_ascii=False), flush=True)
     if banner.get("fio"):
         banner["fio"].join(timeout=max(5, 240 - (time.monotonic() - banner["inicio"])))
         pronto = banner.get("saida")
@@ -1158,7 +1168,7 @@ import formatos as mod_formatos
 import requests as _requests
 _post = _requests.post
 def _post_curto(*a, **k):
-    k["timeout"] = min(float(k.get("timeout") or 50), 50)
+    k["timeout"] = min(float(k.get("timeout") or 40), 40)
     return _post(*a, **k)
 _requests.post = _post_curto
 mod_gerador.TENTATIVAS = 2
@@ -1192,7 +1202,7 @@ def _gerar_e_montar(args, pasta, pal, contexto):
     reprovados = [a for a in alvos if (pecas.get(a) or {}).get("origem") != "aprovado"]
     if codigo or not reprovados:
         return codigo
-    if time.time() - inicio > 100:
+    if time.time() - inicio > 70:
         print(f"sem repescagem: {time.time() - inicio:.0f}s gastos")
         return codigo
     guardadas = pasta / "cenas-reprovadas"
