@@ -31,11 +31,44 @@ NAO_E_PRODUTO = re.compile(
     r"\b(arrow|seta|previous|next|anterior|proximo|slide|slider|banner|carrossel|"
     r"carousel|logo|logotipo|icone|icon|favicon|whatsapp|instagram|facebook|"
     r"youtube|mapa|map|avatar|placeholder|background|fundo|hero)\b", re.I)
+NOME_NAO_PRODUTO = re.compile(
+    r"(?i)\b\d{2,4}x\d{2,4}\b(?!\s*(?:cm|mm|m|pol)\b)|\bico\d*\b|\be\d{8,}\b|photoroom|\bselos?\b|\bhome\s*\d+\b|"
+    r"\b(img|image|imagem|foto|dsc|wp|screenshot|captura|whatsapp image)[\s_-]*\d|"
+    r"\bmais de \d|\banos no mercado\b|\bclientes em todo\b|\bsmiling\b|\bheadset\b")
 IMAGEM_NAO_E_PRODUTO = re.compile(
     r"(/slider/|/slides?/|/banners?/|/icons?/|logo|favicon|sprite|placeholder|\.svg($|\?))", re.I)
 
 
 PRAZO = {"fim": None}
+QUANTOS = {"n": None}
+NUMEROS = {"um": 1, "uma": 1, "dois": 2, "duas": 2, "tres": 3, "quatro": 4, "cinco": 5, "seis": 6, "sete": 7,
+           "oito": 8, "nove": 9, "dez": 10, "onze": 11, "doze": 12}
+PEDIDO_DE_QUANTIDADE = re.compile(
+    r"(?i)\b(?:apenas|somente|so|no maximo|ate|quero|traga|preciso de)?\s*"
+    r"(\d{1,2}|um|uma|dois|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze)\s+"
+    r"(?:produtos?|itens?|exemplos?|skus?)\b")
+
+
+def quantidade_pedida(observacao):
+    """(quantos, observacao_sem_a_quantidade): "Quero apenas 3 produtos" -> (3, "")."""
+    texto = sem_acento(observacao or "")
+    achado = PEDIDO_DE_QUANTIDADE.search(texto)
+    if not achado:
+        return None, observacao or ""
+    valor = achado.group(1).lower()
+    quantos = int(valor) if valor.isdigit() else NUMEROS.get(valor)
+    if not quantos:
+        return None, observacao or ""
+    resto = (texto[:achado.start()] + " " + texto[achado.end():]).strip(" ,.;")
+    return max(1, min(MAXIMO_PRODUTOS, quantos)), resto
+
+
+def alvo_pedido():
+    return QUANTOS["n"] or MAXIMO_PRODUTOS
+
+
+def minimo_pedido():
+    return min(MINIMO_PRODUTOS, alvo_pedido())
 TEMPO_IA = {"segundos": 90, "tentativas": 2, "compativel": 150}
 TETO_CONFERENCIA = 60
 CUSTO_EXTRA = {"custo_usd": 0.0}
@@ -109,6 +142,8 @@ def nome_valido(nome, url=""):
     if " " not in nome and re.search(r"\d", nome) and not pagina_propria:
         return False
     if re.search(r"voce buscou|resultados? (da busca|para)|busca por", sem_acento(nome).lower()):
+        return False
+    if NOME_NAO_PRODUTO.search(sem_acento(nome)):
         return False
     return not NAO_E_PRODUTO.search(sem_acento(nome))
 
@@ -616,7 +651,10 @@ Regras obrigatórias:
 - Descarte o que não é produto vendável: banner, slide de carrossel, seta de navegação,
   ícone, logo, foto institucional, foto de ambiente, depoimento de cliente, nome de
   categoria ou menu ("CERAS", "PNEUS"), contato, blog.
-  Exemplos que NÃO são produto: "biscoito2" (slide do carrossel), "previous arrow".
+  Exemplos que NÃO são produto: "biscoito2" (slide do carrossel), "previous arrow",
+  "logiscal home ico1 150x120" (ícone), "mais de 20 mil clientes" (número institucional),
+  "selo reforma" (selo), foto de pessoa/atendente, nome que é nome de arquivo de imagem.
+- Se sobrarem menos de {alvo} produtos reais, escolha MENOS: nunca complete com o que não é produto.
 - Olhe a imagem: banner com texto promocional, arte de carrossel, ícone ou foto de
   ambiente é descarte, mesmo que o nome pareça produto.
 - Priorize produtos da marca/catálogo do próprio cliente. Candidato [busca] que não é do
@@ -966,10 +1004,11 @@ def conferir_fotos(candidatos, cliente, por_chamada=CONFERENCIA_POR_CHAMADA, tet
     return aprovados, descartes, custo
 
 
-def conferir_ate(candidatos, cliente, alvo=MAXIMO_PRODUTOS, reserva=6):
+def conferir_ate(candidatos, cliente, alvo=None, reserva=6):
     """Confere só os `alvo` primeiros e, ao mesmo tempo, uma reserva com os próximos.
     Foto recusada puxa o próximo da fila até completar o alvo ou acabar o tempo."""
     import time
+    alvo = alvo or alvo_pedido()
     fim = time.monotonic() + TETO_CONFERENCIA + 30
     custo = {"custo_usd": 0.0, "tokens_entrada": 0, "tokens_saida": 0}
     aprovados, descartes, posicao, rodada = [], [], 0, alvo + reserva
@@ -999,7 +1038,7 @@ def selecionar(candidatos, cliente, site, segmento, foco=""):
                       f" | {(c.get('descricao') or '')[:140]}")
     texto = INSTRUCAO_SELECAO.format(cliente=cliente, site=site, segmento=segmento or "não informado",
                                      foco=foco or "nenhum (catálogo variado do cliente)",
-                                     alvo=min(MAXIMO_PRODUTOS, len(candidatos)),
+                                     alvo=min(alvo_pedido(), len(candidatos)),
                                      total=len(candidatos), lista="\n".join(linhas))
     conteudo = [{"type": "text", "text": texto}]
     for n, c in enumerate(candidatos[:MAXIMO_IMAGENS_NO_PROMPT]):
@@ -1038,11 +1077,13 @@ def ler_descartes(escolha, candidatos, usados):
 def completar_ate_o_alvo(itens, candidatos, motivos, categorias):
     """Com 12+ validos saem 12: completa com os 'limite' e 'sem_motivo', na ordem,
     alternando categoria do site para espalhar. Nunca com 'nao_e_produto'."""
-    alvo = min(MAXIMO_PRODUTOS, len(candidatos))
+    alvo = min(alvo_pedido(), len(candidatos))
     usados = {n for n, _ in itens}
-    curto = len(candidatos) <= MAXIMO_PRODUTOS
+    curto = len(candidatos) <= alvo_pedido()
+    tipo = lambda n: motivos.get(n, ("",))[0]
     sobra = [n for n in range(len(candidatos)) if n not in usados
-             and (curto or motivos.get(n, ("",))[0] in ("limite", "sem_motivo"))]
+             and (tipo(n) in ("limite", "sem_motivo")
+                  or (curto and tipo(n) not in ("nao_e_produto", "outra_marca", "fora_do_foco")))]
     ja = {}
     for n, _ in itens:
         chave = sem_acento(candidatos[n]["categoria"])
@@ -1083,7 +1124,7 @@ def montar_pela_selecao(coleta, candidatos, escolha, cliente, segmento, descrica
         do_cliente[n] = s.get("do_cliente") is not False
         if s.get("no_foco") is False:
             fora_do_foco.add(n)
-    itens = itens[:MAXIMO_PRODUTOS]
+    itens = itens[:alvo_pedido()]
     motivos = ler_descartes(escolha, candidatos, usados)
     completados = completar_ate_o_alvo(itens, candidatos, motivos, categorias)
     for n in completados:

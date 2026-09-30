@@ -567,7 +567,13 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
     selecao.iniciar_prazo(PRAZO_BUSCA_SEGUNDOS)
     segmento_informado = str(entrada.get("segmento") or "").strip()
     observacao = str(entrada.get("foco") or "").strip()
-    foco, eixo_pedido = selecao.separar_observacao(observacao)
+    quantos, sem_quantidade = selecao.quantidade_pedida(observacao)
+    selecao.QUANTOS["n"] = quantos
+    foco, eixo_pedido = selecao.separar_observacao(sem_quantidade)
+    if not selecao.partes_do_foco(foco):
+        foco = ""
+    if quantos:
+        evento("extracao", f"quantidade pedida na observação: {quantos} produtos")
     if observacao:
         evento("extracao", f"observação do pedido: {observacao}"
                + (f" · variação pedida: {eixo_pedido}" if eixo_pedido else ""))
@@ -637,7 +643,7 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
             aprovados, descartes_nomeados = selecao.filtrar_candidatos(nomeados)
             validos += aprovados
             descartes += descartes_fotos + descartes_nomeados
-    if len(validos) < selecao.MINIMO_PRODUTOS and not tipos_da_empresa and not fonte_anexo:
+    if len(validos) < selecao.minimo_pedido() and not tipos_da_empresa and not fonte_anexo:
         tipos_da_empresa = selecao.descobrir_empresa(cliente, site).get("tipos") or []
         if tipos_da_empresa:
             evento("extracao", "produtos que a empresa vende, segundo o Google: " + ", ".join(tipos_da_empresa))
@@ -657,7 +663,7 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
         brutos = selecao.buscar_candidatos_web(cliente, segmento_informado, categorias_site,
                                                site or "https://sem-site.invalid/", nomes_conhecidos,
                                                foco=foco, tipos=tipos_da_empresa)
-        if len(brutos) < selecao.MINIMO_PRODUTOS * 2:
+        if len(brutos) < selecao.minimo_pedido() * 2:
             brutos += selecao.buscar_candidatos(cliente, segmento_informado)
         achados, descartes_busca = selecao.filtrar_candidatos(brutos)
         vistos = {v["imagem"] for v in validos} | {selecao.sem_acento(v["nome"]) for v in validos}
@@ -669,8 +675,8 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
     if foco:
         evento("extracao", f"{len(do_foco)} dos {len(validos)} candidatos do site são do foco pedido "
                            f"({', '.join(selecao.partes_do_foco(foco)) or foco})")
-    if len(validos) < selecao.MINIMO_PRODUTOS or (foco and len(do_foco) < selecao.MAXIMO_PRODUTOS):
-        motivo = (f"site com só {len(validos)} produtos" if len(validos) < selecao.MINIMO_PRODUTOS
+    if len(validos) < selecao.minimo_pedido() or (foco and len(do_foco) < selecao.alvo_pedido()):
+        motivo = (f"site com só {len(validos)} produtos" if len(validos) < selecao.minimo_pedido()
                   else f"só {len(do_foco)} produtos do foco no site")
         novos, descartes_busca = buscar_pela_web(validos, motivo)
         validos += novos
@@ -679,8 +685,6 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
         casam = [v for v in validos if selecao.casa_com_foco(v, foco)]
         validos = casam + [v for v in validos if not selecao.casa_com_foco(v, foco)]
     validos = validos[:selecao.MAXIMO_CANDIDATOS]
-    if ao_ter_candidatos and validos:
-        ao_ter_candidatos([v["nome"] for v in validos[:12]])
 
     def conferir(lista):
         if not lista:
@@ -705,12 +709,15 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
         return unicos
 
     validos = sem_repetidos(conferir(validos))
-    if len(validos) < selecao.MINIMO_PRODUTOS and not ja_buscou["web"]:
+    if len(validos) < selecao.minimo_pedido() and not ja_buscou["web"]:
         novos, descartes_busca = buscar_pela_web(
             validos, f"só {len(validos)} produtos passaram na conferência das fotos")
         descartes += descartes_busca
         validos = sem_repetidos(validos + conferir(novos[:selecao.MAXIMO_CANDIDATOS]))
-    if len(validos) < selecao.MINIMO_PRODUTOS:
+    confirmados = [v["nome"] for v in validos if v.get("foto_conferida")]
+    if ao_ter_candidatos and len(confirmados) >= min(3, selecao.alvo_pedido()):
+        ao_ter_candidatos(confirmados[:selecao.alvo_pedido()], segmento_informado)
+    if len(validos) < selecao.minimo_pedido():
         evento("extracao", f"só {len(validos)} produtos confirmados no site e na web; o portal segue com eles "
                            "e o pedido registra que o catálogo ficou curto", "aviso")
         entrada["_aviso_curto"] = (f"catálogo curto: só {len(validos)} produtos confirmados no site e na web; "
@@ -748,6 +755,8 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
         raise selecao.PrecisaCatalogo(erro.args[0], {"custo": custo, "descartes": descartes
                                                      + extra.get("descartes_modelo", [])})
     descartes += descartes_modelo
+    if ao_ter_candidatos and precos:
+        ao_ter_candidatos([p["nome"] for p in precos], segmento_informado or segmento_modelo)
     return {"catalogo": catalogo, "precos": precos, "preco": situacao, "similares": similares,
             "regra_preco": regra_preco, "candidatos": validos,
             "custo": custo, "descartes": descartes, "segmento_modelo": segmento_modelo,
@@ -766,7 +775,7 @@ def _custo_total(custo):
     return custo
 
 
-def _banner_antecipado(entrada, logo_futura, nomes):
+def _banner_antecipado(entrada, logo_futura, nomes, segmento=""):
     """Banner feito assim que a logo e os produtos do site existem, sem esperar a curadoria."""
     import atendimento
     try:
@@ -780,8 +789,9 @@ def _banner_antecipado(entrada, logo_futura, nomes):
     caminho = atendimento.DESTINO_JSON / ("previa_" + nome_arquivo(entrada.get("cliente"), entrada.get("pedido_id")))
     caminho.parent.mkdir(parents=True, exist_ok=True)
     caminho.write_text(json.dumps(catalogo, ensure_ascii=False), encoding="utf-8")
-    evento("banners", f"gerando as peças já com a logo, em paralelo com a busca ({len(nomes)} produtos do site na cena)")
-    gerada, _, _ = gerar_com_identidade(entrada, caminho, logo, variar=False)
+    evento("banners", f"gerando as peças com {len(nomes)} produtos confirmados na cena, em paralelo com o fim da busca")
+    gerada, _, _ = gerar_com_identidade(dict(entrada, segmento=segmento or entrada.get("segmento")),
+                                        caminho, logo, variar=False)
     if not gerada:
         return None
     return {"logo": logo, "pecas": pecas_para_tela(gerada), "cor": cor_da_pasta(gerada),
@@ -801,13 +811,13 @@ def extrair(entrada):
     import time
     banner = {}
 
-    def iniciar_banner(nomes):
+    def iniciar_banner(nomes, segmento=""):
         if banner.get("fio"):
             return
 
         def rodar():
             try:
-                banner["saida"] = _banner_antecipado(entrada, logo_futura, nomes)
+                banner["saida"] = _banner_antecipado(entrada, logo_futura, nomes, segmento)
             except Exception as erro:
                 evento("banners", f"banner antecipado falhou ({type(erro).__name__}); refaço depois", "aviso")
         banner["inicio"] = time.monotonic()
