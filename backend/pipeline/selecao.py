@@ -1163,6 +1163,7 @@ def montar_pela_selecao(coleta, candidatos, escolha, cliente, segmento, descrica
                                  descricao or f"{cliente} — catálogo B2B", categorias, itens, grade=grade)
     requisicoes = next(e for e in catalogo["etapas"] if e.get("endpoint") == "products")["requests"]
     publicos = [candidatos[n]["preco"] for n, _ in itens if _tem_preco(candidatos[n])]
+    mesmo_site = len({urlparse(candidatos[n]["url"]).netloc.replace("www.", "") for n, _ in itens}) <= 1
     faixas = FaixasPreco.carregar()
     segmento_faixa = faixas.segmento(segmento, [candidatos[n]["nome"] for n, _ in itens])
     precos, regras = [], set()
@@ -1182,7 +1183,7 @@ def montar_pela_selecao(coleta, candidatos, escolha, cliente, segmento, descrica
         if not req.get("_preco_estimado"):
             entrada.update(origem="publico", regra=("lido no anexo do cliente" if c["origem"] == "anexo"
                                                    else "lido na página do produto"))
-        elif publicos:
+        elif publicos and mesmo_site:
             entrada.update(origem="estimado",
                            regra=f"mediana dos {len(publicos)} preços públicos do mesmo site")
         else:
@@ -1200,7 +1201,7 @@ def montar_pela_selecao(coleta, candidatos, escolha, cliente, segmento, descrica
     if regras:
         regra_preco = ("preço estimado por regra fixa, nunca pelo modelo: "
                        + "; ".join(sorted(regras))
-                       + (f" (tabela faixas_preco.json v{faixas.versao})" if not publicos else ""))
+                       + (f" (tabela faixas_preco.json v{faixas.versao})" if not (publicos and mesmo_site) else ""))
     descartes_modelo.append({"_fora_do_foco": sum(1 for n, _ in itens if n in fora_do_foco)})
     return (catalogo, precos, situacao_preco(precos), not all(do_cliente[n] for n, _ in itens),
             regra_preco, descartes_modelo)
@@ -1424,16 +1425,52 @@ produtos suficientes, procure na web produtos do MESMO tipo que o cliente vende 
 Respeite a observação (quantidade, categorias, restrições).
 
 Regras:
-- Traga até {alvo} produtos REAIS e vendáveis, cada um com a URL da página do produto que você abriu.
+- Traga {alvo} produtos REAIS e vendáveis (sobram de reserva), cada um com a URL da PÁGINA DO PRODUTO que
+  você abriu (uma página por produto, com foto; nunca home, categoria, blog ou página de orçamento sem foto).
+- "imagem" é OBRIGATÓRIA: a URL direta da foto do produto (jpg/png/webp) que aparece nessa página.
+  Produto sem foto não serve: troque por outro que tenha.
 - Nunca traga selo, ícone, banner, foto institucional, texto da home, serviço, software ou livro, a menos
   que o site diga que o cliente vende isso.
-- "imagem" é a URL direta da foto do produto (jpg/png/webp) quando você achar; senão deixe vazio.
 - "preco" em reais (número) só se aparecer na página; senão null.
 
 Responda SOMENTE JSON:
 {{"o_que_vende": "frase curta", "segmento": "2 a 5 palavras",
   "produtos": [{{"nome": "...", "url": "https://...", "imagem": "https://...", "preco": null,
                  "categoria": "...", "descricao": "uma frase"}}]}}"""
+
+
+def _ler_og(url):
+    """Foto, nome e preço pelas meta tags (og:image) quando a página não tem dados de produto."""
+    import requests
+    from bs4 import BeautifulSoup
+    try:
+        r = requests.get(url, headers={"User-Agent": "facebookexternalhit/1.1"}, timeout=15)
+    except requests.RequestException:
+        return None
+    if r.status_code != 200:
+        return None
+    sopa = BeautifulSoup(r.text, "html.parser")
+
+    def meta(nome):
+        tag = sopa.find("meta", attrs={"property": nome}) or sopa.find("meta", attrs={"name": nome})
+        return (tag.get("content") or "").strip() if tag else ""
+    imagem = meta("og:image") or meta("twitter:image")
+    if imagem:
+        imagem = urljoin(url, imagem)
+    preco = None
+    achado = re.search(r'"price"\s*:\s*"?([0-9]+(?:\.[0-9]+)?)', r.text)
+    if achado:
+        preco = float(achado.group(1))
+    return {"name": meta("og:title"), "image": imagem, "price": preco,
+            "category": "", "description": meta("og:description")}
+
+
+def _ler_pagina_com_foto(url):
+    pagina = _ler_pagina(url) or {}
+    if not pagina.get("image"):
+        og = _ler_og(url) or {}
+        pagina = {**og, **{k: v for k, v in pagina.items() if v}}
+    return pagina or None
 
 
 def produtos_pelo_barroso(cliente, site, observacao, alvo):
@@ -1447,7 +1484,7 @@ def produtos_pelo_barroso(cliente, site, observacao, alvo):
         return [], ""
     pedido = {"model": MODELO_BUSCA, "tools": [{"type": "web_search"}],
               "input": INSTRUCAO_BARROSO_TUDO.format(cliente=cliente, site=site or "sem site",
-                                                     observacao=observacao or "nenhuma", alvo=alvo + 4)}
+                                                     observacao=observacao or "nenhuma", alvo=max(alvo * 2, alvo + 6))}
     evento("extracao", f"modo barroso-chat: a IA pesquisa o site e a web sozinha ({MODELO_BUSCA})")
     try:
         r = requests.post(BARROSO_URL, json=pedido, headers={"Authorization": "Bearer " + chave}, timeout=150)
@@ -1478,7 +1515,7 @@ def produtos_pelo_barroso(cliente, site, observacao, alvo):
     evento("extracao", f"modo barroso-chat: \"{limpar_texto(dados.get('o_que_vende'))[:160]}\" · "
                        f"{len(itens)} produtos sugeridos"
            + (f", custo US$ {float(custo):.4f}" if isinstance(custo, (int, float)) else ""))
-    paginas = em_paralelo(_ler_pagina, [p["url"] for p in itens], trabalhadores=8, teto=40)
+    paginas = em_paralelo(_ler_pagina_com_foto, [p["url"] for p in itens], trabalhadores=8, teto=40)
     dominio = urlparse(normalizar_site(site)).netloc.replace("www.", "") if site else ""
     candidatos = []
     for p, pagina in zip(itens, paginas):

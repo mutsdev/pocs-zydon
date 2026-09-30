@@ -727,6 +727,7 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
             validos, f"só {len(validos)} produtos passaram na conferência das fotos")
         descartes += descartes_busca
         validos = sem_repetidos(validos + conferir(novos[:selecao.MAXIMO_CANDIDATOS]))
+    validos = sorted(validos, key=lambda v: not v.get("foto_conferida"))
     confirmados = [v["nome"] for v in validos if v.get("foto_conferida")]
     if ao_ter_candidatos and len(confirmados) >= min(3, selecao.alvo_pedido()):
         ao_ter_candidatos(confirmados[:selecao.alvo_pedido()], segmento_informado)
