@@ -561,7 +561,7 @@ def _logo_inicial(entrada):
     return None, logo_url, None, aviso_logo
 
 
-def montar_catalogo(entrada):
+def montar_catalogo(entrada, ao_ter_candidatos=None):
     """Coleta, filtra, seleciona por IA e monta. Levanta PrecisaCatalogo."""
     cliente, site = entrada["cliente"], str(entrada.get("site") or "").strip()
     selecao.iniciar_prazo(PRAZO_BUSCA_SEGUNDOS)
@@ -665,14 +665,22 @@ def montar_catalogo(entrada):
         evento("extracao", f"busca na web: +{len(novos)} candidatos válidos")
         return novos, descartes_busca
 
-    if len(validos) < selecao.MINIMO_PRODUTOS or foco:
-        novos, descartes_busca = buscar_pela_web(validos, f"site com só {len(validos)} produtos")
+    do_foco = [v for v in validos if selecao.casa_com_foco(v, foco)] if foco else validos
+    if foco:
+        evento("extracao", f"{len(do_foco)} dos {len(validos)} candidatos do site são do foco pedido "
+                           f"({', '.join(selecao.partes_do_foco(foco)) or foco})")
+    if len(validos) < selecao.MINIMO_PRODUTOS or (foco and len(do_foco) < selecao.MAXIMO_PRODUTOS):
+        motivo = (f"site com só {len(validos)} produtos" if len(validos) < selecao.MINIMO_PRODUTOS
+                  else f"só {len(do_foco)} produtos do foco no site")
+        novos, descartes_busca = buscar_pela_web(validos, motivo)
         validos += novos
         descartes += descartes_busca
     if foco:
-        da_busca = [v for v in validos if v["origem"] == "busca"]
-        validos = da_busca[:24] + [v for v in validos if v["origem"] != "busca"]
+        casam = [v for v in validos if selecao.casa_com_foco(v, foco)]
+        validos = casam + [v for v in validos if not selecao.casa_com_foco(v, foco)]
     validos = validos[:selecao.MAXIMO_CANDIDATOS]
+    if ao_ter_candidatos and validos:
+        ao_ter_candidatos([v["nome"] for v in validos[:12]])
 
     def conferir(lista):
         if not lista:
@@ -719,7 +727,7 @@ def montar_catalogo(entrada):
                                                 segmento_informado, foco)
     for k in ("custo_usd", "tokens_entrada", "tokens_saida"):
         custo_selecao[k] = (custo_selecao.get(k) or 0) + (custo.get(k) or 0)
-    custo = custo_selecao
+    custo = _custo_total(custo_selecao)
     evento("extracao", f"seleção: {len(escolha.get('selecionados') or [])} produtos, "
                        f"custo US$ {custo['custo_usd']:.4f}")
     segmento_modelo = str(escolha.get("segmento") or "").strip()
@@ -748,6 +756,37 @@ def montar_catalogo(entrada):
                       else "busca" if any(p["fonte"] == "busca" for p in precos) else "site")}
 
 
+def _custo_total(custo):
+    """Custo da fila + o que foi pago fora dela (busca do gateway); modelo = todos os usados."""
+    custo = dict(custo)
+    custo["custo_usd"] = round((custo.get("custo_usd") or 0) + selecao.CUSTO_EXTRA["custo_usd"], 6)
+    if selecao.MODELOS_USADOS:
+        custo["modelo"] = " + ".join(selecao.MODELOS_USADOS)[:200]
+    return custo
+
+
+def _banner_antecipado(entrada, logo_futura, nomes):
+    """Banner feito assim que a logo e os produtos do site existem, sem esperar a curadoria."""
+    import atendimento
+    try:
+        logo = logo_futura.result(timeout=60)[0]
+    except Exception:
+        return None
+    if not logo:
+        return None
+    catalogo = {"empresa": entrada.get("cliente"), "etapas": [
+        {"endpoint": "products", "requests": [{"label": n, "payload": {"name": n}} for n in nomes]}]}
+    caminho = atendimento.DESTINO_JSON / ("previa_" + nome_arquivo(entrada.get("cliente"), entrada.get("pedido_id")))
+    caminho.parent.mkdir(parents=True, exist_ok=True)
+    caminho.write_text(json.dumps(catalogo, ensure_ascii=False), encoding="utf-8")
+    evento("banners", f"gerando as peças já com a logo, em paralelo com a busca ({len(nomes)} produtos do site na cena)")
+    gerada, _, _ = gerar_com_identidade(entrada, caminho, logo, variar=False)
+    if not gerada:
+        return None
+    return {"logo": logo, "pecas": pecas_para_tela(gerada), "cor": cor_da_pasta(gerada),
+            "banners_tar": empacotar(gerada)}
+
+
 def extrair(entrada):
     import atendimento
     pedido_id = entrada["pedido_id"]
@@ -757,8 +796,24 @@ def extrair(entrada):
     logo_futura = paralelo.submit(_logo_inicial, entrada)
     cores_futuras = paralelo.submit(cores_do_site, entrada.get("site")) if entrada.get("site") else None
     paralelo.shutdown(wait=False)
+    import threading
+    import time
+    banner = {}
+
+    def iniciar_banner(nomes):
+        if banner.get("fio"):
+            return
+
+        def rodar():
+            try:
+                banner["saida"] = _banner_antecipado(entrada, logo_futura, nomes)
+            except Exception as erro:
+                evento("banners", f"banner antecipado falhou ({type(erro).__name__}); refaço depois", "aviso")
+        banner["inicio"] = time.monotonic()
+        banner["fio"] = threading.Thread(target=rodar, daemon=True)
+        banner["fio"].start()
     try:
-        montado = montar_catalogo(entrada)
+        montado = montar_catalogo(entrada, iniciar_banner)
     except selecao.SemCreditoOpenRouter as erro:
         return {"sem_credito": str(erro)}
     except selecao.PrecisaCatalogo as erro:
@@ -860,6 +915,12 @@ def extrair(entrada):
     saida["logo_origem"] = logo_origem
     avisos_logo = [o for o in observacoes if "logo" in o]
     saida["logo_aviso"] = " · ".join(avisos_logo)[:800] or None
+    if banner.get("fio"):
+        banner["fio"].join(timeout=max(5, 240 - (time.monotonic() - banner["inicio"])))
+        pronto = banner.get("saida")
+        if pronto and logo and Path(pronto.pop("logo")).resolve() == Path(logo).resolve():
+            saida["banner"] = pronto
+            evento("banners", "banners prontos junto com a curadoria")
     return saida
 
 
@@ -1069,6 +1130,17 @@ import shutil, time
 from concurrent.futures import ThreadPoolExecutor
 import gerador as mod_gerador
 import formatos as mod_formatos
+import requests as _requests
+_post = _requests.post
+def _post_curto(*a, **k):
+    k["timeout"] = min(float(k.get("timeout") or 50), 50)
+    return _post(*a, **k)
+_requests.post = _post_curto
+mod_gerador.TENTATIVAS = 2
+_avaliar = gerar_banners.juiz.avaliar
+def _avaliar_rapido(imagem, contexto, config, tentativas=1):
+    return _avaliar(imagem, contexto, config, 1)
+gerar_banners.juiz.avaliar = _avaliar_rapido
 _gerar_e_montar_original = gerar_banners._gerar_e_montar
 def _encher_paralelo(pasta, pal, contexto, alvos, semente):
     def uma(alvo):
@@ -1094,6 +1166,9 @@ def _gerar_e_montar(args, pasta, pal, contexto):
         return codigo
     reprovados = [a for a in alvos if (pecas.get(a) or {}).get("origem") != "aprovado"]
     if codigo or not reprovados:
+        return codigo
+    if time.time() - inicio > 100:
+        print(f"sem repescagem: {time.time() - inicio:.0f}s gastos")
         return codigo
     guardadas = pasta / "cenas-reprovadas"
     guardadas.mkdir(exist_ok=True)
@@ -1501,7 +1576,8 @@ def gerar_com_identidade(entrada, caminho, logo, variar=False, anterior=None, te
     if nova and cena_ia:
         try:
             manifesto = json.loads((Path(nova) / "manifesto.json").read_text(encoding="utf-8"))
-            origens = {k: v.get("origem") for k, v in (manifesto.get("pecas") or {}).items()}
+            origens = {k: v.get("origem") for k, v in (manifesto.get("pecas") or {}).items()
+                       if k in ("login", "cabecalho")}
             evento("banners", "cena por IA: " + ", ".join(
                 f"{k} {'aprovada' if o == 'aprovado' else 'reprovada, ficou só a marca'}" for k, o in origens.items()))
         except (OSError, ValueError):

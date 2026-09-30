@@ -36,6 +36,19 @@ IMAGEM_NAO_E_PRODUTO = re.compile(
 
 
 PRAZO = {"fim": None}
+TEMPO_IA = {"segundos": 90, "tentativas": 2, "compativel": 150}
+TETO_CONFERENCIA = 60
+CUSTO_EXTRA = {"custo_usd": 0.0}
+MODELOS_USADOS = []
+_TRAVA_CUSTO = __import__("threading").Lock()
+
+
+def registrar_modelo(modelo, custo_usd=0.0):
+    """Soma custo pago fora da fila (ex.: busca do gateway) e guarda cada modelo usado no pedido."""
+    with _TRAVA_CUSTO:
+        if modelo and modelo not in MODELOS_USADOS:
+            MODELOS_USADOS.append(modelo)
+        CUSTO_EXTRA["custo_usd"] += float(custo_usd or 0)
 
 
 def iniciar_prazo(segundos):
@@ -754,10 +767,10 @@ def _ia_gemini(mensagens, baixadas):
     for modelo in (MODELO_SELECAO,) + MODELOS_RESERVA:
         if ("gemini", modelo) in IAS_SEM_COTA:
             continue
-        for tentativa in range(2):
+        for tentativa in range(TEMPO_IA["tentativas"]):
             try:
                 resposta = requests.post(GEMINI_URL.format(modelo=modelo), json=corpo_pedido,
-                                         headers={"x-goog-api-key": chave}, timeout=90)
+                                         headers={"x-goog-api-key": chave}, timeout=TEMPO_IA["segundos"])
             except requests.RequestException as erro:
                 ultimo = type(erro).__name__
                 continue
@@ -791,7 +804,7 @@ def _ia_openai_compativel(nome, url, chave, modelos, mensagens, baixadas, extra=
         pedido = {"model": modelo, "messages": corpo_msgs, "temperature": 0,
                   "max_tokens": MAXIMO_TOKENS_SAIDA, **(extra or {})}
         try:
-            resposta = requests.post(url, json=pedido, timeout=150,
+            resposta = requests.post(url, json=pedido, timeout=TEMPO_IA["compativel"],
                                      headers={"Authorization": f"Bearer {chave}"})
         except requests.RequestException as erro:
             ultimo = type(erro).__name__
@@ -861,6 +874,7 @@ def _chamar_openrouter(mensagens):
         except ValueError as erro:
             motivos.append(f"{nome}: resposta inválida ({erro})")
             continue
+        registrar_modelo(resultado[1].get("modelo"))
         if motivos:
             evento("extracao", f"IA usada: {resultado[1]['modelo']} (antes: {' · '.join(motivos)})"[:480], "aviso")
         return resultado
@@ -882,22 +896,45 @@ Itens:
 {lista}"""
 
 
+def _conferir_lote(lote, cliente):
+    lista = "\n".join(f"{n}. {c['nome'][:110]}" for n, c in enumerate(lote))
+    conteudo = [{"type": "text", "text": INSTRUCAO_CONFERIR_FOTO.format(cliente=cliente, lista=lista)}]
+    for n, c in enumerate(lote):
+        conteudo += [{"type": "text", "text": f"Foto do item {n} ({c['nome'][:80]}):"},
+                     {"type": "image_url", "image_url": {"url": c["imagem"]}}]
+    return _chamar_openrouter([{"role": "user", "content": conteudo}])
+
+
 def conferir_fotos(candidatos, cliente):
     """(aprovados, descartes, custo). O modelo olha cada foto e diz se é o produto do nome.
-    Sem resposta para um item, ele passa (a conferência nunca inventa nem apaga em silêncio)."""
+    Os lotes vão ao mesmo tempo e com prazo curto: lote que não volta até o teto passa sem
+    conferência (a conferência nunca inventa nem apaga em silêncio)."""
+    from concurrent.futures import wait
     custo = {"custo_usd": 0.0, "tokens_entrada": 0, "tokens_saida": 0}
     aprovados, descartes = [], []
-    for inicio in range(0, len(candidatos), CONFERENCIA_POR_CHAMADA):
-        lote = candidatos[inicio:inicio + CONFERENCIA_POR_CHAMADA]
-        lista = "\n".join(f"{n}. {c['nome'][:110]}" for n, c in enumerate(lote))
-        conteudo = [{"type": "text", "text": INSTRUCAO_CONFERIR_FOTO.format(cliente=cliente, lista=lista)}]
-        for n, c in enumerate(lote):
-            conteudo += [{"type": "text", "text": f"Foto do item {n} ({c['nome'][:80]}):"},
-                         {"type": "image_url", "image_url": {"url": c["imagem"]}}]
+    lotes = [candidatos[i:i + CONFERENCIA_POR_CHAMADA] for i in range(0, len(candidatos), CONFERENCIA_POR_CHAMADA)]
+    if not lotes:
+        return aprovados, descartes, custo
+    antes = dict(TEMPO_IA)
+    TEMPO_IA.update(segundos=40, tentativas=1, compativel=45)
+    pool = ThreadPoolExecutor(len(lotes))
+    futuros = [pool.submit(_conferir_lote, lote, cliente) for lote in lotes]
+    wait(futuros, timeout=TETO_CONFERENCIA)
+    pool.shutdown(wait=False, cancel_futures=True)
+    TEMPO_IA.update(antes)
+    sem_credito = []
+    for lote, futuro in zip(lotes, futuros):
+        if not futuro.done():
+            evento("extracao", f"conferência de {len(lote)} fotos passou de {TETO_CONFERENCIA}s; "
+                               "itens seguem sem conferência", "aviso")
+            aprovados += [dict(c, foto_conferida=False) for c in lote]
+            continue
         try:
-            resposta, custo_lote = _chamar_openrouter([{"role": "user", "content": conteudo}])
-        except SemCreditoOpenRouter:
-            raise
+            resposta, custo_lote = futuro.result()
+        except SemCreditoOpenRouter as erro:
+            sem_credito.append(erro)
+            aprovados += [dict(c, foto_conferida=False) for c in lote]
+            continue
         except Exception as erro:
             evento("extracao", f"conferência das fotos falhou ({erro}); itens seguem sem conferência", "aviso")
             aprovados += [dict(c, foto_conferida=False) for c in lote]
@@ -921,6 +958,8 @@ def conferir_fotos(candidatos, cliente):
             else:
                 aprovados.append(dict(c, foto_conferida=True,
                                       foto_mostra=limpar_texto(laudo.get("o_que_aparece") or "")[:120]))
+    if sem_credito and len(sem_credito) == len(lotes):
+        raise sem_credito[0]
     evento("extracao", f"fotos conferidas pelo modelo: {len(aprovados)} aprovadas, "
                        f"{len(descartes)} recusadas")
     return aprovados, descartes, custo
@@ -1303,6 +1342,7 @@ def buscar_barroso(consulta, limite=10):
         if not MARKETPLACES.search(href) and not MERCADO_LIVRE.search(href) and href not in urls:
             urls.append(href)
     custo = corpo.get("cost")
+    registrar_modelo(MODELO_BUSCA, custo if isinstance(custo, (int, float)) else 0)
     evento("extracao", f"busca na web pelo gateway ({MODELO_BUSCA}): {len(urls)} links para \"{consulta[:80]}\""
            + (f", custo US$ {float(custo):.4f}" if isinstance(custo, (int, float)) else ""))
     return urls[:limite]
@@ -1464,18 +1504,46 @@ def assunto_dos_nomes(nomes):
     return palavra if vezes >= 3 else ""
 
 
+FOCO_VAZIO = re.compile(r"(?i)\b(quero|queria|gostaria|preciso|busque|buscar|traga|trazer|mostre|somente|apenas|"
+                        r"só|so|os|as|o|a|um|uma|uns|umas|de|da|das|do|dos|produtos?|itens?|categorias?|"
+                        r"seguintes?|linhas?|foco|em|com|para|pra|nas?|nos?|tipo|tipos)\b")
+
+
+def partes_do_foco(foco):
+    """"Quero os produtos das seguintes categorias (bandejas, barras e bielas)" -> ["bandejas", "barras", "bielas"]."""
+    texto = re.split(r"(?i)\bn[aã]o\b|\bsem\b", foco or "")[0]
+    dentro = re.findall(r"\(([^)]*)\)", texto)
+    if dentro:
+        texto = " , ".join(dentro)
+    texto = FOCO_VAZIO.sub(" ", texto)
+    partes = [" ".join(p.split()) for p in re.split(r"[,;/:]|\s+e\s+|\s+ou\s+", texto)]
+    return [p for p in partes if re.search(r"[a-zà-ú0-9]{3,}", p.lower())]
+
+
+def casa_com_foco(candidato, foco):
+    """O candidato é de alguma das categorias pedidas no foco (radical de 5 letras)."""
+    chaves = {c[:5] for p in partes_do_foco(foco) for c in palavras_chave(p)}
+    if not chaves:
+        return True
+    texto = palavras_chave(" ".join(str(candidato.get(k) or "") for k in ("nome", "categoria", "url")))
+    return any(w.startswith(c) for w in texto for c in chaves)
+
+
 def termos_de_busca(cliente, segmento, categorias, nomes=(), foco=""):
     """Termos específicos: nomes de produto já conhecidos (lidos no site ou na foto)
     e linhas do site com duas palavras ou mais ("disco diamantado"). Palavra solta
     ("metal") traz enciclopédia, então fica de fora."""
     termos = []
-    foco_limpo = re.split(r"(?i)[,;]|\bn[aã]o\b|\bsem\b", foco or "")[0]
+    partes_foco = partes_do_foco(foco)
+    foco_limpo = " ".join(partes_foco)
     assunto = assunto_dos_nomes(nomes) or (re.findall(r"[a-zà-ú]{4,}", (segmento or "").lower()) or [""])[0]
-    for parte in re.split(r"\s+e\s+|/", foco_limpo):
+    if assunto and any(sem_acento(assunto)[:5] in sem_acento(p) for p in partes_foco):
+        assunto = ""
+    for parte in partes_foco[:4]:
         chave = " ".join(re.findall(r"[a-zà-ú0-9]{3,}", parte.lower())[:3])
         if chave:
-            termos.append(f"{chave} para {assunto}".strip() if assunto else chave)
-            termos.append(f"{chave} {assunto} {cliente}".strip())
+            termos.append(f"{chave} para {assunto}".strip() if assunto else f"{chave} comprar")
+            termos.append(" ".join(x for x in (chave, assunto, cliente) if x))
     for n in ([] if foco_limpo.strip() else list(nomes)[:3]):
         chave = " ".join(palavras_chave(n)[:5])
         if len(chave.split()) >= 2:

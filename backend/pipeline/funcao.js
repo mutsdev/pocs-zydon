@@ -178,7 +178,8 @@ async function extrair(ev, execucao) {
   }
   const saida = await rodarPython('extrair', { pedido_id: pedidoId, cliente: pedido.cliente,
     site: pedido.site || '', segmento: '', foco: pedido.foco || '', variacoes: pedido.variacoes === true || pedido.variacoes === 't' || pedido.variacoes === 'true',
-    executivo: pedido.executivo,
+    executivo: pedido.executivo, cena_ia: await comCenaIa(pedidoId),
+    preferencias: await preferenciasDoExecutivo(pedido.executivo_id),
     anexo: conteudoAnexo ? { nome: pedido.anexo_nome, conteudo_base64: conteudoAnexo } : null }, registrar);
   await registrar.fim();
   if (!saida.ok) { await falhar(pedidoId, saida.erro, registrar); return saida; }
@@ -222,7 +223,12 @@ async function extrair(ev, execucao) {
     l: saida.logo_url || null, mo: r.modelo, cu: String(r.custo_usd || 0), t: String(r.tokens || 0),
     sim: String(!!r.produtos_similares), o: r.observacoes || null, nl: String(r.nomes_lidos_na_imagem || 0),
     b: saida.logo ? 'gerando' : 'sem_banner' });
-  if (saida.logo) await previa({ pedido_id: pedidoId }, execucao);
+  if (saida.banner && saida.banner.banners_tar) {
+    await salvarArquivo(pedidoId, 'banners', saida.banner.banners_tar);
+    await gravarPecas(pedidoId, saida.banner.pecas, null, saida.banner.cor);
+    await dml(`UPDATE pedidos SET banners_situacao = 'prontos', banner_cor = :c, atualizado_em = now()
+      WHERE pedido_id = :p`, { p: pedidoId, c: saida.banner.cor || null });
+  } else if (saida.logo) await previa({ pedido_id: pedidoId }, execucao);
   await dml('UPDATE pedidos SET execucao_atual = NULL WHERE pedido_id = :p', { p: pedidoId });
   return { ok: true, status: 'curadoria', produtos: r.produtos, preco: r.preco };
 }
