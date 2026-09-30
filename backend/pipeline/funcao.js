@@ -179,6 +179,7 @@ async function extrair(ev, execucao) {
   const saida = await rodarPython('extrair', { pedido_id: pedidoId, cliente: pedido.cliente,
     site: pedido.site || '', segmento: '', foco: pedido.foco || '', variacoes: pedido.variacoes === true || pedido.variacoes === 't' || pedido.variacoes === 'true',
     executivo: pedido.executivo, cena_ia: await comCenaIa(pedidoId),
+    barroso_tudo: (await sql(`SELECT valor FROM configuracao WHERE chave = 'busca_barroso_tudo'`, {})).some((l) => l.valor === 'sim'),
     preferencias: await preferenciasDoExecutivo(pedido.executivo_id),
     anexo: conteudoAnexo ? { nome: pedido.anexo_nome, conteudo_base64: conteudoAnexo } : null }, registrar);
   await registrar.fim();

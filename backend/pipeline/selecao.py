@@ -1414,6 +1414,88 @@ def buscar_barroso(consulta, limite=10):
     return urls[:limite]
 
 
+INSTRUCAO_BARROSO_TUDO = """Você monta o catálogo de demonstração de um portal B2B para o cliente "{cliente}".
+Site do cliente: {site}
+Observação do usuário: {observacao}
+
+Pesquise na web por conta própria: primeiro o site do cliente (entenda o que ele VENDE, pelas páginas e textos
+dele, nunca pelo nome da empresa); se o site tiver página de produto, use as do site. Se o site não tiver
+produtos suficientes, procure na web produtos do MESMO tipo que o cliente vende (lojas brasileiras).
+Respeite a observação (quantidade, categorias, restrições).
+
+Regras:
+- Traga até {alvo} produtos REAIS e vendáveis, cada um com a URL da página do produto que você abriu.
+- Nunca traga selo, ícone, banner, foto institucional, texto da home, serviço, software ou livro, a menos
+  que o site diga que o cliente vende isso.
+- "imagem" é a URL direta da foto do produto (jpg/png/webp) quando você achar; senão deixe vazio.
+- "preco" em reais (número) só se aparecer na página; senão null.
+
+Responda SOMENTE JSON:
+{{"o_que_vende": "frase curta", "segmento": "2 a 5 palavras",
+  "produtos": [{{"nome": "...", "url": "https://...", "imagem": "https://...", "preco": null,
+                 "categoria": "...", "descricao": "uma frase"}}]}}"""
+
+
+def produtos_pelo_barroso(cliente, site, observacao, alvo):
+    """Modo de teste: o barroso-chat recebe só o link e a observação e pesquisa tudo sozinho.
+    Devolve (candidatos, segmento). Cada página citada é lida para confirmar foto e preço."""
+    import requests
+    from urllib.parse import urlparse
+    chave = os.environ.get("BARROSO_API_KEY", "").strip()
+    if not chave:
+        evento("extracao", "modo barroso-chat: chave do gateway ausente; seguindo a busca normal", "aviso")
+        return [], ""
+    pedido = {"model": MODELO_BUSCA, "tools": [{"type": "web_search"}],
+              "input": INSTRUCAO_BARROSO_TUDO.format(cliente=cliente, site=site or "sem site",
+                                                     observacao=observacao or "nenhuma", alvo=alvo + 4)}
+    evento("extracao", f"modo barroso-chat: a IA pesquisa o site e a web sozinha ({MODELO_BUSCA})")
+    try:
+        r = requests.post(BARROSO_URL, json=pedido, headers={"Authorization": "Bearer " + chave}, timeout=150)
+    except requests.RequestException as erro:
+        evento("extracao", f"modo barroso-chat falhou ({type(erro).__name__}); seguindo a busca normal", "aviso")
+        return [], ""
+    if r.status_code != 200:
+        evento("extracao", f"modo barroso-chat respondeu HTTP {r.status_code}; seguindo a busca normal", "aviso")
+        return [], ""
+    try:
+        corpo = r.json() or {}
+    except ValueError:
+        return [], ""
+    texto = corpo.get("output_text") or ""
+    if not texto:
+        for item in corpo.get("output") or []:
+            for parte in item.get("content") or []:
+                texto += (parte.get("text") or "") + "\n"
+    custo = corpo.get("cost")
+    registrar_modelo(MODELO_BUSCA, custo if isinstance(custo, (int, float)) else 0)
+    try:
+        dados = _texto_json(texto)
+    except ValueError:
+        evento("extracao", "modo barroso-chat: resposta sem JSON; seguindo a busca normal", "aviso")
+        return [], ""
+    itens = [p for p in (dados.get("produtos") or []) if isinstance(p, dict)
+             and str(p.get("url") or "").startswith("http") and not MARKETPLACES.search(str(p.get("url")))]
+    evento("extracao", f"modo barroso-chat: \"{limpar_texto(dados.get('o_que_vende'))[:160]}\" · "
+                       f"{len(itens)} produtos sugeridos"
+           + (f", custo US$ {float(custo):.4f}" if isinstance(custo, (int, float)) else ""))
+    paginas = em_paralelo(_ler_pagina, [p["url"] for p in itens], trabalhadores=8, teto=40)
+    dominio = urlparse(normalizar_site(site)).netloc.replace("www.", "") if site else ""
+    candidatos = []
+    for p, pagina in zip(itens, paginas):
+        pagina = pagina or {}
+        imagem = pagina.get("image") or p.get("imagem") or ""
+        preco = pagina.get("price") or p.get("preco")
+        try:
+            preco = float(preco) if preco not in (None, "") else None
+        except (TypeError, ValueError):
+            preco = None
+        origem = "site" if dominio and dominio in urlparse(p["url"]).netloc else "busca"
+        candidatos.append(candidato(p.get("nome") or pagina.get("name"), p["url"], imagem, preco,
+                                    p.get("categoria") or pagina.get("category"),
+                                    p.get("descricao") or pagina.get("description"), origem))
+    return candidatos, limpar_texto(dados.get("segmento"))[:80]
+
+
 def buscar_duckduckgo(consulta, limite=10):
     """URLs orgânicas do DuckDuckGo HTML (Google/Bing devolvem página de bloqueio)."""
     import requests

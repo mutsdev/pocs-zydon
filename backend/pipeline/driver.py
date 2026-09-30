@@ -594,6 +594,19 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
         if not segmento_informado and descoberta.get("segmento"):
             segmento_informado = descoberta["segmento"]
     coleta = {"site": selecao.normalizar_site(site) if site else "", "plataforma": "nenhuma"}
+    pelo_barroso = False
+    if entrada.get("barroso_tudo") and not entrada.get("anexo"):
+        sugeridos, segmento_barroso = selecao.produtos_pelo_barroso(cliente, site, observacao, selecao.alvo_pedido())
+        achados, descartes_barroso = selecao.filtrar_candidatos(sugeridos)
+        descartes += descartes_barroso
+        evento("extracao", f"modo barroso-chat: {len(achados)} produtos com página e foto válidas")
+        if achados:
+            validos, pelo_barroso = achados, True
+            coleta["plataforma"] = "barroso-chat"
+            if not segmento_informado and segmento_barroso:
+                segmento_informado = segmento_barroso
+        else:
+            evento("extracao", "modo barroso-chat não trouxe produto válido; seguindo a busca normal", "aviso")
     if entrada.get("anexo"):
         import anexo
         evento("extracao", f"lendo o anexo {entrada['anexo']['nome']}")
@@ -603,7 +616,7 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
         descartes += descartes_anexo + descartes_filtro
         coleta["plataforma"] = fonte_anexo
         evento("extracao", f"anexo: {len(validos)} produtos válidos")
-    if site and len(validos) < selecao.MAXIMO_PRODUTOS:
+    if site and not pelo_barroso and len(validos) < selecao.MAXIMO_PRODUTOS:
         evento("extracao", f"lendo {site}")
         try:
             coleta_site, candidatos = selecao.coletar_candidatos(site, foco)
@@ -617,7 +630,7 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
         validos += [v for v in do_site if selecao.sem_acento(v["nome"]) not in vistos]
         descartes += descartes_site
         evento("extracao", f"{len(do_site)} candidatos válidos no site, {len(descartes_site)} descartados")
-    if site and len(validos) < selecao.MAXIMO_PRODUTOS:
+    if site and not pelo_barroso and len(validos) < selecao.MAXIMO_PRODUTOS:
         secoes, descartes_secoes = selecao.filtrar_candidatos(
             selecao.coletar_secoes(selecao.normalizar_site(site)))
         vistos = {v["imagem"] for v in validos} | {selecao.sem_acento(v["nome"]) for v in validos}
@@ -631,7 +644,7 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
     custo = {"modelo": (selecao.MODELO_SELECAO if os.environ.get("GEMINI_API_KEY")
                         else selecao.MODELO_OPENROUTER), "custo_usd": 0.0, "tokens_entrada": 0,
              "tokens_saida": 0, "com_imagens": False}
-    if site and len(validos) < selecao.MAXIMO_PRODUTOS:
+    if site and not pelo_barroso and len(validos) < selecao.MAXIMO_PRODUTOS:
         fotos = selecao.coletar_fotos_sem_nome(selecao.normalizar_site(site))
         vistos = {v["imagem"] for v in validos}
         fotos = [f for f in fotos if f["imagem"] not in vistos]
@@ -643,7 +656,7 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
             aprovados, descartes_nomeados = selecao.filtrar_candidatos(nomeados)
             validos += aprovados
             descartes += descartes_fotos + descartes_nomeados
-    if len(validos) < selecao.minimo_pedido() and not tipos_da_empresa and not fonte_anexo:
+    if not pelo_barroso and len(validos) < selecao.minimo_pedido() and not tipos_da_empresa and not fonte_anexo:
         tipos_da_empresa = selecao.descobrir_empresa(cliente, site).get("tipos") or []
         if tipos_da_empresa:
             evento("extracao", "produtos que a empresa vende, segundo o Google: " + ", ".join(tipos_da_empresa))
@@ -675,7 +688,7 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
     if foco:
         evento("extracao", f"{len(do_foco)} dos {len(validos)} candidatos do site são do foco pedido "
                            f"({', '.join(selecao.partes_do_foco(foco)) or foco})")
-    if len(validos) < selecao.minimo_pedido() or (foco and len(do_foco) < selecao.alvo_pedido()):
+    if not pelo_barroso and (len(validos) < selecao.minimo_pedido() or (foco and len(do_foco) < selecao.alvo_pedido())):
         motivo = (f"site com só {len(validos)} produtos" if len(validos) < selecao.minimo_pedido()
                   else f"só {len(do_foco)} produtos do foco no site")
         novos, descartes_busca = buscar_pela_web(validos, motivo)
