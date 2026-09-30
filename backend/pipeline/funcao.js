@@ -246,13 +246,8 @@ async function gravarPecas(pedidoId, pecas, publicadas, cor) {
   }
 }
 
-async function comCenaIa(pedidoId) {
-  const r = await sql(`WITH marco AS (SELECT CAST(MAX(valor) FILTER (WHERE chave = 'cena_ia_desde') AS TIMESTAMP) AS desde,
-      CAST(MAX(valor) FILTER (WHERE chave = 'cena_ia_quantos') AS INTEGER) AS quantos FROM configuracao),
-    fila AS (SELECT p.pedido_id FROM pedidos p, marco m WHERE m.desde IS NOT NULL AND p.criado_em >= m.desde
-      ORDER BY p.criado_em LIMIT (SELECT COALESCE(quantos, 0) FROM marco))
-    SELECT count(*) AS n FROM fila WHERE pedido_id = :p`, { p: pedidoId });
-  return Number((r[0] || {}).n) > 0;
+async function comCenaIa() {
+  return true;
 }
 
 async function previa(ev, execucao) {

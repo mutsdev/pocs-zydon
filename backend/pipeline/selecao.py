@@ -905,27 +905,28 @@ def _conferir_lote(lote, cliente):
     return _chamar_openrouter([{"role": "user", "content": conteudo}])
 
 
-def conferir_fotos(candidatos, cliente):
+def conferir_fotos(candidatos, cliente, por_chamada=CONFERENCIA_POR_CHAMADA, teto=None):
     """(aprovados, descartes, custo). O modelo olha cada foto e diz se é o produto do nome.
     Os lotes vão ao mesmo tempo e com prazo curto: lote que não volta até o teto passa sem
     conferência (a conferência nunca inventa nem apaga em silêncio)."""
     from concurrent.futures import wait
     custo = {"custo_usd": 0.0, "tokens_entrada": 0, "tokens_saida": 0}
     aprovados, descartes = [], []
-    lotes = [candidatos[i:i + CONFERENCIA_POR_CHAMADA] for i in range(0, len(candidatos), CONFERENCIA_POR_CHAMADA)]
+    teto = TETO_CONFERENCIA if teto is None else max(10, teto)
+    lotes = [candidatos[i:i + por_chamada] for i in range(0, len(candidatos), por_chamada)]
     if not lotes:
         return aprovados, descartes, custo
     antes = dict(TEMPO_IA)
     TEMPO_IA.update(segundos=40, tentativas=1, compativel=45)
     pool = ThreadPoolExecutor(len(lotes))
     futuros = [pool.submit(_conferir_lote, lote, cliente) for lote in lotes]
-    wait(futuros, timeout=TETO_CONFERENCIA)
+    wait(futuros, timeout=teto)
     pool.shutdown(wait=False, cancel_futures=True)
     TEMPO_IA.update(antes)
     sem_credito = []
     for lote, futuro in zip(lotes, futuros):
         if not futuro.done():
-            evento("extracao", f"conferência de {len(lote)} fotos passou de {TETO_CONFERENCIA}s; "
+            evento("extracao", f"conferência de {len(lote)} fotos passou de {teto:.0f}s; "
                                "itens seguem sem conferência", "aviso")
             aprovados += [dict(c, foto_conferida=False) for c in lote]
             continue
@@ -962,6 +963,30 @@ def conferir_fotos(candidatos, cliente):
         raise sem_credito[0]
     evento("extracao", f"fotos conferidas pelo modelo: {len(aprovados)} aprovadas, "
                        f"{len(descartes)} recusadas")
+    return aprovados, descartes, custo
+
+
+def conferir_ate(candidatos, cliente, alvo=MAXIMO_PRODUTOS, reserva=6):
+    """Confere só os `alvo` primeiros e, ao mesmo tempo, uma reserva com os próximos.
+    Foto recusada puxa o próximo da fila até completar o alvo ou acabar o tempo."""
+    import time
+    fim = time.monotonic() + TETO_CONFERENCIA + 30
+    custo = {"custo_usd": 0.0, "tokens_entrada": 0, "tokens_saida": 0}
+    aprovados, descartes, posicao, rodada = [], [], 0, alvo + reserva
+    while posicao < len(candidatos) and len(aprovados) < alvo:
+        sobra = fim - time.monotonic()
+        if sobra < 15:
+            break
+        lote = candidatos[posicao:posicao + rodada]
+        posicao += len(lote)
+        novos, recusados, custo_rodada = conferir_fotos(lote, cliente, por_chamada=alvo, teto=min(TETO_CONFERENCIA, sobra))
+        aprovados += novos
+        descartes += recusados
+        for k in custo:
+            custo[k] += custo_rodada.get(k) or 0
+        rodada = max(4, alvo - len(aprovados) + 2)
+    if len(aprovados) < alvo and posicao < len(candidatos):
+        aprovados += [dict(c, foto_conferida=False) for c in candidatos[posicao:posicao + alvo - len(aprovados)]]
     return aprovados, descartes, custo
 
 

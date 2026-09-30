@@ -685,8 +685,9 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
     def conferir(lista):
         if not lista:
             return []
-        evento("extracao", "IA (fila gratuita) conferindo se cada foto mostra o produto do nome")
-        aprovados, descartes_fotos, custo_fotos = selecao.conferir_fotos(lista, cliente)
+        evento("extracao", f"IA (fila gratuita) conferindo as fotos dos {min(len(lista), selecao.MAXIMO_PRODUTOS)} "
+                           "primeiros produtos, com os próximos já na reserva")
+        aprovados, descartes_fotos, custo_fotos = selecao.conferir_ate(lista, cliente)
         for k in ("custo_usd", "tokens_entrada", "tokens_saida"):
             custo[k] += custo_fotos.get(k) or 0
         descartes.extend(descartes_fotos)
