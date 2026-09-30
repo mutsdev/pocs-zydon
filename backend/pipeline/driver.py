@@ -752,8 +752,8 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
                if fonte_anexo else "mande o catálogo em PDF ou planilha"),
             {"custo": custo, "descartes": descartes})
     evento("extracao", f"IA (fila gratuita) escolhendo entre {len(validos)} candidatos")
-    escolha, custo_selecao = selecao.selecionar(validos, cliente, site or f"anexo {fonte_anexo}",
-                                                segmento_informado, foco)
+    escolha, custo_selecao = _selecionar_com_teto(validos, cliente, site or f"anexo {fonte_anexo}",
+                                                  segmento_informado, foco)
     for k in ("custo_usd", "tokens_entrada", "tokens_saida"):
         custo_selecao[k] = (custo_selecao.get(k) or 0) + (custo.get(k) or 0)
     custo = _custo_total(custo_selecao)
@@ -785,6 +785,45 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
             "nomes_lidos_na_imagem": sum(1 for p in precos if p.get("nome_lido_na_imagem")),
             "fonte": (("pdf" if fonte_anexo == "pdf" else "planilha") if any(p["fonte"] == "anexo" for p in precos)
                       else "busca" if any(p["fonte"] == "busca" for p in precos) else "site")}
+
+
+TETO_SELECAO = 35
+
+
+def _selecionar_com_teto(validos, cliente, site, segmento, foco):
+    """Seleção pela IA com teto: sem resposta em TETO_SELECAO s, segue com os primeiros
+    candidatos já validados (fotos e páginas conferidas), espalhados pelas categorias."""
+    import threading
+    caixa = {}
+
+    def rodar():
+        try:
+            caixa["ok"] = selecao.selecionar(validos, cliente, site, segmento, foco)
+        except Exception as erro:  # noqa: BLE001
+            caixa["erro"] = erro
+
+    fio = threading.Thread(target=rodar, daemon=True)
+    fio.start()
+    fio.join(TETO_SELECAO)
+    if "ok" in caixa:
+        return caixa["ok"]
+    motivo = f"falhou ({caixa['erro']})" if "erro" in caixa else f"não respondeu em {TETO_SELECAO}s"
+    evento("extracao", f"seleção pela IA {motivo}; seguindo com os primeiros candidatos validados", "aviso")
+    categorias = []
+    for c in validos:
+        nome = str(c.get("categoria") or "").strip()
+        if nome and nome not in categorias:
+            categorias.append(nome)
+    categorias = categorias[:3]
+    selecionados = []
+    for n, c in enumerate(validos[:selecao.alvo_pedido()]):
+        nome = str(c.get("categoria") or "").strip()
+        ci = categorias.index(nome) if nome in categorias else n % 3
+        selecionados.append({"n": n, "categoria": ci, "do_cliente": c.get("origem") in ("site", "anexo"),
+                             "no_foco": True})
+    escolha = {"segmento": segmento or "", "categorias": categorias, "selecionados": selecionados,
+               "descartados": []}
+    return escolha, {"custo_usd": 0, "tokens_entrada": 0, "tokens_saida": 0, "modelo": "reserva sem IA"}
 
 
 def _custo_total(custo):
