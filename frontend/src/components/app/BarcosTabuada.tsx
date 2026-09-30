@@ -39,6 +39,7 @@ function criarSom(mudoInicial: boolean): Som {
   let audio: AudioContext | null = null
   let mestre: GainNode | null = null
   let ruido: AudioBuffer | null = null
+  let branco: AudioBuffer | null = null
   let ondaMestre: GainNode | null = null
   let proximaOnda = 0
   let velocidadeMar = 0.5
@@ -60,9 +61,28 @@ function criarSom(mudoInicial: boolean): Som {
       marrom = (marrom + 0.02 * (Math.random() * 2 - 1)) / 1.02
       dados[i] = marrom * 3.5
     }
+    branco = audio.createBuffer(1, audio.sampleRate * 2, audio.sampleRate)
+    const claro = branco.getChannelData(0)
+    for (let i = 0; i < claro.length; i++) claro[i] = Math.random() * 2 - 1
     ondaMestre = audio.createGain()
     ondaMestre.gain.value = 1
     ondaMestre.connect(mestre)
+    const fundo = audio.createBufferSource()
+    fundo.buffer = ruido
+    fundo.loop = true
+    const fundoFiltro = audio.createBiquadFilter()
+    fundoFiltro.type = 'lowpass'
+    fundoFiltro.frequency.value = 280
+    const fundoGanho = audio.createGain()
+    fundoGanho.gain.value = 0.05
+    const respiro = audio.createOscillator()
+    respiro.frequency.value = 0.07
+    const respiroGanho = audio.createGain()
+    respiroGanho.gain.value = 0.02
+    respiro.connect(respiroGanho).connect(fundoGanho.gain)
+    fundo.connect(fundoFiltro).connect(fundoGanho).connect(ondaMestre)
+    fundo.start()
+    respiro.start()
     proximaOnda = audio.currentTime + 0.2
     const oscA = audio.createOscillator()
     oscA.type = 'sine'
@@ -80,46 +100,78 @@ function criarSom(mudoInicial: boolean): Som {
   }
 
   const onda = (inicio: number, forca: number) => {
-    if (!audio || !ondaMestre || !ruido) return
-    const subida = 1.6 - forca * 0.6 + Math.random() * 0.5
-    const descida = 2.4 - forca * 0.8 + Math.random() * 0.8
-    const pico = 0.16 + forca * 0.14 + Math.random() * 0.05
-    const fim = inicio + subida + descida
-    const fonte = audio.createBufferSource()
-    fonte.buffer = ruido
-    fonte.loop = true
-    fonte.playbackRate.value = 0.85 + Math.random() * 0.3
-    const filtro = audio.createBiquadFilter()
-    filtro.type = 'lowpass'
-    filtro.Q.value = 0.6
-    filtro.frequency.setValueAtTime(260, inicio)
-    filtro.frequency.linearRampToValueAtTime(900 + forca * 900, inicio + subida)
-    filtro.frequency.exponentialRampToValueAtTime(320, fim)
-    const ganho = audio.createGain()
-    ganho.gain.setValueAtTime(0.0001, inicio)
-    ganho.gain.exponentialRampToValueAtTime(pico, inicio + subida)
-    ganho.gain.exponentialRampToValueAtTime(0.0001, fim)
-    const lado = audio.createStereoPanner ? audio.createStereoPanner() : null
-    if (lado) lado.pan.value = (Math.random() - 0.5) * 0.8
-    fonte.connect(filtro).connect(ganho)
-    if (lado) ganho.connect(lado).connect(ondaMestre)
-    else ganho.connect(ondaMestre)
-    fonte.start(inicio, Math.random() * 1.5)
-    fonte.stop(fim + 0.05)
+    if (!audio || !ondaMestre || !ruido || !branco) return
+    const subida = 2.6 - forca * 0.8 + Math.random() * 1.2
+    const quebra = inicio + subida
+    const lavagem = 4.2 - forca * 1.2 + Math.random() * 1.6
+    const fim = quebra + lavagem
+    const pico = 0.2 + forca * 0.12 + Math.random() * 0.06
+    const origem = (Math.random() - 0.5) * 1.2
+    const panear = (no: AudioNode, de: number, para: number, t0: number, t1: number) => {
+      if (!audio!.createStereoPanner) { no.connect(ondaMestre!); return }
+      const lado = audio!.createStereoPanner()
+      lado.pan.setValueAtTime(Math.max(-1, Math.min(1, de)), t0)
+      lado.pan.linearRampToValueAtTime(Math.max(-1, Math.min(1, para)), t1)
+      no.connect(lado).connect(ondaMestre!)
+    }
+
+    const rolo = audio.createBufferSource()
+    rolo.buffer = ruido
+    rolo.loop = true
+    rolo.playbackRate.value = 0.8 + Math.random() * 0.2
+    const rf = audio.createBiquadFilter()
+    rf.type = 'lowpass'
+    rf.Q.value = 0.5
+    rf.frequency.setValueAtTime(120, inicio)
+    rf.frequency.exponentialRampToValueAtTime(520 + forca * 300, quebra)
+    rf.frequency.exponentialRampToValueAtTime(160, fim)
+    const rg = audio.createGain()
+    rg.gain.setValueAtTime(0.0001, inicio)
+    rg.gain.exponentialRampToValueAtTime(pico, quebra)
+    rg.gain.exponentialRampToValueAtTime(pico * 0.35, quebra + lavagem * 0.35)
+    rg.gain.exponentialRampToValueAtTime(0.0001, fim)
+    rolo.connect(rf).connect(rg)
+    panear(rg, origem, origem * 0.4, inicio, fim)
+    rolo.start(inicio, Math.random() * 1.5)
+    rolo.stop(fim + 0.1)
+
+    const estouro = audio.createBufferSource()
+    estouro.buffer = branco
+    estouro.loop = true
+    const ef = audio.createBiquadFilter()
+    ef.type = 'bandpass'
+    ef.Q.value = 0.6
+    ef.frequency.setValueAtTime(700, quebra - 0.4)
+    ef.frequency.exponentialRampToValueAtTime(1400, quebra + 0.15)
+    ef.frequency.exponentialRampToValueAtTime(600, quebra + 2)
+    const eg = audio.createGain()
+    eg.gain.setValueAtTime(0.0001, quebra - 0.4)
+    eg.gain.exponentialRampToValueAtTime(0.05 + forca * 0.04, quebra + 0.2)
+    eg.gain.exponentialRampToValueAtTime(0.0001, quebra + 2.2)
+    estouro.connect(ef).connect(eg)
+    panear(eg, origem, origem * 0.6, quebra - 0.4, quebra + 2.2)
+    estouro.start(quebra - 0.4, Math.random())
+    estouro.stop(quebra + 2.3)
 
     const espuma = audio.createBufferSource()
-    espuma.buffer = ruido
-    const agudo = audio.createBiquadFilter()
-    agudo.type = 'highpass'
-    agudo.frequency.value = 1800
-    const chiado = audio.createGain()
-    const quebra = inicio + subida
-    chiado.gain.setValueAtTime(0.0001, quebra - 0.05)
-    chiado.gain.exponentialRampToValueAtTime(0.12 + forca * 0.1, quebra + 0.08)
-    chiado.gain.exponentialRampToValueAtTime(0.0001, quebra + 0.9 + Math.random() * 0.4)
-    espuma.connect(agudo).connect(chiado).connect(ondaMestre)
-    espuma.start(quebra - 0.05, Math.random())
-    espuma.stop(quebra + 1.5)
+    espuma.buffer = branco
+    espuma.loop = true
+    const alto = audio.createBiquadFilter()
+    alto.type = 'highpass'
+    alto.frequency.value = 900
+    const baixo = audio.createBiquadFilter()
+    baixo.type = 'lowpass'
+    baixo.frequency.setValueAtTime(5200, quebra)
+    baixo.frequency.exponentialRampToValueAtTime(1500, fim)
+    const sg = audio.createGain()
+    sg.gain.setValueAtTime(0.0001, quebra)
+    sg.gain.exponentialRampToValueAtTime(0.022 + forca * 0.014, quebra + 0.9)
+    sg.gain.linearRampToValueAtTime(0.012, quebra + lavagem * 0.55)
+    sg.gain.exponentialRampToValueAtTime(0.0001, fim + 0.8)
+    espuma.connect(alto).connect(baixo).connect(sg)
+    panear(sg, origem * 0.6, -origem * 0.5, quebra, fim + 0.8)
+    espuma.start(quebra, Math.random())
+    espuma.stop(fim + 0.9)
   }
 
   const mar = (vel: number) => {
@@ -130,7 +182,7 @@ function criarSom(mudoInicial: boolean): Som {
     if (proximaOnda > agora + 0.5) return
     const forca = Math.min(1, Math.max(0, (velocidadeMar - 0.5) / 3.5))
     onda(proximaOnda, forca)
-    proximaOnda += Math.max(1.6, 4.8 - forca * 2.4) + Math.random() * 1.8
+    proximaOnda += Math.max(4.5, 7.5 - forca * 2.5) + Math.random() * 2.5
   }
 
   const tensao = (progresso: number, jogando: boolean) => {
