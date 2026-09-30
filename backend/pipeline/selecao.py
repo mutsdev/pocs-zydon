@@ -1925,7 +1925,10 @@ def descobrir_empresa(cliente, site=""):
     m = re.search(r"instagram\.com/([A-Za-z0-9._]+)", site or "")
     if m:
         perfil = f" (Instagram @{m.group(1)})"
+    do_site = texto_do_site(site)
     pergunta = (f"Pesquise no Google a empresa brasileira {cliente}{perfil}. "
+                + (f"O site dela diz: {do_site}. Os tipos de produto têm que bater com esse texto. " if do_site else "")
+                + 
                 "Responda SOMENTE um JSON: {\"site_oficial\": \"https://... ou vazio\", "
                 "\"tipos_de_produto\": [\"3 a 5 tipos de produto que ela vende, 2 a 4 palavras cada\"], "
                 "\"segmento\": \"ramo em poucas palavras\"}. site_oficial não pode ser rede social nem marketplace.")
@@ -2015,15 +2018,52 @@ def _site_pelo_perfil(site, cliente=""):
     return ""
 
 
+TEXTO_DO_SITE = {}
+
+
+def texto_do_site(site, limite=1500):
+    """Título, descrição e títulos da home: o que a própria empresa diz que vende."""
+    if site not in TEXTO_DO_SITE:
+        TEXTO_DO_SITE[site] = _ler_texto_do_site(site, limite)
+    return TEXTO_DO_SITE[site]
+
+
+def _ler_texto_do_site(site, limite):
+    import requests
+    if not site or re.search(r"instagram\.com/|facebook\.com/|linktr\.ee/", site):
+        return ""
+    try:
+        pagina = requests.get(normalizar_site(site), headers={"User-Agent": "Mozilla/5.0"}, timeout=15).text
+    except Exception:
+        return ""
+    partes = re.findall(r"<title[^>]*>([^<]*)</title>", pagina, re.I)[:1]
+    partes += re.findall(r'<meta[^>]+(?:name="description"|property="og:description")[^>]+content="([^"]*)"', pagina, re.I)[:2]
+    partes += re.findall(r"<h[1-3][^>]*>(.*?)</h[1-3]>", pagina, re.I | re.S)[:25]
+    limpas = []
+    for t in partes:
+        t = " ".join(html.unescape(re.sub(r"<[^>]+>", " ", t)).split())
+        if len(t) >= 4 and t not in limpas:
+            limpas.append(t)
+    return " | ".join(limpas)[:limite]
+
+
 def _descobrir_sem_google(cliente, site):
     """Cota do Google esgotada: a fila de IAs gratuitas diz que TIPOS de produto uma empresa
     com esse nome e perfil vende. Só termos de busca; produto, foto e preço continuam vindo
     das páginas lidas."""
     nome = _nome_no_instagram(site)
     oficial = _site_pelo_perfil(site, cliente)
+    do_site = texto_do_site(site)
+    if do_site:
+        evento("extracao", f"lendo o que o próprio site diz que vende: {do_site[:200]}")
     pergunta = (f"Empresa brasileira: {cliente}. Nome no perfil: {nome or cliente}. Perfil: {site or '-'}. "
-                "Pelo nome e pelo @ do perfil, diga que tipos de produto ela provavelmente vende "
-                "(ex.: 'uaisalgados' = salgados). Responda SOMENTE JSON: "
+                + (f"Texto do site da empresa (título, descrição e títulos): {do_site}. "
+                   "Diga que tipos de produto ela vende USANDO SÓ o que esse texto diz; nunca deduza pelo "
+                   "nome da empresa (ex.: 'Logiscal' não é software de logística se o site fala de paletes). "
+                   if do_site else
+                   "Pelo nome e pelo @ do perfil, diga que tipos de produto ela provavelmente vende "
+                   "(ex.: 'uaisalgados' = salgados). ")
+                + "Responda SOMENTE JSON: "
                 "{\"tipos_de_produto\": [\"3 a 5 tipos, 2 a 4 palavras cada, termos que um comprador "
                 "digitaria numa loja online\"], \"segmento\": \"ramo em poucas palavras\"}")
     try:
