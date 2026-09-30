@@ -47,7 +47,14 @@ function App() {
     if (!configured) { setSessao('carregando'); return }
     let ativo = true
     consultar<Sessao>('sessao')
-      .then((r) => { if (ativo) setSessao(r[0] || null) })
+      .then(async (r) => {
+        let atual = r[0] || null
+        if (atual && atual.dominio_ok && !atual.admin && !atual.executivo_id) {
+          await consultar('executivo_entrar')
+          atual = (await consultar<Sessao>('sessao'))[0] || atual
+        }
+        if (ativo) setSessao(atual)
+      })
       .catch(() => { if (ativo) setSessao('erro') })
     return () => { ativo = false }
   }, [configured])
@@ -60,7 +67,7 @@ function App() {
   }
   const s = configured ? (sessao as Sessao) : null
   if (s && !s.admin && !s.executivo_id) {
-    return <Barrado titulo="Seu acesso ainda não foi liberado" texto="Peça ao João Pedro para te cadastrar." email={s.email} />
+    return <Barrado titulo="Seu acesso ainda não foi liberado" texto="Seu cadastro está desativado. Fale com o administrador." email={s.email} />
   }
 
   return (

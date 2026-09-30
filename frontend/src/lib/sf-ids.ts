@@ -2,6 +2,7 @@ export const SF = {
   anexo_parte: '5fd9c4d2-60a1-4c64-8c24-ca1b57d29cca',
   curadoria_salvar: '61451fd2-3b69-4f59-bc82-44d54c79e773',
   executivo_ativo: 'b4c68cd0-872b-475c-bc5f-3f9b4bc3e099',
+  executivo_entrar: '882ce495-7bf1-4bf1-b422-c9ac3e4f6e6a',
   executivo_salvar: 'd42bc07d-3506-49d9-9376-1220825e332a',
   executivos_listar: 'd8669dab-6cca-4a6f-9e86-d0ce74dcd20c',
   logo_parte: '3d87d565-f988-4724-8f2a-3ef89c44fe3c',
