@@ -743,7 +743,7 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
                            "e o pedido registra que o catálogo ficou curto", "aviso")
         entrada["_aviso_curto"] = (f"catálogo curto: só {len(validos)} produtos confirmados no site e na web; "
                                    "anexe um PDF ou planilha se quiser mais")
-    if not validos:
+    if not validos or (entrada.get("automatico") and len(validos) < selecao.MINIMO_PRODUTOS):
         raise selecao.PrecisaCatalogo(
             f"só {len(validos)} produtos com URL de origem e imagem válida "
             f"{'no anexo, ' if fonte_anexo else ''}no site e na busca "
@@ -778,6 +778,10 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
         raise selecao.PrecisaCatalogo(erro.args[0], {"custo": custo, "descartes": descartes
                                                      + extra.get("descartes_modelo", [])})
     descartes += descartes_modelo
+    if entrada.get("automatico") and len(precos) < selecao.MINIMO_PRODUTOS:
+        raise selecao.PrecisaCatalogo(
+            f"só {len(precos)} produtos reais depois da seleção (mínimo {selecao.MINIMO_PRODUTOS} no Dexter); "
+            "mande o catálogo em PDF ou planilha", {"custo": custo, "descartes": descartes})
     if ao_ter_candidatos and precos:
         ao_ter_candidatos([p["nome"] for p in precos], segmento_informado or segmento_modelo)
     return {"catalogo": catalogo, "precos": precos, "preco": situacao, "similares": similares,

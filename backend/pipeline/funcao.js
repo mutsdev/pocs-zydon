@@ -209,7 +209,7 @@ async function extrair(ev, execucao) {
   const aoParcial = (dados) => { if (!parcial) parcial = gravarCuradoria(pedidoId, dados).catch(() => { parcial = null; }); };
   const saida = await rodarPython('extrair', { pedido_id: pedidoId, cliente: pedido.cliente,
     site: pedido.site || '', segmento: '', foco: pedido.foco || '', variacoes: pedido.variacoes === true || pedido.variacoes === 't' || pedido.variacoes === 'true',
-    executivo: pedido.executivo, cena_ia: await comCenaIa(pedidoId),
+    executivo: pedido.executivo, automatico: pedido.automatico === true || pedido.automatico === 't' || pedido.automatico === 'true', cena_ia: await comCenaIa(pedidoId),
     barroso_tudo: (await sql(`SELECT valor FROM configuracao WHERE chave = 'busca_barroso_tudo'`, {})).some((l) => l.valor === 'sim'),
     preferencias: await preferenciasDoExecutivo(pedido.executivo_id),
     licoes: await licoesDasAvaliacoes(pedido.segmento).catch(() => []),
