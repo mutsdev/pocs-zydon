@@ -241,11 +241,34 @@ def logo_clara(caminho):
     """True quando a parte visível da logo é quase toda branca (some no fundo branco)."""
     import numpy as np
     from PIL import Image
-    img = np.asarray(Image.open(caminho).convert("RGBA"), dtype=np.float32)
+    with Image.open(caminho) as bruta:
+        bruta.draft("RGBA", (400, 400))
+        miniatura = bruta.convert("RGBA")
+    miniatura.thumbnail((400, 400))
+    img = np.asarray(miniatura, dtype=np.float32)
     visivel = img[..., 3] > 128
     if not visivel.any():
         return False
     return float((img[..., :3][visivel] @ np.array([0.299, 0.587, 0.114])).mean()) > 215
+
+
+def reduzir_imagem(caminho, lado=1600):
+    """Logo gigante (milhares de px) estoura a memória nas etapas seguintes: reduz antes."""
+    from PIL import Image
+    Image.MAX_IMAGE_PIXELS = 80_000_000
+    try:
+        with Image.open(caminho) as img:
+            if max(img.size) <= lado:
+                return caminho
+            img.draft("RGBA", (lado, lado))
+            menor = img.convert("RGBA")
+        menor.thumbnail((lado, lado), Image.LANCZOS)
+        alvo = Path(caminho).with_name(Path(caminho).stem + "_reduzida.png")
+        menor.save(alvo, "PNG")
+        evento("extracao", f"logo grande reduzida para {menor.width}x{menor.height} (economia de memória)")
+        return alvo
+    except Exception:
+        return caminho
 
 
 def conferir_logo(logo):
@@ -260,6 +283,7 @@ def conferir_logo(logo):
         caminho = Path(logo)
         if caminho.suffix.lower() == ".svg":
             caminho = svg_para_png(caminho)
+        caminho = Path(reduzir_imagem(caminho))
         caminho = Path(recortar_circulo_de_perfil(caminho))
         limiares = mod_regua.carregar()
         regua_logo = {**limiares["logo"], **limiares.get("logo_portal", {})}
