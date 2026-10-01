@@ -1729,6 +1729,33 @@ def miniaturas(entrada):
     return {"catalogo": catalogo, "atualizados": len(pedidos)}
 
 
+def url_pelo_portal_id(portal_id):
+    """Endereço do portal lido na própria Zydon (login com solution_id + /api/b2b/portals/info).
+    Só vale se a página abrir: 2xx no info não prova nada."""
+    import requests
+    import credenciais
+    try:
+        headers, _ = credenciais.carregar(ORG)
+        login = requests.post(f"{credenciais.ACCOUNT_BASE_URL}/access-key/login", timeout=20,
+                              json={"code": headers["X-Zydon-Access-Key-Code"],
+                                    "token": headers["X-Zydon-Access-Key-Token"], "solution_id": portal_id})
+        token = (login.json() or {}).get("accessToken") if login.status_code == 200 else None
+        if not token:
+            return None
+        info = requests.get("https://api.zydon.com.br/api/b2b/portals/info", timeout=20,
+                            headers={"Authorization": "Bearer " + token})
+        url = ((info.json() or {}).get("url") or "").strip() if info.status_code == 200 else ""
+        if not url:
+            return None
+        if not url.startswith("http"):
+            url = "https://" + url
+        pagina = requests.get(url, timeout=25)
+        return url if pagina.status_code < 400 else None
+    except Exception as erro:
+        evento("criacao", f"não deu para ler o endereço pelo id do portal: {type(erro).__name__}", "aviso")
+        return None
+
+
 def criar(entrada):
     import atendimento
     pedido_id = entrada["pedido_id"]
@@ -1741,6 +1768,12 @@ def criar(entrada):
     evento("criacao", "simulação: valida sem criar nada" if simular else "criando o portal na org pocs")
     resultado = atendimento.atender(caminho, logo, ORG, True, pedido_id=pedido_id,
                                     origem_id=pedido_id, simular=simular)
+    if (not simular and resultado.get("status") == "falhou" and resultado.get("portal_id")
+            and not resultado.get("url")):
+        url = url_pelo_portal_id(resultado["portal_id"])
+        if url:
+            evento("criacao", f"portal achado pelo id (o nome longo não bateu na busca por nome): {url}")
+            resultado = dict(resultado, status="concluido", url=url, observacoes="")
     saida = {"resultado": resultado}
     if resultado.get("status") == "concluido" and banners:
         try:
