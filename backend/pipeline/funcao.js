@@ -572,6 +572,14 @@ async function despachar(ev, execucao) {
         break;
       }
     }
+    const semLink = await sql(`SELECT pedido_id FROM pedidos WHERE status = 'falhou' AND portal_id IS NOT NULL
+      AND portal_url IS NULL AND erro LIKE '%nenhum portal chamado%' AND erro NOT LIKE '%pelo id%' ORDER BY id LIMIT 3`);
+    for (const linha of semLink) {
+      if (!pipeline) break;
+      try {
+        await mitra.functions.executeAsync(pipeline.id, { acao: 'url_portal', pedido_id: linha.pedido_id, chave_interna: ev.chave_interna });
+      } catch (erro) { /* tenta no próximo despacho */ }
+    }
   } finally {
     await dml("UPDATE travas SET pedido_id = NULL, execucao_id = NULL WHERE nome = 'despacho'", {});
   }
@@ -601,8 +609,26 @@ async function auto(ev, execucao) {
   }
 }
 
-const ACOES = { extrair, previa, criar, banner, avaliar, miniaturas, trocar_logo: trocarLogo, telufia, despachar, auto };
-const ACOES_INTERNAS = ['despachar', 'auto'];
+async function urlPortal(ev, execucao) {
+  const pedidoId = ev.pedido_id;
+  const registrar = registrador(pedidoId);
+  const pedido = await lerPedido(pedidoId);
+  if (!pedido.portal_id) return { ok: false, erro: 'SEM_PORTAL' };
+  const saida = await rodarPython('url_portal', { pedido_id: pedidoId, portal_id: pedido.portal_id }, registrar);
+  await registrar.fim();
+  if (!saida.ok || !saida.url) {
+    await dml(`UPDATE pedidos SET erro = TRIM(COALESCE(erro, '') || ' · link também não achado pelo id do portal') WHERE pedido_id = :p`, { p: pedidoId });
+    return { ok: false, erro: saida.erro || 'portal não respondeu pelo id' };
+  }
+  await dml(`UPDATE pedidos SET status = 'concluido', portal_url = :u, erro = NULL, falhou_em = NULL,
+      concluido_em = COALESCE(concluido_em, now()), execucao_atual = NULL, atualizado_em = now()
+    WHERE pedido_id = :p`, { p: pedidoId, u: saida.url });
+  await registrar({ etapa: 'criacao', mensagem: `portal achado pelo id: ${saida.url}` });
+  return { ok: true, url: saida.url };
+}
+
+const ACOES = { url_portal: urlPortal, extrair, previa, criar, banner, avaliar, miniaturas, trocar_logo: trocarLogo, telufia, despachar, auto };
+const ACOES_INTERNAS = ['despachar', 'auto', 'url_portal'];
 
 module.exports = async (event, context) => {
   const ev = (event && event.input) ? event.input : (event || {});

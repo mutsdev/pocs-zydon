@@ -1949,7 +1949,11 @@ def telufia(entrada):
         catalogo = json.loads(catalogo)
     return {"telufia": ativar_telufia(catalogo, entrada["cliente"], entrada.get("segmento") or "", entrada["portal_id"])}
 
-ACOES = {"trocar_logo": trocar_logo, "miniaturas": miniaturas, "extrair": extrair, "avaliar": avaliar, "previa": previa, "criar": criar, "banner": banner, "telufia": telufia}
+def url_portal(entrada):
+    return {"url": url_pelo_portal_id(entrada["portal_id"])}
+
+
+ACOES = {"url_portal": url_portal, "trocar_logo": trocar_logo, "miniaturas": miniaturas, "extrair": extrair, "avaliar": avaliar, "previa": previa, "criar": criar, "banner": banner, "telufia": telufia}
 
 
 def main():
