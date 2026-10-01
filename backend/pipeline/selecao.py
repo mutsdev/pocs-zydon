@@ -898,7 +898,104 @@ def _ia_openrouter(mensagens, baixadas):
         raise SemCotaNestaIA(str(erro)[:160])
 
 
-FILA_DE_IAS = (("Gemini", _ia_gemini), ("Cloudflare Workers AI", _ia_cloudflare),
+BARROSO_VISAO = {}
+_TRAVA_VISAO = __import__("threading").Lock()
+
+
+def _barroso_enxerga(chave):
+    """Teste uma vez por pedido: um quadrado vermelho sólido; só vale se o modelo disser vermelho.
+    Evita aprovar foto 'às cegas' quando o gateway ignora a imagem sem dar erro."""
+    import base64
+    import io
+    import requests
+    from PIL import Image
+    with _TRAVA_VISAO:
+        if "ok" in BARROSO_VISAO:
+            return BARROSO_VISAO["ok"]
+        buf = io.BytesIO()
+        Image.new("RGB", (64, 64), (220, 20, 20)).save(buf, format="PNG")
+        url = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+        pedido = {"model": MODELO_BUSCA, "max_output_tokens": 50, "input": [{"role": "user", "content": [
+            {"type": "input_text", "text": "Qual é a cor desta imagem? Responda só o nome da cor, uma palavra."},
+            {"type": "input_image", "image_url": url}]}]}
+        texto = ""
+        try:
+            r = requests.post(BARROSO_URL, json=pedido, headers={"Authorization": "Bearer " + chave}, timeout=30)
+            if r.status_code == 200:
+                corpo = r.json() or {}
+                texto = corpo.get("output_text") or ""
+                if not texto:
+                    for item in corpo.get("output") or []:
+                        for parte in item.get("content") or []:
+                            texto += (parte.get("text") or "") + " "
+        except (requests.RequestException, ValueError):
+            pass
+        ok = bool(re.search(r"(?i)vermelh|\bred\b", texto))
+        BARROSO_VISAO["ok"] = ok
+        evento("extracao", "barroso-chat " + ("enxerga imagem: conferência de fotos vai por ele"
+                                              if ok else "não enxerga imagem: conferência de fotos segue pelo Gemini e reservas"),
+               "info" if ok else "aviso")
+        return ok
+
+
+def _ia_barroso(mensagens, baixadas):
+    """barroso-chat (gateway Barroso, formato Responses). Imagens vão em data URI; se o
+    gateway recusar imagem, sai da fila para chamadas com foto e a próxima IA assume."""
+    import requests
+    chave = os.environ.get("BARROSO_API_KEY", "").strip()
+    if not chave:
+        raise SemCotaNestaIA("BARROSO_API_KEY não cadastrada")
+    com_imagem = bool(baixadas)
+    if ("barroso", "imagem" if com_imagem else "texto") in IAS_SEM_COTA:
+        raise SemCotaNestaIA("barroso-chat fora da fila neste pedido")
+    if com_imagem and not _barroso_enxerga(chave):
+        IAS_SEM_COTA.add(("barroso", "imagem"))
+        raise SemCotaNestaIA("barroso-chat não enxerga imagem (teste de cor falhou)")
+    entrada = []
+    for m in mensagens:
+        if isinstance(m["content"], str):
+            entrada.append({"role": m["role"], "content": [{"type": "input_text", "text": m["content"]}]})
+            continue
+        partes = []
+        for c in m["content"]:
+            if c.get("type") == "text":
+                partes.append({"type": "input_text", "text": c["text"]})
+            elif baixadas.get(c["image_url"]["url"]):
+                mime, dados = baixadas[c["image_url"]["url"]]
+                partes.append({"type": "input_image", "image_url": f"data:{mime};base64,{dados}"})
+            else:
+                partes.append({"type": "input_text", "text": "(imagem não pôde ser baixada)"})
+        entrada.append({"role": m["role"], "content": partes})
+    pedido = {"model": MODELO_BUSCA, "input": entrada, "max_output_tokens": MAXIMO_TOKENS_SAIDA}
+    try:
+        r = requests.post(BARROSO_URL, json=pedido, headers={"Authorization": "Bearer " + chave},
+                          timeout=TEMPO_IA["compativel"])
+    except requests.RequestException as erro:
+        raise SemCotaNestaIA(f"barroso-chat fora do ar ({type(erro).__name__})")
+    if r.status_code != 200:
+        if r.status_code in (401, 402, 403, 429):
+            IAS_SEM_COTA.update({("barroso", "imagem"), ("barroso", "texto")})
+        elif com_imagem and r.status_code in (400, 415, 422):
+            IAS_SEM_COTA.add(("barroso", "imagem"))
+        raise SemCotaNestaIA(f"barroso-chat HTTP {r.status_code}")
+    corpo = r.json() or {}
+    texto = corpo.get("output_text") or ""
+    if not texto:
+        for item in corpo.get("output") or []:
+            for parte in item.get("content") or []:
+                texto += (parte.get("text") or "") + "\n"
+    if com_imagem and re.search(r"(?i)(n[aã]o (consigo|posso) (ver|visualizar|abrir)|can.?t (see|view)|no image)", texto):
+        IAS_SEM_COTA.add(("barroso", "imagem"))
+        raise SemCotaNestaIA("barroso-chat não leu as imagens")
+    dados = _texto_json(texto)
+    uso = corpo.get("usage") or {}
+    custo = corpo.get("cost")
+    return dados, {"modelo": MODELO_BUSCA, "custo_usd": custo if isinstance(custo, (int, float)) else 0.0,
+                   "tokens_entrada": uso.get("input_tokens") or 0,
+                   "tokens_saida": uso.get("output_tokens") or 0}
+
+
+FILA_DE_IAS = (("barroso-chat", _ia_barroso), ("Gemini", _ia_gemini), ("Cloudflare Workers AI", _ia_cloudflare),
                ("NVIDIA", _ia_nvidia), ("OpenRouter", _ia_openrouter))
 
 
@@ -2075,19 +2172,70 @@ def coletar_titulos_de_linha(base):
     return titulos[:4]
 
 
+def _descobrir_pelo_barroso(cliente, site, perfil, do_site):
+    """barroso-chat com busca na web: site oficial, tipos de produto e segmento.
+    Sem chave, sem resposta ou sem tipos úteis, devolve None e o Gemini assume."""
+    import requests
+    chave = os.environ.get("BARROSO_API_KEY", "").strip()
+    if not chave or BARROSO_FORA["sim"]:
+        return None
+    pergunta = (f"Pesquise na web a empresa brasileira {cliente}{perfil}" + (f", site {site}" if site else "") + ". "
+                + (f"O site dela diz: {do_site}. Os tipos de produto têm que bater com esse texto. " if do_site else "")
+                + "Responda SOMENTE um JSON: {\"site_oficial\": \"https://... ou vazio\", "
+                "\"tipos_de_produto\": [\"3 a 5 tipos de produto que ela vende, 2 a 4 palavras cada, termos que um "
+                "comprador digitaria numa loja online; nunca 'ofertas' ou 'melhores produtos'\"], "
+                "\"segmento\": \"ramo em poucas palavras\"}. site_oficial não pode ser rede social nem marketplace.")
+    pedido = {"model": MODELO_BUSCA, "tools": [{"type": "web_search"}], "input": pergunta}
+    try:
+        r = requests.post(BARROSO_URL, json=pedido, headers={"Authorization": "Bearer " + chave},
+                          timeout=max(15, min(60, restante() - 20)))
+    except requests.RequestException as erro:
+        evento("extracao", f"descoberta da empresa via barroso-chat fora do ar ({type(erro).__name__})", "aviso")
+        return None
+    if r.status_code != 200:
+        evento("extracao", f"descoberta da empresa via barroso-chat: HTTP {r.status_code}", "aviso")
+        return None
+    corpo = r.json() or {}
+    texto = corpo.get("output_text") or ""
+    if not texto:
+        for item in corpo.get("output") or []:
+            for parte in item.get("content") or []:
+                texto += (parte.get("text") or "") + "\n"
+    custo = corpo.get("cost")
+    registrar_modelo(MODELO_BUSCA, custo if isinstance(custo, (int, float)) else 0)
+    try:
+        dados = _texto_json(texto)
+    except ValueError:
+        evento("extracao", "descoberta da empresa via barroso-chat: resposta sem JSON", "aviso")
+        return None
+    tipos = tipos_uteis(dados.get("tipos_de_produto") or [])
+    if not tipos:
+        return None
+    oficial = str(dados.get("site_oficial") or "").strip()
+    if oficial and (re.search(r"instagram|facebook|linktr|wa\.me|whatsapp|mercadolivre|shopee|amazon", oficial, re.I)
+                    or not oficial.startswith("http")):
+        oficial = ""
+    evento("extracao", f"descoberta da empresa via barroso-chat: {json.dumps(dados, ensure_ascii=False)[:400]}")
+    return {"site_oficial": oficial or _site_pelo_perfil(site, cliente), "tipos": tipos,
+            "segmento": str(dados.get("segmento") or "").strip()}
+
+
 def descobrir_empresa(cliente, site=""):
     """Instagram ou site sem catálogo: pergunta ao Google (via Gemini) qual é o site oficial
     da empresa e que tipos de produto ela vende. Só ENDEREÇOS e TIPOS voltam; os produtos
     continuam vindo das páginas lidas e conferidas. Sem chave ou com erro, devolve {}."""
     import requests
-    chave = os.environ.get("GEMINI_API_KEY")
-    if not chave:
-        return {}
     perfil = ""
     m = re.search(r"instagram\.com/([A-Za-z0-9._]+)", site or "")
     if m:
         perfil = f" (Instagram @{m.group(1)})"
     do_site = texto_do_site(site)
+    pelo_barroso = _descobrir_pelo_barroso(cliente, site, perfil, do_site)
+    if pelo_barroso:
+        return pelo_barroso
+    chave = os.environ.get("GEMINI_API_KEY")
+    if not chave:
+        return _descobrir_sem_google(cliente, site)
     pergunta = (f"Pesquise no Google a empresa brasileira {cliente}{perfil}. "
                 + (f"O site dela diz: {do_site}. Os tipos de produto têm que bater com esse texto. " if do_site else "")
                 + 
