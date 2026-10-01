@@ -358,7 +358,8 @@ async function criar(ev, execucao) {
     const pedido = await lerPedido(pedidoId);
     const banners = await lerArquivo(pedidoId, 'banners');
     const saida = await rodarPython('criar', { pedido_id: pedidoId, catalogo: pedido.catalogo,
-      cliente: pedido.cliente, segmento: pedido.segmento || '', logo: pedido.logo, banners_tar: banners, simular }, registrar);
+      cliente: pedido.cliente, segmento: pedido.segmento || '', logo: pedido.logo, banners_tar: banners, simular,
+      automatico: pedido.automatico === true || pedido.automatico === 't' || pedido.automatico === 'true' }, registrar);
     await registrar.fim();
     const res = saida.resultado || {};
     if (simular) {

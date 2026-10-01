@@ -1787,6 +1787,12 @@ def criar(entrada):
     logo = restaurar_logo(entrada, pasta)
     banners = restaurar_banners(entrada, pasta)
     renovar_imagens_do_anexo(entrada["catalogo"])
+    if entrada.get("automatico"):
+        if isinstance(entrada["catalogo"], str):
+            entrada["catalogo"] = json.loads(entrada["catalogo"])
+        nome_cliente = " ".join(str(entrada.get("cliente") or entrada["catalogo"].get("empresa") or "").split())
+        entrada["catalogo"]["portal_name"] = f"poc-{nome_cliente}"
+        evento("criacao", f"portal do Dexter: nome {entrada['catalogo']['portal_name']}")
     caminho = gravar_catalogo(entrada["catalogo"], pedido_id)
     simular = bool(entrada.get("simular"))
     evento("criacao", "simulação: valida sem criar nada" if simular else "criando o portal na org pocs")
