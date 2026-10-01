@@ -76,12 +76,12 @@ function App() {
     <Routes>
       {configured ? (
         <>
-          <Route path="/" element={<Navigate to={s?.admin ? '/painel' : s?.executivo_id ? '/novo' : '/pedidos'} replace />} />
+          <Route path="/" element={<Navigate to={s?.admin ? '/painel' : s?.cargo === 'Agente de prospecção' ? '/dexter' : s?.executivo_id ? '/novo' : '/pedidos'} replace />} />
           <Route path="/novo" element={<Shell><NovoPedido /></Shell>} />
           <Route path="/pedidos" element={<Shell><Pedidos /></Shell>} />
           <Route path="/pedidos/:id" element={<Shell><PedidoDetalhe /></Shell>} />
           <Route path="/relatorios" element={<Shell><Relatorios /></Shell>} />
-          {s?.admin && <Route path="/dexter" element={<Shell><Dexter /></Shell>} />}
+          {(s?.admin || s?.cargo === 'Agente de prospecção') && <Route path="/dexter" element={<Shell><Dexter /></Shell>} />}
           {s?.admin && <Route path="/painel" element={<Shell><Painel /></Shell>} />}
           {s?.admin && <Route path="/telas-espera" element={<Shell><TelasEspera /></Shell>} />}
       {s?.admin && <Route path="/usuarios" element={<Shell><Executivos /></Shell>} />}

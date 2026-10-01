@@ -8,7 +8,7 @@ import LogoZydon from './LogoZydon'
 
 const ITENS = [
   { para: '/painel', rotulo: 'Painel', icone: LayoutDashboard, admin: true },
-  { para: '/dexter', rotulo: 'Dexter', icone: Bot, admin: true },
+  { para: '/dexter', rotulo: 'Dexter', icone: Bot, agente: true },
   { para: '/novo', rotulo: 'Novo pedido', icone: PlusCircle },
   { para: '/pedidos', rotulo: 'Pedidos', icone: LayoutList },
   { para: '/relatorios', rotulo: 'Relatórios', icone: BarChart3 },
@@ -35,7 +35,7 @@ function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
     <nav className="flex flex-col h-full w-60 p-3" style={{ backgroundColor: 'var(--color-nav)', borderRight: '1px solid var(--color-border)' }}>
       <Marca />
       <div className="flex flex-col gap-1 mt-4">
-        {ITENS.filter((i) => !('admin' in i) || sessao.admin).filter((i) => i.para !== '/novo' || sessao.executivo_id).map(({ para, rotulo, icone: Icone }) => (
+        {ITENS.filter((i) => ('agente' in i ? (sessao.admin || sessao.cargo === 'Agente de prospecção') : !('admin' in i) || sessao.admin)).filter((i) => i.para !== '/novo' || sessao.executivo_id).map(({ para, rotulo, icone: Icone }) => (
           <NavLink
             key={para}
             to={para}

@@ -11,13 +11,15 @@ module.exports = async (event, context) => {
   await mitra.init();
   const g = await guarda(mitra, context);
   if (!g.ok) return g;
-  if (!g.sessao.admin) return { ok: false, erro: 'SO_ADMIN', mensagem: 'Só o administrador controla o Dexter.' };
+  const agente = !g.sessao.admin && g.sessao.cargo === 'Agente de prospecção' && !!g.sessao.executivo_id;
+  if (!g.sessao.admin && !agente) return { ok: false, erro: 'SO_ADMIN', mensagem: 'Só o administrador e o Dexter controlam esta tela.' };
+  const meu = agente ? String(g.sessao.executivo_id) : '';
   const sql = async (q, p = {}) => (await mitra.sql.executeQuery(q, p)).rows || [];
   const dml = (q, p = {}) => mitra.sql.executeDml([{ sql: q, parameters: p }]);
   const acao = String(ev.acao || '');
 
   if (acao === 'lote') {
-    const alvo = ev.executivo_id ? String(ev.executivo_id) : '';
+    const alvo = agente ? meu : (ev.executivo_id ? String(ev.executivo_id) : '');
     const dono = (await sql(`SELECT id, nome FROM executivos WHERE ativo AND
       (CASE WHEN :e = '' THEN cargo = 'Agente de prospecção' ELSE id = CAST(NULLIF(:e, '') AS INTEGER) END) ORDER BY id LIMIT 1`, { e: alvo }))[0];
     if (!dono) return { ok: false, erro: 'EXECUTIVO_DESCONHECIDO' };
@@ -25,7 +27,7 @@ module.exports = async (event, context) => {
   }
 
   if (acao === 'gerar_token') {
-    const dono = (await sql('SELECT id, nome FROM executivos WHERE id = CAST(:e AS INTEGER) AND ativo', { e: String(ev.executivo_id || 0) }))[0];
+    const dono = (await sql('SELECT id, nome FROM executivos WHERE id = CAST(:e AS INTEGER) AND ativo', { e: agente ? meu : String(ev.executivo_id || 0) }))[0];
     if (!dono) return { ok: false, erro: 'EXECUTIVO_DESCONHECIDO' };
     const token = `dxt_${crypto.randomBytes(24).toString('base64url')}`;
     const hash = crypto.createHash('sha256').update(token).digest('hex');
@@ -35,8 +37,9 @@ module.exports = async (event, context) => {
   }
 
   if (acao === 'revogar_token') {
-    const r = await sql(`UPDATE tokens_api SET revogado_em = now() WHERE id = CAST(:i AS INTEGER) AND revogado_em IS NULL RETURNING id, revogado_em`,
-      { i: String(ev.id || 0) });
+    const r = await sql(`UPDATE tokens_api SET revogado_em = now() WHERE id = CAST(:i AS INTEGER) AND revogado_em IS NULL
+      AND (:m = '' OR executivo_id = CAST(NULLIF(:m, '') AS INTEGER)) RETURNING id, revogado_em`,
+      { i: String(ev.id || 0), m: meu });
     return r.length ? { ok: true, ...r[0] } : { ok: false, erro: 'TOKEN_DESCONHECIDO' };
   }
 
@@ -45,13 +48,13 @@ module.exports = async (event, context) => {
     const r = acao === 'retentar'
       ? await sql(`UPDATE pedidos SET status = 'na_fila', erro = NULL, erro_codigo = NULL, motivo_catalogo = NULL,
           execucao_atual = NULL, atualizado_em = now()
-        WHERE pedido_id = :p AND automatico AND portal_id IS NULL AND status IN ('falhou', 'precisa_catalogo') RETURNING pedido_id, status`, { p: pedidoId })
-      : await sql(`UPDATE pedidos SET status = 'falhou', erro = 'cancelado pelo administrador', erro_codigo = 'CANCELADO',
+        WHERE pedido_id = :p AND automatico AND (:m = '' OR executivo_id = CAST(NULLIF(:m, '') AS INTEGER)) AND portal_id IS NULL AND status IN ('falhou', 'precisa_catalogo') RETURNING pedido_id, status`, { p: pedidoId, m: meu })
+      : await sql(`UPDATE pedidos SET status = 'falhou', erro = :motivo, erro_codigo = 'CANCELADO',
           falhou_em = now(), atualizado_em = now()
-        WHERE pedido_id = :p AND automatico AND status = 'na_fila' RETURNING pedido_id, status`, { p: pedidoId });
+        WHERE pedido_id = :p AND automatico AND (:m = '' OR executivo_id = CAST(NULLIF(:m, '') AS INTEGER)) AND status = 'na_fila' RETURNING pedido_id, status`, { p: pedidoId, m: meu, motivo: agente ? 'cancelado pelo Dexter' : 'cancelado pelo administrador' });
     if (!r.length) return { ok: false, erro: 'STATUS_NAO_PERMITE', acao };
     await dml(`INSERT INTO pedido_eventos (pedido_id, etapa, mensagem) VALUES (:p, 'dexter', :m)`,
-      { p: pedidoId, m: acao === 'retentar' ? 'de volta para a fila pelo administrador' : 'cancelado pelo administrador' });
+      { p: pedidoId, m: acao === 'retentar' ? (agente ? 'de volta para a fila pelo Dexter' : 'de volta para a fila pelo administrador') : (agente ? 'cancelado pelo Dexter' : 'cancelado pelo administrador') });
     if (acao === 'retentar') await acordarDespacho(mitra);
     return { ok: true, ...r[0] };
   }

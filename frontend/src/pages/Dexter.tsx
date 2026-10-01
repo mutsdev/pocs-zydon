@@ -11,6 +11,7 @@ import Modal from '../components/ui/Modal'
 import { ToastContainer } from '../components/ui/Toast'
 import { useToast } from '../hooks/useToast'
 import { useApoio } from '../hooks/useApoio'
+import { useSessao } from '../lib/sessao'
 import { Aviso, Esqueleto, Pagina, Vazio } from '../components/app/Pagina'
 import { acionar, consultar, ErroApi } from '../lib/mitra-api'
 import type { Status } from '../lib/mitra-api'
@@ -37,6 +38,8 @@ function lerLinhas(texto: string) {
 
 export default function Dexter() {
   const { executivos } = useApoio()
+  const sessao = useSessao()
+  const agente = !sessao.admin && sessao.cargo === 'Agente de prospecção'
   const { toasts, addToast, removeToast } = useToast()
   const [totais, setTotais] = useState<Totais | null>(null)
   const [lotes, setLotes] = useState<Lote[] | null>(null)
@@ -57,7 +60,7 @@ export default function Dexter() {
   const versao = useRef(0)
 
   const dexter = executivos.find((e) => e.cargo === 'Agente de prospecção')
-  const dono = donoToken || (dexter ? String(dexter.id) : '')
+  const dono = agente ? String(sessao.executivo_id || '') : donoToken || (dexter ? String(dexter.id) : '')
 
   const carregarPedidos = useCallback(async (offset: number, limite = PAGINA) => {
     const v = offset === 0 ? ++versao.current : versao.current
@@ -119,7 +122,7 @@ export default function Dexter() {
   async function mexer(p: LinhaDexter, acao: 'retentar' | 'cancelar') {
     setOcupado(p.pedido_id)
     const antes = p.status
-    setLinhas((l) => l?.map((x) => (x.pedido_id === p.pedido_id ? { ...x, status: acao === 'retentar' ? 'na_fila' : 'falhou', motivo: acao === 'cancelar' ? 'cancelado pelo administrador' : null } : x)) || l)
+    setLinhas((l) => l?.map((x) => (x.pedido_id === p.pedido_id ? { ...x, status: acao === 'retentar' ? 'na_fila' : 'falhou', motivo: acao === 'cancelar' ? (agente ? 'cancelado pelo Dexter' : 'cancelado pelo administrador') : null } : x)) || l)
     try {
       await acionar('dexter_admin', { acao, pedido_id: p.pedido_id })
       addToast('success', acao === 'retentar' ? `${p.cliente} voltou para a fila.` : `${p.cliente} cancelado.`)
@@ -137,7 +140,7 @@ export default function Dexter() {
       const r = await acionar('dexter_admin', { acao: 'gerar_token', executivo_id: dono })
       setTokenNovo({ token: String(r.token), usuario: String(r.usuario) })
       const usuario = executivos.find((e) => String(e.id) === dono)
-      setTokens((l) => [{ id: Number(r.id), prefixo: String(r.prefixo), criado_em: String(r.criado_em), ultimo_uso: null, revogado_em: null, executivo_id: Number(dono), usuario: usuario?.nome || String(r.usuario) }, ...(l || [])])
+      setTokens((l) => [{ id: Number(r.id), prefixo: String(r.prefixo), criado_em: String(r.criado_em), ultimo_uso: null, revogado_em: null, executivo_id: Number(dono), usuario: usuario?.nome || String(r.usuario || sessao.executivo || '') }, ...(l || [])])
     } catch (e) {
       addToast('error', e instanceof ErroApi ? e.message : 'Não foi possível gerar o token.')
     } finally { setGerando(false) }
@@ -221,10 +224,10 @@ export default function Dexter() {
           </div>
           <pre className="rounded-md p-3 text-sm overflow-x-auto" style={{ backgroundColor: 'var(--color-nav-hover)' }}>{exemplo}</pre>
           <div className="flex flex-wrap items-end gap-3">
-            <div className="w-full sm:w-64">
+            {!agente && <div className="w-full sm:w-64">
               <Select label="Usuário do token" value={dono} onChange={setDonoToken}
                 options={executivos.filter((e) => e.ativo).map((e) => ({ value: String(e.id), label: e.cargo ? `${e.nome} · ${e.cargo}` : e.nome }))} />
-            </div>
+            </div>}
             <Button className="h-10" onClick={gerarToken} disabled={gerando}>{gerando ? <Loader2 size={16} className="animate-spin" /> : <KeyRound size={16} />} Gerar token</Button>
           </div>
           {tokens === null ? <Esqueleto linhas={2} /> : tokens.length > 0 && (
