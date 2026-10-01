@@ -149,7 +149,7 @@ module.exports = async (event, context) => {
     const pedidoId = String(ev.pedido_id || '').trim();
     const r = acao === 'retentar'
       ? await sql(`UPDATE pedidos SET status = 'na_fila', erro = NULL, erro_codigo = NULL, motivo_catalogo = NULL,
-          execucao_atual = NULL, atualizado_em = now()
+          execucao_atual = NULL, falhou_em = NULL, concluido_em = NULL, saiu_fila_em = NULL, atualizado_em = now()
         WHERE pedido_id = :p AND automatico AND (:m = '' OR executivo_id = CAST(NULLIF(:m, '') AS INTEGER)) AND portal_id IS NULL AND status IN ('falhou', 'precisa_catalogo') RETURNING pedido_id, status`, { p: pedidoId, m: meu })
       : await sql(`UPDATE pedidos SET status = 'falhou', erro = :motivo, erro_codigo = 'CANCELADO',
           falhou_em = now(), atualizado_em = now()
