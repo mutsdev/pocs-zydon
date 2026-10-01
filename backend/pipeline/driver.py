@@ -884,7 +884,7 @@ def extrair(entrada):
     banner = {}
 
     def iniciar_banner(nomes, segmento=""):
-        if banner.get("fio"):
+        if banner.get("fio") or entrada.get("sem_banner_antecipado"):
             return
 
         def rodar():

@@ -208,13 +208,18 @@ async function extrair(ev, execucao) {
   }
   let parcial = null;
   const aoParcial = (dados) => { if (!parcial) parcial = gravarCuradoria(pedidoId, dados).catch(() => { parcial = null; }); };
-  const saida = await rodarPython('extrair', { pedido_id: pedidoId, cliente: pedido.cliente,
+  const entradaExtracao = { pedido_id: pedidoId, cliente: pedido.cliente,
     site: pedido.site || '', segmento: '', foco: pedido.foco || '', variacoes: pedido.variacoes === true || pedido.variacoes === 't' || pedido.variacoes === 'true',
     executivo: pedido.executivo, automatico: pedido.automatico === true || pedido.automatico === 't' || pedido.automatico === 'true', cena_ia: await comCenaIa(pedidoId),
     barroso_tudo: (await sql(`SELECT valor FROM configuracao WHERE chave = 'busca_barroso_tudo'`, {})).some((l) => l.valor === 'sim'),
     preferencias: await preferenciasDoExecutivo(pedido.executivo_id),
     licoes: await licoesDasAvaliacoes(pedido.segmento).catch(() => []),
-    anexo: conteudoAnexo ? { nome: pedido.anexo_nome, conteudo_base64: conteudoAnexo } : null }, registrar, aoParcial);
+    anexo: conteudoAnexo ? { nome: pedido.anexo_nome, conteudo_base64: conteudoAnexo } : null };
+  let saida = await rodarPython('extrair', entradaExtracao, registrar, aoParcial);
+  if (!saida.ok && !parcial && /falta de memória/.test(String(saida.erro || ''))) {
+    await registrar({ etapa: 'extracao', mensagem: 'memória do servidor acabou com o banner em paralelo; refazendo a busca sem ele (o banner vem depois)', nivel: 'aviso' });
+    saida = await rodarPython('extrair', { ...entradaExtracao, sem_banner_antecipado: true }, registrar, aoParcial);
+  }
   await registrar.fim();
   const jaGravada = parcial ? await parcial : false;
   if (!saida.ok && jaGravada) {
