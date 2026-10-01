@@ -1,67 +1,776 @@
 {
   "_sobre": "Faixa de preço por segmento e categoria para produto SEM preço público. O valor de cada produto é sorteado dentro da faixa com semente no nome normalizado (sha256), então é sempre o mesmo. Quando algum produto escolhido tem preço público, vale a mediana deles (montar_poc.py). O modelo de IA nunca define preço.",
-  "versao": 1,
+  "versao": 2,
   "centavos": 0.9,
-  "padrao": {"nome": "distribuição B2B", "faixa": [12, 150]},
+  "padrao": {
+    "nome": "distribuição B2B",
+    "faixa": [
+      12,
+      150
+    ]
+  },
   "segmentos": [
-    {"nome": "alimentos e bebidas",
-     "radicais": ["aliment", "bebida", "congelad", "frios", "biscoit", "pizza", "frango", "peixe", "carne", "laticin", "food"],
-     "faixa": [6, 80],
-     "categorias": [
-       {"nome": "peixes e frutos do mar", "radicais": ["peixe", "pescad", "salm", "camar", "tilap", "lula", "merluz", "marisc", "mexilh"], "faixa": [35, 140]},
-       {"nome": "aves e carnes", "radicais": ["frango", "aves", "asa", "coxa", "peito", "carne", "bovin", "suin", "linguic"], "faixa": [16, 70]},
-       {"nome": "frios e embutidos", "radicais": ["frios", "queij", "presunt", "calabres", "bacon", "mortadel", "salam"], "faixa": [18, 75]},
-       {"nome": "frutas, legumes e vegetais", "radicais": ["fruta", "legum", "vegeta", "batata", "brocol", "couve", "morango", "abacaxi", "cebola", "salsa"], "faixa": [9, 38]},
-       {"nome": "biscoitos e panificados", "radicais": ["biscoit", "bolach", "pao", "bolo", "torrad"], "faixa": [3.5, 14]},
-       {"nome": "pizzas e lanches", "radicais": ["pizza", "lanche", "salgad", "hamburg"], "faixa": [12, 45]},
-       {"nome": "bebidas", "radicais": ["bebida", "refriger", "suco", "agua", "cervej", "vinho"], "faixa": [3, 18]},
-       {"nome": "temperos e molhos", "radicais": ["tempero", "condiment", "molho", "especiar"], "faixa": [4, 22]}
-     ]},
-    {"nome": "estética automotiva",
-     "radicais": ["automot", "cera", "vonixx", "vintex", "polimento", "pretinho", "detail", "estetica"],
-     "faixa": [18, 160],
-     "categorias": [
-       {"nome": "ceras e selantes", "radicais": ["cera", "wax", "selante", "vitrific"], "faixa": [35, 160]},
-       {"nome": "shampoos", "radicais": ["shampoo", "lava", "floc"], "faixa": [22, 95]},
-       {"nome": "limpadores", "radicais": ["limpador", "apc", "estofad", "desengrax", "vidro"], "faixa": [25, 110]},
-       {"nome": "pneus e borrachas", "radicais": ["pneu", "pretinho", "renovador", "borrach"], "faixa": [20, 80]},
-       {"nome": "acessórios", "radicais": ["microfibra", "toalha", "escova", "aplicador", "pulveriz", "boina"], "faixa": [12, 120]}
-     ]},
-    {"nome": "saúde e produtos hospitalares",
-     "radicais": ["hospital", "medic", "ecg", "monitor", "oxim", "cirurg", "saude", "clinic", "reanimad"],
-     "faixa": [40, 900],
-     "categorias": [
-       {"nome": "equipamentos", "radicais": ["monitor", "eletrocardio", "ventilador", "desfibril", "cardiograf"], "faixa": [2800, 18000]},
-       {"nome": "cabos e sensores", "radicais": ["cabo", "adaptador", "sensor", "sonda"], "faixa": [60, 480]},
-       {"nome": "braçadeiras", "radicais": ["bracadeir", "manguito"], "faixa": [35, 190]},
-       {"nome": "oximetria", "radicais": ["oximetr"], "faixa": [120, 900]},
-       {"nome": "ventilação e reanimação", "radicais": ["reanimad", "balao", "valvula", "pulmao", "mascara"], "faixa": [80, 420]},
-       {"nome": "descartáveis", "radicais": ["descart", "luva", "seringa", "agulha"], "faixa": [12, 95]}
-     ]},
-    {"nome": "ferragens e esquadrias",
-     "radicais": ["esquadri", "aluminio", "ferrag", "fechadur", "roldana", "dobradi", "persiana", "cremona", "fachada"],
-     "faixa": [12, 180],
-     "categorias": [
-       {"nome": "fechaduras e maçanetas", "radicais": ["fechadur", "cremona", "macaneta", "fecho", "fec"], "faixa": [35, 240]},
-       {"nome": "roldanas", "radicais": ["roldana", "rol"], "faixa": [8, 45]},
-       {"nome": "dobradiças", "radicais": ["dobradi", "dob"], "faixa": [18, 120]},
-       {"nome": "vedação e kits", "radicais": ["vedac", "kit", "ved"], "faixa": [15, 95]},
-       {"nome": "suportes e recolhedores", "radicais": ["suporte", "recolhed", "sup", "rec"], "faixa": [10, 70]}
-     ]},
-    {"nome": "materiais de construção",
-     "radicais": ["construc", "cimento", "argamass", "tijolo", "telha", "hidraul", "tinta"],
-     "faixa": [8, 250], "categorias": []},
-    {"nome": "materiais elétricos e industriais",
-     "radicais": ["eletric", "industri", "disjunt", "tomada", "rolament", "motor", "parafus"],
-     "faixa": [6, 350], "categorias": []},
-    {"nome": "cosméticos e beleza",
-     "radicais": ["cosmet", "beleza", "cabelo", "maquiag", "perfum", "hidratant"],
-     "faixa": [12, 120], "categorias": []},
-    {"nome": "tecnologia e informática",
-     "radicais": ["informat", "notebook", "computad", "tecnolog", "impressor"],
-     "faixa": [45, 1800], "categorias": []},
-    {"nome": "segurança eletrônica",
-     "radicais": ["seguranc", "camera", "alarme", "cftv", "interfone"],
-     "faixa": [60, 1200], "categorias": []}
+    {
+      "nome": "alimentos e bebidas",
+      "radicais": [
+        "aliment",
+        "bebida",
+        "congelad",
+        "frios",
+        "biscoit",
+        "pizza",
+        "frango",
+        "peixe",
+        "carne",
+        "laticin",
+        "food",
+        "arroz",
+        "feijao",
+        "oleo",
+        "acucar",
+        "farinh",
+        "macarr",
+        "cafe",
+        "mercear",
+        "atacad",
+        "graos",
+        "leite",
+        "lacte"
+      ],
+      "faixa": [
+        6,
+        80
+      ],
+      "categorias": [
+        {
+          "nome": "peixes e frutos do mar",
+          "radicais": [
+            "peixe",
+            "pescad",
+            "salm",
+            "camar",
+            "tilap",
+            "lula",
+            "merluz",
+            "marisc",
+            "mexilh"
+          ],
+          "faixa": [
+            35,
+            140
+          ]
+        },
+        {
+          "nome": "aves e carnes",
+          "radicais": [
+            "frango",
+            "aves",
+            "asa",
+            "coxa",
+            "peito",
+            "carne",
+            "bovin",
+            "suin",
+            "linguic"
+          ],
+          "faixa": [
+            16,
+            70
+          ]
+        },
+        {
+          "nome": "frios e embutidos",
+          "radicais": [
+            "frios",
+            "queij",
+            "presunt",
+            "calabres",
+            "bacon",
+            "mortadel",
+            "salam"
+          ],
+          "faixa": [
+            18,
+            75
+          ]
+        },
+        {
+          "nome": "frutas, legumes e vegetais",
+          "radicais": [
+            "fruta",
+            "legum",
+            "vegeta",
+            "batata",
+            "brocol",
+            "couve",
+            "morango",
+            "abacaxi",
+            "cebola",
+            "salsa"
+          ],
+          "faixa": [
+            9,
+            38
+          ]
+        },
+        {
+          "nome": "biscoitos e panificados",
+          "radicais": [
+            "biscoit",
+            "bolach",
+            "pao",
+            "bolo",
+            "torrad"
+          ],
+          "faixa": [
+            3.5,
+            14
+          ]
+        },
+        {
+          "nome": "pizzas e lanches",
+          "radicais": [
+            "pizza",
+            "lanche",
+            "salgad",
+            "hamburg"
+          ],
+          "faixa": [
+            12,
+            45
+          ]
+        },
+        {
+          "nome": "bebidas",
+          "radicais": [
+            "bebida",
+            "refriger",
+            "suco",
+            "agua",
+            "cervej",
+            "vinho"
+          ],
+          "faixa": [
+            3,
+            18
+          ]
+        },
+        {
+          "nome": "temperos e molhos",
+          "radicais": [
+            "tempero",
+            "condiment",
+            "molho",
+            "especiar"
+          ],
+          "faixa": [
+            4,
+            22
+          ]
+        }
+      ]
+    },
+    {
+      "nome": "estética automotiva",
+      "radicais": [
+        "automot",
+        "cera",
+        "vonixx",
+        "vintex",
+        "polimento",
+        "pretinho",
+        "detail",
+        "estetica"
+      ],
+      "faixa": [
+        18,
+        160
+      ],
+      "categorias": [
+        {
+          "nome": "ceras e selantes",
+          "radicais": [
+            "cera",
+            "wax",
+            "selante",
+            "vitrific"
+          ],
+          "faixa": [
+            35,
+            160
+          ]
+        },
+        {
+          "nome": "shampoos",
+          "radicais": [
+            "shampoo",
+            "lava",
+            "floc"
+          ],
+          "faixa": [
+            22,
+            95
+          ]
+        },
+        {
+          "nome": "limpadores",
+          "radicais": [
+            "limpador",
+            "apc",
+            "estofad",
+            "desengrax",
+            "vidro"
+          ],
+          "faixa": [
+            25,
+            110
+          ]
+        },
+        {
+          "nome": "pneus e borrachas",
+          "radicais": [
+            "pneu",
+            "pretinho",
+            "renovador",
+            "borrach"
+          ],
+          "faixa": [
+            20,
+            80
+          ]
+        },
+        {
+          "nome": "acessórios",
+          "radicais": [
+            "microfibra",
+            "toalha",
+            "escova",
+            "aplicador",
+            "pulveriz",
+            "boina"
+          ],
+          "faixa": [
+            12,
+            120
+          ]
+        }
+      ]
+    },
+    {
+      "nome": "saúde e produtos hospitalares",
+      "radicais": [
+        "hospital",
+        "medic",
+        "ecg",
+        "monitor",
+        "oxim",
+        "cirurg",
+        "saude",
+        "clinic",
+        "reanimad"
+      ],
+      "faixa": [
+        40,
+        900
+      ],
+      "categorias": [
+        {
+          "nome": "equipamentos",
+          "radicais": [
+            "monitor",
+            "eletrocardio",
+            "ventilador",
+            "desfibril",
+            "cardiograf"
+          ],
+          "faixa": [
+            2800,
+            18000
+          ]
+        },
+        {
+          "nome": "cabos e sensores",
+          "radicais": [
+            "cabo",
+            "adaptador",
+            "sensor",
+            "sonda"
+          ],
+          "faixa": [
+            60,
+            480
+          ]
+        },
+        {
+          "nome": "braçadeiras",
+          "radicais": [
+            "bracadeir",
+            "manguito"
+          ],
+          "faixa": [
+            35,
+            190
+          ]
+        },
+        {
+          "nome": "oximetria",
+          "radicais": [
+            "oximetr"
+          ],
+          "faixa": [
+            120,
+            900
+          ]
+        },
+        {
+          "nome": "ventilação e reanimação",
+          "radicais": [
+            "reanimad",
+            "balao",
+            "valvula",
+            "pulmao",
+            "mascara"
+          ],
+          "faixa": [
+            80,
+            420
+          ]
+        },
+        {
+          "nome": "descartáveis",
+          "radicais": [
+            "descart",
+            "luva",
+            "seringa",
+            "agulha"
+          ],
+          "faixa": [
+            12,
+            95
+          ]
+        }
+      ]
+    },
+    {
+      "nome": "ferragens e esquadrias",
+      "radicais": [
+        "esquadri",
+        "aluminio",
+        "ferrag",
+        "fechadur",
+        "roldana",
+        "dobradi",
+        "persiana",
+        "cremona",
+        "fachada"
+      ],
+      "faixa": [
+        12,
+        180
+      ],
+      "categorias": [
+        {
+          "nome": "fechaduras e maçanetas",
+          "radicais": [
+            "fechadur",
+            "cremona",
+            "macaneta",
+            "fecho",
+            "fec"
+          ],
+          "faixa": [
+            35,
+            240
+          ]
+        },
+        {
+          "nome": "roldanas",
+          "radicais": [
+            "roldana",
+            "rol"
+          ],
+          "faixa": [
+            8,
+            45
+          ]
+        },
+        {
+          "nome": "dobradiças",
+          "radicais": [
+            "dobradi",
+            "dob"
+          ],
+          "faixa": [
+            18,
+            120
+          ]
+        },
+        {
+          "nome": "vedação e kits",
+          "radicais": [
+            "vedac",
+            "kit",
+            "ved"
+          ],
+          "faixa": [
+            15,
+            95
+          ]
+        },
+        {
+          "nome": "suportes e recolhedores",
+          "radicais": [
+            "suporte",
+            "recolhed",
+            "sup",
+            "rec"
+          ],
+          "faixa": [
+            10,
+            70
+          ]
+        }
+      ]
+    },
+    {
+      "nome": "materiais de construção",
+      "radicais": [
+        "construc",
+        "cimento",
+        "argamass",
+        "tijolo",
+        "telha",
+        "hidraul",
+        "tinta"
+      ],
+      "faixa": [
+        8,
+        250
+      ],
+      "categorias": []
+    },
+    {
+      "nome": "materiais elétricos e industriais",
+      "radicais": [
+        "eletric",
+        "industri",
+        "disjunt",
+        "tomada",
+        "rolament",
+        "motor",
+        "parafus"
+      ],
+      "faixa": [
+        6,
+        350
+      ],
+      "categorias": []
+    },
+    {
+      "nome": "cosméticos e beleza",
+      "radicais": [
+        "cosmet",
+        "beleza",
+        "cabelo",
+        "maquiag",
+        "perfum",
+        "hidratant"
+      ],
+      "faixa": [
+        12,
+        120
+      ],
+      "categorias": []
+    },
+    {
+      "nome": "tecnologia e informática",
+      "radicais": [
+        "informat",
+        "notebook",
+        "computad",
+        "tecnolog",
+        "impressor"
+      ],
+      "faixa": [
+        45,
+        1800
+      ],
+      "categorias": []
+    },
+    {
+      "nome": "segurança eletrônica",
+      "radicais": [
+        "seguranc",
+        "camera",
+        "alarme",
+        "cftv",
+        "interfone"
+      ],
+      "faixa": [
+        60,
+        1200
+      ],
+      "categorias": []
+    },
+    {
+      "nome": "máquinas e implementos agrícolas",
+      "radicais": [
+        "agricol",
+        "plantadeir",
+        "implement",
+        "trator",
+        "colheit",
+        "pulveriz",
+        "semead",
+        "grade",
+        "arado",
+        "agro"
+      ],
+      "faixa": [
+        180,
+        4500
+      ],
+      "categorias": [
+        {
+          "nome": "máquinas e implementos",
+          "radicais": [
+            "plantadeir",
+            "semead",
+            "pulverizad",
+            "colhed",
+            "distribuid",
+            "grade",
+            "arado",
+            "carret"
+          ],
+          "faixa": [
+            18000,
+            280000
+          ]
+        },
+        {
+          "nome": "peças de reposição",
+          "radicais": [
+            "disco",
+            "rolament",
+            "corrent",
+            "engrenag",
+            "mancal",
+            "eixo",
+            "bucha",
+            "lamina",
+            "ponteir",
+            "peca"
+          ],
+          "faixa": [
+            45,
+            1800
+          ]
+        }
+      ]
+    },
+    {
+      "nome": "válvulas, bombas e instrumentação",
+      "radicais": [
+        "valvul",
+        "solenoid",
+        "pneumat",
+        "bomba",
+        "instrument",
+        "manometr",
+        "pressostat",
+        "transmissor",
+        "sensor",
+        "medidor",
+        "vazao"
+      ],
+      "faixa": [
+        120,
+        3800
+      ],
+      "categorias": [
+        {
+          "nome": "instrumentos de medição",
+          "radicais": [
+            "manometr",
+            "transmissor",
+            "medidor",
+            "vazao",
+            "termometr",
+            "pressostat"
+          ],
+          "faixa": [
+            180,
+            4500
+          ]
+        },
+        {
+          "nome": "bombas",
+          "radicais": [
+            "bomba"
+          ],
+          "faixa": [
+            650,
+            9800
+          ]
+        },
+        {
+          "nome": "válvulas",
+          "radicais": [
+            "valvul",
+            "solenoid",
+            "registr"
+          ],
+          "faixa": [
+            95,
+            2400
+          ]
+        }
+      ]
+    },
+    {
+      "nome": "peças técnicas e componentes industriais",
+      "radicais": [
+        "poliuretan",
+        "injetad",
+        "usinag",
+        "fundic",
+        "caldeirar",
+        "chapa",
+        "perfil",
+        "terminal",
+        "chicote",
+        "componente",
+        "automatiz",
+        "metalurg",
+        "borrach"
+      ],
+      "faixa": [
+        25,
+        950
+      ],
+      "categorias": [
+        {
+          "nome": "chapas e perfis",
+          "radicais": [
+            "chapa",
+            "perfil",
+            "tubo",
+            "barra",
+            "viga"
+          ],
+          "faixa": [
+            180,
+            2800
+          ]
+        },
+        {
+          "nome": "peças fundidas e usinadas",
+          "radicais": [
+            "fundid",
+            "usinad",
+            "flange",
+            "carcaca"
+          ],
+          "faixa": [
+            120,
+            2600
+          ]
+        },
+        {
+          "nome": "terminais e chicotes",
+          "radicais": [
+            "terminal",
+            "chicote",
+            "conector"
+          ],
+          "faixa": [
+            3,
+            180
+          ]
+        },
+        {
+          "nome": "peças em poliuretano e borracha",
+          "radicais": [
+            "poliuretan",
+            "pu",
+            "roda",
+            "rolo",
+            "bucha",
+            "coxim",
+            "raspador"
+          ],
+          "faixa": [
+            35,
+            780
+          ]
+        }
+      ]
+    },
+    {
+      "nome": "plásticos e embalagens",
+      "radicais": [
+        "plastic",
+        "embalag",
+        "pote",
+        "sacol",
+        "filme",
+        "pvc",
+        "polietil",
+        "polipropil",
+        "frasco",
+        "tampa"
+      ],
+      "faixa": [
+        1.5,
+        95
+      ],
+      "categorias": [
+        {
+          "nome": "utilidades plásticas",
+          "radicais": [
+            "balde",
+            "bacia",
+            "caixa",
+            "organizad",
+            "cesto",
+            "lixeir"
+          ],
+          "faixa": [
+            8,
+            120
+          ]
+        },
+        {
+          "nome": "embalagens",
+          "radicais": [
+            "pote",
+            "frasco",
+            "tampa",
+            "sacol",
+            "filme",
+            "bobina"
+          ],
+          "faixa": [
+            1.5,
+            65
+          ]
+        }
+      ]
+    },
+    {
+      "nome": "gás e combustíveis",
+      "radicais": [
+        "gas",
+        "glp",
+        "botij",
+        "cilindr",
+        "propan"
+      ],
+      "faixa": [
+        110,
+        480
+      ]
+    }
   ]
 }

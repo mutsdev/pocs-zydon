@@ -1335,12 +1335,15 @@ class FaixasPreco:
 
     def segmento(self, segmento, nomes):
         texto_segmento = segmento or ""
-        melhor, pontos = None, 0
-        for s in self.dados["segmentos"]:
-            p = 3 * self._pontos(texto_segmento, s["radicais"]) + self._pontos(" ".join(nomes), s["radicais"])
-            if p > pontos:
-                melhor, pontos = s, p
-        return melhor
+        for texto in (texto_segmento, " ".join(nomes)):
+            melhor, pontos = None, 0
+            for s in self.dados["segmentos"]:
+                p = self._pontos(texto, s["radicais"])
+                if p > pontos:
+                    melhor, pontos = s, p
+            if melhor:
+                return melhor
+        return None
 
     def sortear(self, segmento, nome, contexto):
         """(valor, regra). Semente = sha256 do nome normalizado: sempre o mesmo valor."""
