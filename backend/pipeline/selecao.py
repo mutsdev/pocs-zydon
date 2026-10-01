@@ -727,11 +727,20 @@ def _imagem_inline(url):
     import requests
     from PIL import Image
     try:
-        r = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        r = requests.get(url, timeout=20, stream=True, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                                                    "AppleWebKit/537.36 Chrome/128.0 Safari/537.36"})
         if r.status_code != 200:
             return None
-        imagem = Image.open(io.BytesIO(r.content)).convert("RGB")
+        bruto = bytearray()
+        for bloco in r.iter_content(65536):
+            bruto.extend(bloco)
+            if len(bruto) > 15_000_000:
+                r.close()
+                return None
+        Image.MAX_IMAGE_PIXELS = 40_000_000
+        with Image.open(io.BytesIO(bytes(bruto))) as original:
+            original.draft("RGB", (512, 512))
+            imagem = original.convert("RGB")
         imagem.thumbnail((512, 512))
         saida = io.BytesIO()
         imagem.save(saida, "JPEG", quality=80)
