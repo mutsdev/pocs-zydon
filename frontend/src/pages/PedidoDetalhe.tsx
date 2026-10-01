@@ -654,7 +654,7 @@ export default function PedidoDetalhe() {
               ['Tokens', String(pedido.tokens_ia || 0)], ['Versão do código', pedido.commit_codigo?.slice(0, 7)],
               ['Fim da busca', dataHora(pedido.extracao_fim)], ['Portal concluído', dataHora(pedido.concluido_em)],
             ].map(([k, v]) => (
-              <div key={k} className="flex justify-between gap-3"><dt style={{ color: 'var(--color-text-secondary)' }}>{k}</dt><dd className="text-right break-all">{v}</dd></div>
+              <div key={k} className="flex justify-between gap-3"><dt style={{ color: 'var(--color-text-secondary)' }}>{k}</dt><dd className="text-right break-all">{k === 'Site' && v ? <a href={/^https?:\/\//i.test(v) ? v : `https://${v}`} target="_blank" rel="noopener noreferrer" className="cursor-pointer hover:underline" style={{ color: 'var(--color-primary-text)' }}>{v.replace(/^https?:\/\//, '')}</a> : v}</dd></div>
             ))}
           </dl>
           {pedido.observacoes && <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>{pedido.observacoes}</p>}

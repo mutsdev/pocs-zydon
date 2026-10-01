@@ -435,7 +435,10 @@ export default function Dexter() {
                 <tr key={p.pedido_id} style={{ borderTop: '1px solid var(--color-border)' }}>
                   <td className="px-3 py-3"><div className="leading-tight">
                     <Link to={`/pedidos/${p.pedido_id}`} className="font-medium cursor-pointer">{p.cliente}</Link>
-                    <div className="text-sm truncate max-w-xs" style={{ color: 'var(--color-text-secondary)' }}>{[p.site?.replace(/^https?:\/\//, ''), p.referencia, p.lote].filter(Boolean).join(' · ')}</div>
+                    <div className="text-sm truncate max-w-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                      {p.site && <a href={/^https?:\/\//i.test(p.site) ? p.site : `https://${p.site}`} target="_blank" rel="noopener noreferrer" className="cursor-pointer hover:underline" style={{ color: 'var(--color-primary-text)' }}>{p.site.replace(/^https?:\/\//, '').replace(/\/$/, '')}</a>}
+                      {(p.referencia || p.lote) && ` · ${[p.referencia, p.lote].filter(Boolean).join(' · ')}`}
+                    </div>
                   </div></td>
                   <td className="px-3 py-3"><div className="leading-tight">
                     <Badge variant={st.variante} dot={p.em_execucao}>{st.rotulo}</Badge>

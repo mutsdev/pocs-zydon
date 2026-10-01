@@ -1576,6 +1576,8 @@ def _ler_pagina_com_foto(url):
     if not pagina.get("image"):
         og = _ler_og(url) or {}
         pagina = {**og, **{k: v for k, v in pagina.items() if v}}
+    if pagina:
+        pagina["url"] = pagina.get("url") or url
     return pagina or None
 
 
@@ -1895,8 +1897,11 @@ def relevante(nome, termo, cliente, url=""):
 
 def _ler_pagina_busca(url):
     registro = ler_mercado_livre(url) if MERCADO_LIVRE.search(url) else _ler_pagina_com_foto(url)
-    if not registro or CAPTCHA.search(registro.get("name") or "") or CAPTCHA.search(registro.get("description") or ""):
+    if not registro or not registro.get("name") or CAPTCHA.search(registro.get("name") or "") or CAPTCHA.search(registro.get("description") or ""):
         return None
+    registro.setdefault("url", url)
+    registro["url"] = registro.get("url") or url
+    registro.setdefault("image", "")
     return registro
 
 
