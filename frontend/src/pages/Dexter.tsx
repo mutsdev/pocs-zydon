@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Bot, Copy, ExternalLink, KeyRound, Loader2, RefreshCw, RotateCcw, Send, XCircle } from 'lucide-react'
+import { Bot, Copy, ExternalLink, FileSpreadsheet, KeyRound, Loader2, RefreshCw, RotateCcw, Send, XCircle } from 'lucide-react'
 import { Card } from '../components/ui/Card'
 import Badge from '../components/ui/Badge'
 import Button from '../components/ui/Button'
@@ -53,6 +53,9 @@ export default function Dexter() {
   const [texto, setTexto] = useState('')
   const [variacoes, setVariacoes] = useState('nao')
   const [enviando, setEnviando] = useState(false)
+  const [lendo, setLendo] = useState(false)
+  const [planilha, setPlanilha] = useState<string | null>(null)
+  const seletor = useRef<HTMLInputElement>(null)
   const [donoToken, setDonoToken] = useState('')
   const [gerando, setGerando] = useState(false)
   const [tokenNovo, setTokenNovo] = useState<{ token: string; usuario: string } | null>(null)
@@ -101,6 +104,30 @@ export default function Dexter() {
 
   const empresas = lerLinhas(texto)
 
+  async function lerPlanilha(arquivo: File | undefined) {
+    if (!arquivo) return
+    if (!/\.(xlsx|csv)$/i.test(arquivo.name)) { addToast('error', 'Envie a planilha em xlsx ou csv.'); return }
+    if (arquivo.size > 2 * 1024 * 1024) { addToast('error', 'A planilha passa de 2 MB. Envie uma versão menor.'); return }
+    setLendo(true)
+    try {
+      const conteudo = await new Promise<string>((ok, falha) => {
+        const leitor = new FileReader()
+        leitor.onload = () => ok(String(leitor.result).split(',')[1] || '')
+        leitor.onerror = () => falha(new Error())
+        leitor.readAsDataURL(arquivo)
+      })
+      const r = await acionar('dexter_admin', { acao: 'ler_planilha', nome_arquivo: arquivo.name, conteudo_base64: conteudo })
+      const lidas = (r.empresas as { empresa: string; site: string; observacao: string }[]) || []
+      if (!lidas.length) { addToast('error', 'Não achei empresas na planilha.'); return }
+      setTexto(lidas.map((e) => [e.empresa, e.site, e.observacao].filter((x, i) => i < 2 || x).join('; ')).join('\n'))
+      setPlanilha(arquivo.name)
+      if (!nomeLote.trim()) setNomeLote(arquivo.name.replace(/\.(xlsx|csv)$/i, ''))
+      addToast('success', `${lidas.length} empresas lidas da planilha. Confira e mande para a fila.`)
+    } catch (e) {
+      addToast('error', e instanceof ErroApi ? e.message : 'Não foi possível ler a planilha.')
+    } finally { setLendo(false) }
+  }
+
   async function enviarLote(ev: React.FormEvent) {
     ev.preventDefault()
     if (!empresas.length) { addToast('error', 'Cole ao menos uma empresa: nome; site.'); return }
@@ -112,7 +139,7 @@ export default function Dexter() {
       const itens = (r.itens as unknown[]) || []
       const erros = (r.erros as unknown[]) || []
       addToast('success', `${itens.length} empresas na fila${erros.length ? ` · ${erros.length} recusadas` : ''}.`)
-      setTexto(''); setNomeLote('')
+      setTexto(''); setNomeLote(''); setPlanilha(null)
       carregarResumo(); carregarPedidos(0)
     } catch (e) {
       addToast('error', e instanceof ErroApi ? e.message : 'Não foi possível enviar o lote.')
@@ -197,6 +224,18 @@ export default function Dexter() {
           <form onSubmit={enviarLote} className="flex flex-col gap-3">
             <h2 className="text-base font-semibold">Novo lote</h2>
             <Input label="Nome do lote (opcional)" placeholder="Ex.: Prospecção outubro" value={nomeLote} onChange={(e) => setNomeLote(e.target.value)} />
+            <div className="flex flex-col gap-1.5">
+              <span className="text-sm font-medium" style={{ color: 'var(--color-text-secondary)' }}>Planilha de empresas</span>
+              <input ref={seletor} type="file" accept=".xlsx,.csv" className="hidden"
+                onChange={(e) => { lerPlanilha(e.target.files?.[0]); e.target.value = '' }} />
+              <button type="button" disabled={lendo || enviando} onClick={() => seletor.current?.click()}
+                className="flex items-center gap-2 h-10 px-3 rounded-md text-sm cursor-pointer disabled:cursor-default"
+                style={{ border: '1px dashed var(--color-border)', color: planilha ? 'var(--color-primary-text)' : 'var(--color-text-secondary)', backgroundColor: planilha ? 'var(--color-primary-bg)' : 'transparent' }}>
+                {lendo ? <Loader2 size={16} className="animate-spin" /> : <FileSpreadsheet size={16} />}
+                {lendo ? 'Lendo a planilha…' : planilha ? `${planilha} · escolher outra` : 'Anexar planilha (xlsx ou csv)'}
+              </button>
+              <span className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>Colunas: empresa (ou cliente), site e, se quiser, observação. A lista abaixo é preenchida para você conferir.</span>
+            </div>
             <label className="flex flex-col gap-1.5">
               <span className="text-sm font-medium" style={{ color: 'var(--color-text-secondary)' }}>Empresas: uma por linha, no formato nome; site; observação</span>
               <textarea rows={6} value={texto} onChange={(e) => setTexto(e.target.value)} disabled={enviando}
