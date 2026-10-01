@@ -149,7 +149,34 @@ async function preferenciasDoExecutivo(executivoId) {
   if (!executivoId) return [];
   const linhas = await sql(`SELECT texto FROM feedback_banner WHERE executivo_id = CAST(:e AS INTEGER)
     ORDER BY criado_em DESC LIMIT 20`, { e: String(executivoId) });
-  return linhas.map((l) => l.texto);
+  const avaliacoes = await sql(`SELECT comentario FROM avaliacoes_portal WHERE executivo_id = CAST(:e AS INTEGER)
+    AND comentario IS NOT NULL AND problemas LIKE '%banner_ruim%' ORDER BY atualizado_em DESC LIMIT 10`, { e: String(executivoId) }).catch(() => []);
+  return [...linhas.map((l) => l.texto), ...avaliacoes.map((l) => l.comentario)];
+}
+
+const PROBLEMAS_LICAO = {
+  produtos_errados: 'escolheram produtos que não eram do cliente: priorize sempre a marca e o site do cliente',
+  imagens_ruins: 'vieram imagens erradas ou ruins: descarte foto que não mostra o produto com clareza',
+  poucos_produtos: 'vieram poucos produtos: chegue ao alvo sempre que houver produto real',
+  fora_do_foco: 'vieram produtos fora do foco pedido: respeite a observação antes de tudo',
+  nomes_ruins: 'vieram nomes ruins ou cortados: prefira candidatos com nome completo e legível',
+  precos_estranhos: 'vieram preços estranhos: prefira candidatos com preço público na página',
+  categorias_ruins: 'as categorias ficaram ruins: use nomes de categoria curtos e do próprio site',
+  segmento_errado: 'o segmento ficou errado: diga o segmento pelo que o cliente vende de fato',
+};
+
+async function licoesDasAvaliacoes(segmento) {
+  const linhas = await sql(`SELECT nota, problemas, comentario, segmento FROM avaliacoes_portal
+    WHERE nota <= 3 OR comentario IS NOT NULL ORDER BY (segmento = :s) DESC, atualizado_em DESC LIMIT 40`, { s: segmento || '' });
+  const contagem = {};
+  const comentarios = [];
+  for (const l of linhas) {
+    for (const p of String(l.problemas || '').split(',').filter(Boolean)) contagem[p] = (contagem[p] || 0) + 1;
+    if (l.comentario && comentarios.length < 8) comentarios.push(`comentário (nota ${l.nota}${l.segmento ? `, ${l.segmento}` : ''}): ${String(l.comentario).slice(0, 200)}`);
+  }
+  const frequentes = Object.entries(contagem).filter(([p]) => PROBLEMAS_LICAO[p]).sort((a, b) => b[1] - a[1])
+    .map(([p, n]) => `${n}x ${PROBLEMAS_LICAO[p]}`);
+  return [...frequentes, ...comentarios];
 }
 
 async function marcarExecucao(pedidoId, acao, execucao) {
@@ -185,6 +212,7 @@ async function extrair(ev, execucao) {
     executivo: pedido.executivo, cena_ia: await comCenaIa(pedidoId),
     barroso_tudo: (await sql(`SELECT valor FROM configuracao WHERE chave = 'busca_barroso_tudo'`, {})).some((l) => l.valor === 'sim'),
     preferencias: await preferenciasDoExecutivo(pedido.executivo_id),
+    licoes: await licoesDasAvaliacoes(pedido.segmento).catch(() => []),
     anexo: conteudoAnexo ? { nome: pedido.anexo_nome, conteudo_base64: conteudoAnexo } : null }, registrar, aoParcial);
   await registrar.fim();
   const jaGravada = parcial ? await parcial : false;

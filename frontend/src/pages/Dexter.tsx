@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Bot, Copy, ExternalLink, FileSpreadsheet, KeyRound, Loader2, RefreshCw, RotateCcw, Send, XCircle } from 'lucide-react'
+import { Bot, Copy, ExternalLink, FileSpreadsheet, KeyRound, Loader2, RefreshCw, RotateCcw, Send, Star, XCircle } from 'lucide-react'
 import { Card } from '../components/ui/Card'
 import Badge from '../components/ui/Badge'
 import Button from '../components/ui/Button'
@@ -8,6 +8,7 @@ import Input from '../components/ui/Input'
 import Select from '../components/ui/Select'
 import RadioGroup from '../components/ui/Radio'
 import Modal from '../components/ui/Modal'
+import Checkbox from '../components/ui/Checkbox'
 import { ToastContainer } from '../components/ui/Toast'
 import { useToast } from '../hooks/useToast'
 import { useApoio } from '../hooks/useApoio'
@@ -24,10 +25,37 @@ const PAGINA = 30
 
 interface Totais { total: number; na_fila: number; andamento: number; concluidos: number; falharam: number; tempo_medio_s: number | null; concluidos_24h: number }
 interface Lote { id: number; nome: string; origem: string; criado_em: string; usuario: string; total: number; na_fila: number; buscando: number; criando: number; concluidos: number; falharam: number }
-interface LinhaDexter { pedido_id: string; cliente: string; site: string; status: Status; lote_id: number | null; lote: string | null; referencia: string | null; produtos: number | null; portal_url: string | null; motivo: string | null; criado_em: string; segundos: number | null; em_execucao: boolean; usuario: string }
+interface LinhaDexter { pedido_id: string; cliente: string; site: string; status: Status; lote_id: number | null; lote: string | null; referencia: string | null; produtos: number | null; portal_url: string | null; motivo: string | null; criado_em: string; segundos: number | null; em_execucao: boolean; usuario: string; avaliacao_nota: number | null; avaliacao_problemas: string | null; avaliacao_comentario: string | null }
 interface Token { id: number; prefixo: string; criado_em: string; ultimo_uso: string | null; revogado_em: string | null; executivo_id: number; usuario: string }
 
 const n = (v: unknown) => Number(v) || 0
+
+const PROBLEMAS: [string, string][] = [
+  ['produtos_errados', 'Produtos que não são do cliente'],
+  ['imagens_ruins', 'Imagens erradas ou ruins'],
+  ['poucos_produtos', 'Poucos produtos'],
+  ['fora_do_foco', 'Produtos fora do foco'],
+  ['nomes_ruins', 'Nomes ruins ou cortados'],
+  ['precos_estranhos', 'Preços estranhos'],
+  ['categorias_ruins', 'Categorias ruins'],
+  ['banner_ruim', 'Banner ruim'],
+  ['logo_errada', 'Logo errada'],
+  ['segmento_errado', 'Segmento errado'],
+]
+
+function Estrelas({ nota, onChange, tamanho = 16 }: { nota: number; onChange?: (n: number) => void; tamanho?: number }) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      {[1, 2, 3, 4, 5].map((i) => {
+        const cheia = i <= nota
+        const icone = <Star size={tamanho} fill={cheia ? 'var(--color-warning)' : 'none'} style={{ color: cheia ? 'var(--color-warning)' : 'var(--color-text-secondary)' }} />
+        return onChange
+          ? <button key={i} type="button" aria-label={`Nota ${i}`} className="cursor-pointer p-1" onClick={() => onChange(i)}>{icone}</button>
+          : <span key={i}>{icone}</span>
+      })}
+    </span>
+  )
+}
 
 function lerLinhas(texto: string) {
   return texto.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
@@ -61,6 +89,11 @@ export default function Dexter() {
   const [tokenNovo, setTokenNovo] = useState<{ token: string; usuario: string } | null>(null)
   const [ocupado, setOcupado] = useState<string | null>(null)
   const versao = useRef(0)
+  const [avaliando, setAvaliando] = useState<LinhaDexter | null>(null)
+  const [nota, setNota] = useState(0)
+  const [problemas, setProblemas] = useState<Set<string>>(new Set())
+  const [comentario, setComentario] = useState('')
+  const [salvandoAval, setSalvandoAval] = useState(false)
 
   const dexter = executivos.find((e) => e.cargo === 'Agente de prospecção')
   const dono = agente ? String(sessao.executivo_id || '') : donoToken || (dexter ? String(dexter.id) : '')
@@ -146,6 +179,28 @@ export default function Dexter() {
     } finally { setEnviando(false) }
   }
 
+  function abrirAvaliacao(p: LinhaDexter) {
+    setAvaliando(p)
+    setNota(n(p.avaliacao_nota))
+    setProblemas(new Set((p.avaliacao_problemas || '').split(',').filter(Boolean)))
+    setComentario(p.avaliacao_comentario || '')
+  }
+
+  async function salvarAvaliacao() {
+    if (!avaliando || !nota) return
+    const p = avaliando
+    const novo = { avaliacao_nota: nota, avaliacao_problemas: [...problemas].join(','), avaliacao_comentario: comentario.trim() || null }
+    setSalvandoAval(true)
+    try {
+      await acionar('dexter_admin', { acao: 'avaliar', pedido_id: p.pedido_id, nota, problemas: [...problemas], comentario: comentario.trim() })
+      setLinhas((l) => l?.map((x) => (x.pedido_id === p.pedido_id ? { ...x, ...novo } : x)) || l)
+      addToast('success', `Avaliação de ${p.cliente} salva. Os próximos portais vão levar isso em conta.`)
+      setAvaliando(null)
+    } catch (e) {
+      addToast('error', e instanceof ErroApi ? e.message : 'Não foi possível salvar a avaliação.')
+    } finally { setSalvandoAval(false) }
+  }
+
   async function mexer(p: LinhaDexter, acao: 'retentar' | 'cancelar') {
     setOcupado(p.pedido_id)
     const antes = p.status
@@ -198,6 +253,35 @@ export default function Dexter() {
     <Pagina titulo="Dexter" subtitulo="Agente de prospecção: cria vários portais por vez, sem curadoria. Até 3 buscas ao mesmo tempo e um portal criado por vez."
       acao={<Button variant="secondary" className="h-10" onClick={() => { carregarResumo(); carregarPedidos(0) }}><RefreshCw size={16} /> Atualizar</Button>}>
       <ToastContainer toasts={toasts} onRemove={removeToast} />
+      <Modal isOpen={!!avaliando} onClose={() => !salvandoAval && setAvaliando(null)} title={avaliando ? `Avaliar ${avaliando.cliente}` : 'Avaliar'}>
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-1.5">
+            <span className="text-sm font-medium" style={{ color: 'var(--color-text-secondary)' }}>Nota do portal</span>
+            <Estrelas nota={nota} onChange={setNota} tamanho={22} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <span className="text-sm font-medium" style={{ color: 'var(--color-text-secondary)' }}>O que deu errado</span>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {PROBLEMAS.map(([chave, rotulo]) => (
+                <Checkbox key={chave} id={`prob-${chave}`} label={rotulo} checked={problemas.has(chave)}
+                  onChange={(v) => setProblemas((s) => { const novo = new Set(s); if (v) novo.add(chave); else novo.delete(chave); return novo })} />
+              ))}
+            </div>
+          </div>
+          <label className="flex flex-col gap-1.5">
+            <span className="text-sm font-medium" style={{ color: 'var(--color-text-secondary)' }}>Comentário (o que melhorar)</span>
+            <textarea rows={4} value={comentario} onChange={(e) => setComentario(e.target.value)} maxLength={1000}
+              placeholder="Ex.: trouxe acessórios em vez das peças; banner escuro demais"
+              className="w-full rounded-lg border px-3 py-2 text-sm outline-none focus:ring-2"
+              style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-surface)', color: 'var(--color-text)' }} />
+          </label>
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setAvaliando(null)} disabled={salvandoAval}>Cancelar</Button>
+            <Button onClick={salvarAvaliacao} disabled={!nota || salvandoAval}>{salvandoAval ? <Loader2 size={16} className="animate-spin" /> : <Star size={16} />} Salvar avaliação</Button>
+          </div>
+        </div>
+      </Modal>
+
       <Modal isOpen={!!tokenNovo} onClose={() => setTokenNovo(null)} title="Token gerado">
         {tokenNovo && (
           <div className="flex flex-col gap-3">
@@ -327,7 +411,7 @@ export default function Dexter() {
           <Vazio titulo="Nenhum pedido" texto={filtroStatus || filtroLote ? 'Nada com esses filtros.' : 'Os portais pedidos ao Dexter aparecem aqui.'} />
         ) : (
           <div className="overflow-x-auto"><table className="w-full"><thead><tr className="text-meta text-left" style={{ color: 'var(--color-text-secondary)' }}>
-            <th className="px-3 py-3 font-medium">Empresa</th><th className="px-3 py-3 font-medium">Situação</th><th className="px-3 py-3 font-medium text-right">Produtos</th><th className="px-3 py-3 font-medium text-right">Tempo</th><th className="px-3 py-3 font-medium">Portal</th><th className="px-3 py-3" /></tr></thead>
+            <th className="px-3 py-3 font-medium">Empresa</th><th className="px-3 py-3 font-medium">Situação</th><th className="px-3 py-3 font-medium text-right">Produtos</th><th className="px-3 py-3 font-medium text-right">Tempo</th><th className="px-3 py-3 font-medium">Portal</th><th className="px-3 py-3 font-medium">Avaliação</th><th className="px-3 py-3" /></tr></thead>
             <tbody>{linhas.map((p) => {
               const falhou = p.status === 'falhou' || p.status === 'precisa_catalogo'
               const st = STATUS[p.status] || { rotulo: p.status, variante: 'neutral' as const }
@@ -344,6 +428,14 @@ export default function Dexter() {
                   <td className="px-3 py-3 text-right tabular-nums">{p.produtos ?? '—'}</td>
                   <td className="px-3 py-3 text-right tabular-nums whitespace-nowrap">{duracao(p.segundos)}</td>
                   <td className="px-3 py-3">{p.portal_url ? <a href={p.portal_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 text-sm cursor-pointer" style={{ color: 'var(--color-primary-text)' }}>Abrir <ExternalLink size={14} /></a> : '—'}</td>
+                  <td className="px-3 py-3 whitespace-nowrap">
+                    {p.status === 'concluido' || falhou ? (
+                      <button type="button" className="cursor-pointer leading-tight text-left" onClick={() => abrirAvaliacao(p)} title={p.avaliacao_comentario || undefined}>
+                        {p.avaliacao_nota ? <Estrelas nota={n(p.avaliacao_nota)} tamanho={14} /> : <span className="text-sm" style={{ color: 'var(--color-primary-text)' }}>Avaliar</span>}
+                        {p.avaliacao_problemas && <div className="text-meta" style={{ color: 'var(--color-text-secondary)' }}>{p.avaliacao_problemas.split(',').filter(Boolean).length} problema(s)</div>}
+                      </button>
+                    ) : '—'}
+                  </td>
                   <td className="px-3 py-3 text-right whitespace-nowrap">
                     {falhou && <Button variant="ghost" size="sm" disabled={ocupado === p.pedido_id} onClick={() => mexer(p, 'retentar')}><RotateCcw size={14} /> Tentar de novo</Button>}
                     {p.status === 'na_fila' && <Button variant="ghost" size="sm" disabled={ocupado === p.pedido_id} onClick={() => mexer(p, 'cancelar')}><XCircle size={14} /> Cancelar</Button>}

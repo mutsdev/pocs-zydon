@@ -5,6 +5,19 @@ const crypto = require('crypto');
 __GUARDA__
 __DEXTER__
 
+const PROBLEMAS = {
+  produtos_errados: 'produtos que não são do cliente',
+  imagens_ruins: 'imagens erradas ou ruins',
+  poucos_produtos: 'poucos produtos',
+  fora_do_foco: 'produtos fora do foco',
+  nomes_ruins: 'nomes ruins ou cortados',
+  precos_estranhos: 'preços estranhos',
+  categorias_ruins: 'categorias ruins',
+  banner_ruim: 'banner ruim',
+  logo_errada: 'logo errada',
+  segmento_errado: 'segmento errado',
+};
+
 
 function lerXlsx(buf) {
   const zlib = require('zlib');
@@ -145,6 +158,27 @@ module.exports = async (event, context) => {
     await dml(`INSERT INTO pedido_eventos (pedido_id, etapa, mensagem) VALUES (:p, 'dexter', :m)`,
       { p: pedidoId, m: acao === 'retentar' ? (agente ? 'de volta para a fila pelo Dexter' : 'de volta para a fila pelo administrador') : (agente ? 'cancelado pelo Dexter' : 'cancelado pelo administrador') });
     if (acao === 'retentar') await acordarDespacho(mitra);
+    return { ok: true, ...r[0] };
+  }
+
+  if (acao === 'avaliar') {
+    const pedidoId = String(ev.pedido_id || '').trim();
+    const nota = Number(ev.nota);
+    if (!pedidoId || !Number.isInteger(nota) || nota < 1 || nota > 5) return { ok: false, erro: 'CAMPOS_FALTANDO', faltando: ['nota'] };
+    const validos = Object.keys(PROBLEMAS);
+    const problemas = (Array.isArray(ev.problemas) ? ev.problemas : []).map(String).filter((x) => validos.includes(x));
+    const comentario = String(ev.comentario || '').trim().slice(0, 1000);
+    const alvo = (await sql(`SELECT pedido_id, executivo_id, segmento FROM pedidos WHERE pedido_id = :p AND automatico
+      AND (:m = '' OR executivo_id = CAST(NULLIF(:m, '') AS INTEGER))`, { p: pedidoId, m: meu }))[0];
+    if (!alvo) return { ok: false, erro: 'PEDIDO_DESCONHECIDO' };
+    const r = await sql(`INSERT INTO avaliacoes_portal (pedido_id, executivo_id, nota, problemas, comentario, segmento)
+      VALUES (:p, CAST(:e AS INTEGER), CAST(:n AS INTEGER), :pr, NULLIF(:c, ''), :s)
+      ON CONFLICT (pedido_id) DO UPDATE SET nota = EXCLUDED.nota, problemas = EXCLUDED.problemas,
+        comentario = EXCLUDED.comentario, segmento = EXCLUDED.segmento, atualizado_em = now()
+      RETURNING pedido_id, nota, problemas, comentario`,
+    { p: pedidoId, e: String(alvo.executivo_id), n: String(nota), pr: problemas.join(','), c: comentario, s: alvo.segmento || '' });
+    await dml(`INSERT INTO pedido_eventos (pedido_id, etapa, mensagem) VALUES (:p, 'avaliacao', :m)`,
+      { p: pedidoId, m: `avaliado com nota ${nota}` + (problemas.length ? ` · ${problemas.map((x) => PROBLEMAS[x]).join(', ')}` : '') + (comentario ? ` · ${comentario}` : '') });
     return { ok: true, ...r[0] };
   }
 

@@ -751,9 +751,11 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
             + ("o anexo precisa ter nome e foto de cada produto; mande outro PDF ou planilha"
                if fonte_anexo else "mande o catálogo em PDF ou planilha"),
             {"custo": custo, "descartes": descartes})
+    if entrada.get("licoes"):
+        evento("extracao", f"usando {len(entrada['licoes'])} lições das avaliações anteriores na seleção")
     evento("extracao", f"IA (fila gratuita) escolhendo entre {len(validos)} candidatos")
     escolha, custo_selecao = _selecionar_com_teto(validos, cliente, site or f"anexo {fonte_anexo}",
-                                                  segmento_informado, foco)
+                                                  segmento_informado, foco, entrada.get("licoes") or [])
     for k in ("custo_usd", "tokens_entrada", "tokens_saida"):
         custo_selecao[k] = (custo_selecao.get(k) or 0) + (custo.get(k) or 0)
     custo = _custo_total(custo_selecao)
@@ -790,7 +792,7 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
 TETO_SELECAO = 35
 
 
-def _selecionar_com_teto(validos, cliente, site, segmento, foco):
+def _selecionar_com_teto(validos, cliente, site, segmento, foco, licoes=None):
     """Seleção pela IA com teto: sem resposta em TETO_SELECAO s, segue com os primeiros
     candidatos já validados (fotos e páginas conferidas), espalhados pelas categorias."""
     import threading
@@ -798,7 +800,7 @@ def _selecionar_com_teto(validos, cliente, site, segmento, foco):
 
     def rodar():
         try:
-            caixa["ok"] = selecao.selecionar(validos, cliente, site, segmento, foco)
+            caixa["ok"] = selecao.selecionar(validos, cliente, site, segmento, foco, licoes)
         except Exception as erro:  # noqa: BLE001
             caixa["erro"] = erro
 

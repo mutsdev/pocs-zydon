@@ -1029,7 +1029,7 @@ def conferir_ate(candidatos, cliente, alvo=None, reserva=6):
     return aprovados, descartes, custo
 
 
-def selecionar(candidatos, cliente, site, segmento, foco=""):
+def selecionar(candidatos, cliente, site, segmento, foco="", licoes=None):
     linhas = []
     for n, c in enumerate(candidatos):
         arquivo = c["imagem"].split("?")[0].rsplit("/", 1)[-1][:60]
@@ -1040,6 +1040,10 @@ def selecionar(candidatos, cliente, site, segmento, foco=""):
                                      foco=foco or "nenhum (catálogo variado do cliente)",
                                      alvo=min(alvo_pedido(), len(candidatos)),
                                      total=len(candidatos), lista="\n".join(linhas))
+    if licoes:
+        bloco = ("Lições das avaliações dos portais anteriores (feitas pelo time; siga-as, "
+                 "sem quebrar as regras acima):\n" + "\n".join(f"- {l}" for l in licoes[:15]))
+        texto = texto.replace("\n\nCandidatos:\n", f"\n\n{bloco}\n\nCandidatos:\n", 1)
     conteudo = [{"type": "text", "text": texto}]
     for n, c in enumerate(candidatos[:MAXIMO_IMAGENS_NO_PROMPT]):
         conteudo += [{"type": "text", "text": f"Imagem do candidato {n}:"},
