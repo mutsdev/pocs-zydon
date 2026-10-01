@@ -999,12 +999,14 @@ FILA_DE_IAS = (("barroso-chat", _ia_barroso), ("Gemini", _ia_gemini), ("Cloudfla
                ("NVIDIA", _ia_nvidia), ("OpenRouter", _ia_openrouter))
 
 
-def _chamar_openrouter(mensagens):
+def _chamar_openrouter(mensagens, pular=()):
     """Fila de IAs gratuitas: tenta cada uma na ordem; a que responde sem cota sai da fila
     até o fim da execução. Só falha quando todas falharem, com o motivo de cada uma."""
     baixadas = _imagens_baixadas(mensagens)
     motivos = []
     for nome, chamar in FILA_DE_IAS:
+        if nome in pular:
+            continue
         try:
             resultado = chamar(mensagens, baixadas)
         except SemCotaNestaIA as erro:
@@ -1035,13 +1037,36 @@ Itens:
 {lista}"""
 
 
-def _conferir_lote(lote, cliente):
+def _conferir_lote(lote, cliente, pular=()):
     lista = "\n".join(f"{n}. {c['nome'][:110]}" for n, c in enumerate(lote))
     conteudo = [{"type": "text", "text": INSTRUCAO_CONFERIR_FOTO.format(cliente=cliente, lista=lista)}]
     for n, c in enumerate(lote):
         conteudo += [{"type": "text", "text": f"Foto do item {n} ({c['nome'][:80]}):"},
                      {"type": "image_url", "image_url": {"url": c["imagem"]}}]
-    return _chamar_openrouter([{"role": "user", "content": conteudo}])
+    return _chamar_openrouter([{"role": "user", "content": conteudo}], pular=pular)
+
+
+def _segunda_opiniao(lote, cliente, resposta, custo_lote):
+    """Lote inteiro recusado pelo barroso-chat: outra IA da fila confere as mesmas fotos.
+    Vale a segunda resposta (o barroso já recusou fotos certas de sites institucionais)."""
+    laudos = [i for i in (resposta.get("itens") or []) if isinstance(i, dict)]
+    if len(lote) < 2 or not laudos or any(i.get("confere") is not False for i in laudos):
+        return resposta, custo_lote
+    if not str(custo_lote.get("modelo") or "").startswith(MODELO_BUSCA):
+        return resposta, custo_lote
+    exemplos = " · ".join(limpar_texto(i.get("o_que_aparece") or "")[:60] for i in laudos[:3])
+    evento("extracao", f"barroso-chat recusou as {len(lote)} fotos do lote ({exemplos}); pedindo segunda opinião", "aviso")
+    try:
+        outra, custo_outra = _conferir_lote(lote, cliente, pular=("barroso-chat",))
+    except Exception as erro:
+        evento("extracao", f"segunda opinião indisponível ({type(erro).__name__}); mantendo a recusa", "aviso")
+        return resposta, custo_lote
+    aprovadas = sum(1 for i in (outra.get("itens") or []) if isinstance(i, dict) and i.get("confere") is not False)
+    evento("extracao", f"segunda opinião ({custo_outra.get('modelo')}): {aprovadas} de {len(lote)} fotos conferem")
+    soma = dict(custo_outra)
+    for k in ("custo_usd", "tokens_entrada", "tokens_saida"):
+        soma[k] = (custo_lote.get(k) or 0) + (custo_outra.get(k) or 0)
+    return outra, soma
 
 
 def conferir_fotos(candidatos, cliente, por_chamada=CONFERENCIA_POR_CHAMADA, teto=None):
@@ -1071,6 +1096,7 @@ def conferir_fotos(candidatos, cliente, por_chamada=CONFERENCIA_POR_CHAMADA, tet
             continue
         try:
             resposta, custo_lote = futuro.result()
+            resposta, custo_lote = _segunda_opiniao(lote, cliente, resposta, custo_lote)
         except SemCreditoOpenRouter as erro:
             sem_credito.append(erro)
             aprovados += [dict(c, foto_conferida=False) for c in lote]
@@ -1101,7 +1127,9 @@ def conferir_fotos(candidatos, cliente, por_chamada=CONFERENCIA_POR_CHAMADA, tet
     if sem_credito and len(sem_credito) == len(lotes):
         raise sem_credito[0]
     evento("extracao", f"fotos conferidas pelo modelo: {len(aprovados)} aprovadas, "
-                       f"{len(descartes)} recusadas")
+                       f"{len(descartes)} recusadas"
+           + (" · recusas: " + " · ".join(f"{d['nome'][:40]} ({d['motivo'][31:91]})" for d in descartes[:4])
+              if descartes else ""))
     return aprovados, descartes, custo
 
 
