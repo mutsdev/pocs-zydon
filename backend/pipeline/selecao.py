@@ -769,7 +769,7 @@ def _texto_json(texto):
 def _imagens_baixadas(mensagens):
     urls = [c["image_url"]["url"] for m in mensagens if not isinstance(m["content"], str)
             for c in m["content"] if c.get("type") == "image_url"]
-    with ThreadPoolExecutor(8) as pool:
+    with ThreadPoolExecutor(3) as pool:
         return dict(zip(urls, pool.map(_imagem_inline, urls)))
 
 
