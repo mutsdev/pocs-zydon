@@ -132,7 +132,7 @@ async function lerArquivo(pedidoId, tipo) {
 
 async function lerPedido(pedidoId) {
   const linhas = await sql(`SELECT p.pedido_id, p.cliente, p.site, p.segmento, p.segmento_origem,
-      p.status, p.foco, p.variacoes, p.portal_id, p.portal_url, p.banner_cor, p.anexo_url, p.anexo_nome, p.logo_url,
+      p.status, p.foco, p.variacoes, p.automatico, p.motivo_catalogo, p.produtos, p.portal_id, p.portal_url, p.banner_cor, p.anexo_url, p.anexo_nome, p.logo_url,
       CAST(p.catalogo AS TEXT) AS catalogo, e.nome AS executivo, p.executivo_id
     FROM pedidos p JOIN executivos e ON e.id = p.executivo_id WHERE p.pedido_id = :p`, { p: pedidoId });
   if (!linhas.length) throw new Error(`pedido ${pedidoId} não existe`);
@@ -510,17 +510,91 @@ async function telufia(ev, execucao) {
   return { ok: !!(saida.ok && saida.telufia && saida.telufia.situacao === 'ativada'), telufia: saida.telufia };
 }
 
-const ACOES = { extrair, previa, criar, banner, avaliar, miniaturas, trocar_logo: trocarLogo, telufia };
+
+const MAX_BUSCAS_DEXTER = 3;
+
+async function despachar(ev, execucao) {
+  const pega = await sql(`UPDATE travas SET pedido_id = 'despacho', execucao_id = :x, desde = now()
+    WHERE nome = 'despacho' AND (pedido_id IS NULL OR desde < now() - interval '2 minutes') RETURNING nome`, { x: execucao || 'despacho' });
+  if (!pega.length) return { ok: true, ignorado: 'outro despacho em andamento' };
+  const soltos = [];
+  try {
+    await sql(`UPDATE pedidos SET status = 'na_fila', execucao_atual = NULL, atualizado_em = now()
+      WHERE automatico AND status = 'extraindo' AND portal_id IS NULL
+        AND COALESCE(execucao_desde, atualizado_em) < now() - interval '40 minutes' RETURNING pedido_id`);
+    const ativos = await sql(`SELECT count(*) AS n FROM pedidos WHERE automatico AND status IN ('extraindo', 'curadoria', 'criando')
+      AND portal_id IS NULL AND atualizado_em > now() - interval '60 minutes'`);
+    let vagas = MAX_BUSCAS_DEXTER - Number(ativos[0].n);
+    const lista = await mitra.functionsAdmin.list({ size: 100 });
+    const pipeline = (lista.content || lista.items || []).find((f) => f.name === 'pipeline_poc');
+    while (vagas > 0 && pipeline) {
+      const prox = await sql(`UPDATE pedidos SET status = 'extraindo', atualizado_em = now(), execucao_desde = now()
+        WHERE pedido_id = (SELECT pedido_id FROM pedidos WHERE automatico AND status = 'na_fila' ORDER BY id LIMIT 1)
+          AND status = 'na_fila' RETURNING pedido_id`);
+      if (!prox.length) break;
+      const pedidoId = prox[0].pedido_id;
+      try {
+        await mitra.functions.executeAsync(pipeline.id, { acao: 'auto', pedido_id: pedidoId, chave_interna: ev.chave_interna });
+        await registrador(pedidoId)({ etapa: 'dexter', mensagem: 'saiu da fila: buscando produtos' });
+        soltos.push(pedidoId);
+        vagas -= 1;
+      } catch (erro) {
+        await dml(`UPDATE pedidos SET status = 'na_fila' WHERE pedido_id = :p AND status = 'extraindo'`, { p: pedidoId });
+        break;
+      }
+    }
+  } finally {
+    await dml("UPDATE travas SET pedido_id = NULL, execucao_id = NULL WHERE nome = 'despacho'", {});
+  }
+  return { ok: true, soltos };
+}
+
+async function auto(ev, execucao) {
+  const pedidoId = ev.pedido_id;
+  const registrar = registrador(pedidoId);
+  try {
+    const antes = await lerPedido(pedidoId);
+    if (!antes.automatico) return { ok: false, erro: 'pedido não é automático' };
+    const busca = await extrair(ev, execucao);
+    const depois = await lerPedido(pedidoId);
+    if (depois.status !== 'curadoria') {
+      if (depois.status === 'precisa_catalogo') {
+        await falhar(pedidoId, `sem produtos: ${depois.motivo_catalogo || 'a busca não achou produtos'}`, registrar);
+      }
+      return { ok: false, etapa: 'busca', status: depois.status, busca };
+    }
+    await registrar({ etapa: 'dexter', mensagem: `curadoria automática: ${depois.produtos || 0} produtos aprovados sem revisão` });
+    await dml(`UPDATE pedidos SET curadoria_fim = now(), atualizado_em = now() WHERE pedido_id = :p`, { p: pedidoId });
+    const criacao = await criar({ pedido_id: pedidoId }, execucao);
+    return { ok: !!criacao.ok, etapa: 'criacao', criacao };
+  } finally {
+    try { await despachar({ chave_interna: ev.chave_interna }, execucao); } catch (e) { /* o cron acorda depois */ }
+  }
+}
+
+const ACOES = { extrair, previa, criar, banner, avaliar, miniaturas, trocar_logo: trocarLogo, telufia, despachar, auto };
+const ACOES_INTERNAS = ['despachar', 'auto'];
 
 module.exports = async (event, context) => {
   const ev = (event && event.input) ? event.input : (event || {});
   const acao = ev.acao;
   if (!ACOES[acao]) return { ok: false, erro: `ação desconhecida: ${acao}` };
-  if (acao !== 'avaliar' && !ev.pedido_id) return { ok: false, erro: 'CAMPOS_FALTANDO', faltando: ['pedido_id'] };
+  if (!['avaliar', 'despachar'].includes(acao) && !ev.pedido_id) return { ok: false, erro: 'CAMPOS_FALTANDO', faltando: ['pedido_id'] };
   const faltando = SEGREDOS.filter((nome) => !process.env[nome]);
   mitra = createClient();
   await mitra.init();
-  const g = await guarda(mitra, context);
+  let g;
+  if (ACOES_INTERNAS.includes(acao)) {
+    paciente(mitra);
+    const chave = ((await sql("SELECT valor FROM configuracao WHERE chave = 'chave_interna'", {}))[0] || {}).valor || '';
+    const recebida = String(ev.chave_interna || '');
+    const igual = chave && recebida.length === chave.length
+      && require('crypto').timingSafeEqual(Buffer.from(recebida), Buffer.from(chave));
+    if (!igual) return { ok: false, erro: 'ACESSO_RESTRITO', mensagem: 'Acesso restrito à equipe Zydon.' };
+    g = { ok: true, sessao: { admin: true, executivo_id: null, interno: true } };
+  } else {
+    g = await guarda(mitra, context);
+  }
   if (!g.ok) return g;
   if (!g.sessao.admin && !g.sessao.executivo_id) {
     return { ok: false, erro: 'EXECUTIVO_NAO_CADASTRADO', mensagem: 'Peça ao João Pedro para te cadastrar.' };

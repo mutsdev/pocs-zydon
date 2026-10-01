@@ -1,6 +1,7 @@
 import type { Status } from './mitra-api'
 
 export const STATUS: Record<Status, { rotulo: string; variante: 'success' | 'danger' | 'info' | 'warning' | 'neutral' }> = {
+  na_fila: { rotulo: 'Na fila', variante: 'neutral' },
   extraindo: { rotulo: 'Buscando produtos', variante: 'info' },
   aguardando_anexo: { rotulo: 'Recebendo anexo', variante: 'info' },
   curadoria: { rotulo: 'Em curadoria', variante: 'warning' },

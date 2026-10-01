@@ -1,6 +1,13 @@
 export const SF = {
   anexo_parte: '5fd9c4d2-60a1-4c64-8c24-ca1b57d29cca',
   curadoria_salvar: '61451fd2-3b69-4f59-bc82-44d54c79e773',
+  dexter_admin: 'f8495772-cd90-454a-b3a1-925e03d80df4',
+  dexter_api: '8bc8f6b2-ad34-4b8d-963c-c4b6784c671c',
+  dexter_lotes: '9369389a-2085-4cb6-8c85-bd01314ccc12',
+  dexter_pedidos: '7bd10deb-7c94-4a2e-a695-38ed3f2de822',
+  dexter_relogio: '4b0f686d-1eec-41b5-9b01-0c34fa15da5d',
+  dexter_tokens: '79b08861-5585-43ba-b016-dcf4af063983',
+  dexter_totais: '2b2b782a-7ae5-4ffb-bd81-7771eba0c100',
   executivo_ativo: 'b4c68cd0-872b-475c-bc5f-3f9b4bc3e099',
   executivo_entrar: '882ce495-7bf1-4bf1-b422-c9ac3e4f6e6a',
   executivo_salvar: 'd42bc07d-3506-49d9-9376-1220825e332a',

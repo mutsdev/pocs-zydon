@@ -77,7 +77,10 @@ const MENSAGENS: Record<string, string> = {
   LOGO_RECUSADA: 'O pedido não aceita trocar a logo agora.',
   EXECUTIVO_NAO_CADASTRADO: 'Peça ao João Pedro para te cadastrar.',
   CAMPOS_FALTANDO_EXECUTIVO: 'Escolha para qual usuário é o portal.',
-  SO_ADMIN: 'Só o administrador pode apagar pedidos.',
+  SO_ADMIN: 'Só o administrador pode fazer isso.',
+  TOKEN_DESCONHECIDO: 'Token não encontrado ou já revogado.',
+  LOTE_GRANDE: 'Envie no máximo 50 empresas por vez.',
+  NENHUMA_VALIDA: 'Nenhuma empresa válida: confira nome e site de cada linha.',
   LIMITE_PLATAFORMA: 'Muita gente usando ao mesmo tempo. Espere alguns segundos e tente de novo.',
   SEM_SESSAO: 'Sua sessão expirou. Saia e entre de novo.',
   ACESSO_RESTRITO: 'Acesso restrito à equipe Zydon.',
@@ -91,7 +94,7 @@ function mensagemDeErro(saida: Record<string, unknown>) {
   return base
 }
 
-export type Status = 'extraindo' | 'aguardando_anexo' | 'curadoria' | 'precisa_catalogo' | 'criando' | 'concluido' | 'falhou'
+export type Status = 'na_fila' | 'extraindo' | 'aguardando_anexo' | 'curadoria' | 'precisa_catalogo' | 'criando' | 'concluido' | 'falhou'
 
 export interface Executivo { id: number; nome: string; email: string | null; cargo: string | null; ativo: boolean; pedidos: number }
 
