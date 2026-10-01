@@ -463,13 +463,17 @@ def coletar_secoes(base, limite=60):
     for a in BeautifulSoup(home.text, "html.parser").find_all("a", href=True):
         url = urljoin(base, a["href"]).split("#")[0].split("?")[0].rstrip("/")
         partes = [p for p in urlparse(url).path.split("/") if p]
-        if (urlparse(url).hostname == host and len(partes) == 1 and url not in links
-                and not PAGINA_NAO_E_SECAO.search(partes[0])):
+        if (urlparse(url).hostname == host and 1 <= len(partes) <= 2 and url not in links
+                and not any(PAGINA_NAO_E_SECAO.search(p) for p in partes)):
             links.append(url)
+    links.sort(key=lambda u: (0 if re.search(r"(?i)produto|unidade|neg[oó]cio|linha|categoria|marca|segmento|departamento",
+                                             u) else 1, len([p for p in urlparse(u).path.split("/") if p])))
     itens = []
-    for url in links[:10]:
+    for url in links[:14]:
+        if restante() < 30:
+            break
         try:
-            pagina = requests.get(url, headers=cabecalho, timeout=20).text
+            pagina = requests.get(url, headers=cabecalho, timeout=15).text
         except requests.RequestException:
             continue
         sopa = BeautifulSoup(pagina, "html.parser")
@@ -1439,6 +1443,7 @@ Regras:
 
 Responda SOMENTE JSON:
 {{"o_que_vende": "frase curta", "segmento": "2 a 5 palavras",
+  "tipos_de_produto": ["3 a 5 tipos concretos que um comprador digitaria numa loja, ex.: arroz 5kg, detergente"],
   "produtos": [{{"nome": "...", "url": "https://...", "imagem": "https://...", "preco": null,
                  "categoria": "...", "descricao": "uma frase"}}]}}"""
 
@@ -1475,6 +1480,28 @@ def _ler_pagina_com_foto(url):
         og = _ler_og(url) or {}
         pagina = {**og, **{k: v for k, v in pagina.items() if v}}
     return pagina or None
+
+
+BARROSO_INFO = {"o_que_vende": "", "tipos": []}
+
+TERMO_GENERICO = re.compile(
+    r"(?i)^\s*(os\s+)?(melhores|principais)?\s*(produtos?|ofertas?|promo[cç](ão|oes|ões)|descontos?|novidades|"
+    r"lan[cç]amentos?|destaques?|mais vendidos|cadastre-se|cadastro|login|entrar|minha conta|carrinho|"
+    r"atendimento|contato|institucional|sobre( n[oó]s)?|quem somos|blog|not[ií]cias|folhetos?|encartes?|"
+    r"lojas?|varejo|atacado|distribui[cç][aã]o|diversos|variados|em geral|e muito mais)"
+    r"(\s+(e|de|do|da|em|para)?\s*(produtos?|ofertas?|promo[cç](ão|oes|ões)|geral|diversos|variados|"
+    r"atacado|varejo|qualidade|pre[cç]os?\s+baixos?))*\s*$")
+
+
+def tipos_uteis(tipos):
+    """Tira termos que não descrevem produto ("melhores produtos", "ofertas")."""
+    saida = []
+    for t in tipos or []:
+        t = limpar_texto(t)
+        if t and len(t) <= 60 and not TERMO_GENERICO.match(t) and len(palavras_chave(t)) >= 1 \
+                and t.lower() not in [x.lower() for x in saida]:
+            saida.append(t)
+    return saida[:5]
 
 
 def produtos_pelo_barroso(cliente, site, observacao, alvo):
@@ -1514,6 +1541,8 @@ def produtos_pelo_barroso(cliente, site, observacao, alvo):
     except ValueError:
         evento("extracao", "modo barroso-chat: resposta sem JSON; seguindo a busca normal", "aviso")
         return [], ""
+    BARROSO_INFO["o_que_vende"] = limpar_texto(dados.get("o_que_vende"))[:300]
+    BARROSO_INFO["tipos"] = tipos_uteis(dados.get("tipos_de_produto") or [])
     itens = [p for p in (dados.get("produtos") or []) if isinstance(p, dict)
              and str(p.get("url") or "").startswith("http") and not MARKETPLACES.search(str(p.get("url")))]
     evento("extracao", f"modo barroso-chat: \"{limpar_texto(dados.get('o_que_vende'))[:160]}\" · "
@@ -1747,6 +1776,8 @@ def termos_de_busca(cliente, segmento, categorias, nomes=(), foco=""):
     termos.append(f"{cliente} produtos")
     vistos, saida = set(), []
     for t in termos:
+        if TERMO_GENERICO.match(re.sub(r"(?i)\s+comprar$", "", t)):
+            continue
         if sem_acento(t) not in vistos:
             vistos.add(sem_acento(t))
             saida.append(t)
@@ -1898,12 +1929,20 @@ def assunto_dos_achados(achados, marca):
     return max(contagem.items(), key=lambda kv: kv[1])[0] if contagem else ""
 
 
+PAGINA_NAO_E_LOJA = re.compile(
+    r"(?i)(\.gov\.br|\.jus\.br|\.leg\.br|banco|bank|bradesco|itau|santander|caixa\.gov|nubank|serasa|"
+    r"reclameaqui|wikipedia|jusbrasil|linkedin|glassdoor|indeed|vagas|youtube|facebook|instagram|tiktok|"
+    r"folheto|encarte|tiendeo|ofertasdodia|cupom|cupons|noticia|g1\.globo|infomoney|valor\.globo|"
+    r"exame\.com|estadao|uol\.com\.br/noticias|/blog/|/vagas|/trabalhe)")
+
+
 def buscar_candidatos_web(cliente, segmento, categorias, site, nomes=(), limite=24, foco="", tipos=()):
     """Busca na web por termos do próprio site. Página de outra marca vira candidato
     [busca]; o modelo marca do_cliente e o pedido fica com produtos_similares."""
     host = urlparse(normalizar_site(site)).hostname or ""
     pares, vistos = [], set()
     termos = termos_de_busca(cliente, segmento, categorias, nomes, foco)
+    tipos = tipos_uteis(tipos)
     revenda = bool(tipos) and not foco
     if revenda:
         termos = list(dict.fromkeys([f"{t} comprar" for t in tipos[:4]]))
@@ -1912,7 +1951,7 @@ def buscar_candidatos_web(cliente, segmento, categorias, site, nomes=(), limite=
     resultados = [r or [] for r in em_paralelo(buscar_na_web, termos, len(termos) or 1, teto=75)]
     for termo, urls in zip(termos, resultados):
         for url in urls:
-            if url not in vistos and host not in url:
+            if url not in vistos and host not in url and not PAGINA_NAO_E_LOJA.search(url):
                 vistos.add(url)
                 pares.append((url, termo))
     pares = pares[:limite]
@@ -2080,7 +2119,7 @@ def descobrir_empresa(cliente, site=""):
         if oficial and (re.search(r"instagram|facebook|linktr|wa\.me|whatsapp|mercadolivre|shopee|amazon", oficial, re.I)
                         or not oficial.startswith("http")):
             oficial = ""
-        tipos = [str(t).strip() for t in dados.get("tipos_de_produto") or [] if str(t).strip()][:5]
+        tipos = tipos_uteis(dados.get("tipos_de_produto") or []) or list(BARROSO_INFO["tipos"])
         evento("extracao", f"descoberta da empresa via {modelo}: {json.dumps(dados, ensure_ascii=False)[:400]}")
         return {"site_oficial": oficial or _site_pelo_perfil(site, cliente), "tipos": tipos,
                 "segmento": str(dados.get("segmento") or "").strip()}
@@ -2194,6 +2233,9 @@ def _descobrir_sem_google(cliente, site):
     except Exception as erro:
         evento("extracao", f"descoberta sem Google falhou: {type(erro).__name__}: {str(erro)[:200]}", "aviso")
         return {"site_oficial": oficial, "tipos": [], "segmento": ""}
-    tipos = [str(t).strip() for t in (dados or {}).get("tipos_de_produto") or [] if str(t).strip()][:5]
+    tipos = tipos_uteis((dados or {}).get("tipos_de_produto") or [])
+    if not tipos and BARROSO_INFO["tipos"]:
+        tipos = list(BARROSO_INFO["tipos"])
+        evento("extracao", "tipos genéricos na descoberta; usando os tipos que a pesquisa na web descreveu")
     evento("extracao", f"descoberta sem Google (fila de IAs): {', '.join(tipos) or 'nada'}")
     return {"site_oficial": oficial, "tipos": tipos, "segmento": str((dados or {}).get("segmento") or "").strip()}

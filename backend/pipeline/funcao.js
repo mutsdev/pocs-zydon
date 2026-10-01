@@ -292,7 +292,7 @@ async function gravarPecas(pedidoId, pecas, publicadas, cor) {
 }
 
 async function comCenaIa() {
-  return true;
+  return false;
 }
 
 async function previa(ev, execucao) {

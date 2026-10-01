@@ -609,6 +609,10 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
                 ao_ter_candidatos([v["nome"] for v in achados[:selecao.alvo_pedido()]], segmento_informado)
         else:
             evento("extracao", "modo barroso-chat não trouxe produto válido; seguindo a busca normal", "aviso")
+        if not tipos_da_empresa and selecao.BARROSO_INFO["tipos"]:
+            tipos_da_empresa = list(selecao.BARROSO_INFO["tipos"])
+            evento("extracao", "o que a empresa vende, segundo a pesquisa na web: "
+                   + (selecao.BARROSO_INFO["o_que_vende"] or ", ".join(tipos_da_empresa)))
     if entrada.get("anexo"):
         import anexo
         evento("extracao", f"lendo o anexo {entrada['anexo']['nome']}")
@@ -1439,21 +1443,20 @@ def _cores_do_site(site):
 
 
 def identidade_visual(site, logo):
-    """(marca, apoio, origem): a cor da marca vem da logo e é confirmada/ajustada pelo site;
+    """(marca, apoio, origem): a cor da marca vem do site (é a que o cliente usa de fato);
+    sem cor no site, vem da logo;
     a cor de apoio é a segunda cor do site (ou da logo), nunca um matiz inventado."""
     da_logo = cores_da_logo(logo) if logo else []
     do_site = cores_do_site(site)
     marca, apoio, origem = None, None, []
-    if da_logo:
-        marca = da_logo[0]
-        origem.append("logo")
-        parecida = next((c for c in do_site if _dist_matiz(c, marca) <= 18), None)
-        if parecida:
-            marca = parecida
-            origem.append("site")
-    elif do_site:
+    if do_site:
         marca = do_site[0]
         origem.append("site")
+        if da_logo and any(_dist_matiz(c, do_site[0]) <= 18 for c in da_logo):
+            origem.append("logo")
+    elif da_logo:
+        marca = da_logo[0]
+        origem.append("logo")
     candidatas = [c for c in do_site + da_logo if marca is None or _dist_matiz(c, marca) > 40]
     apoio = candidatas[0] if candidatas else None
     return (_hex(marca) if marca else None, _hex(apoio) if apoio else None, "+".join(origem) or "nenhuma")
