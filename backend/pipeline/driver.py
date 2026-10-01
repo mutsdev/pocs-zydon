@@ -609,6 +609,8 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
                 ao_ter_candidatos([v["nome"] for v in achados[:selecao.alvo_pedido()]], segmento_informado)
         else:
             evento("extracao", "modo barroso-chat não trouxe produto válido; seguindo a busca normal", "aviso")
+        if not pelo_barroso:
+            selecao.iniciar_prazo(PRAZO_BUSCA_SEGUNDOS)
         if not tipos_da_empresa and selecao.BARROSO_INFO["tipos"]:
             tipos_da_empresa = list(selecao.BARROSO_INFO["tipos"])
             evento("extracao", "o que a empresa vende, segundo a pesquisa na web: "

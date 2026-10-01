@@ -1894,7 +1894,7 @@ def relevante(nome, termo, cliente, url=""):
 
 
 def _ler_pagina_busca(url):
-    registro = ler_mercado_livre(url) if MERCADO_LIVRE.search(url) else _ler_pagina(url)
+    registro = ler_mercado_livre(url) if MERCADO_LIVRE.search(url) else _ler_pagina_com_foto(url)
     if not registro or CAPTCHA.search(registro.get("name") or "") or CAPTCHA.search(registro.get("description") or ""):
         return None
     return registro
@@ -2182,8 +2182,9 @@ def _descobrir_pelo_barroso(cliente, site, perfil, do_site):
     pergunta = (f"Pesquise na web a empresa brasileira {cliente}{perfil}" + (f", site {site}" if site else "") + ". "
                 + (f"O site dela diz: {do_site}. Os tipos de produto têm que bater com esse texto. " if do_site else "")
                 + "Responda SOMENTE um JSON: {\"site_oficial\": \"https://... ou vazio\", "
-                "\"tipos_de_produto\": [\"3 a 5 tipos de produto que ela vende, 2 a 4 palavras cada, termos que um "
-                "comprador digitaria numa loja online; nunca 'ofertas' ou 'melhores produtos'\"], "
+                "\"tipos_de_produto\": [\"3 a 5 produtos CONCRETOS que ela vende, como um comprador digitaria numa loja "
+                "online (ex.: 'arroz tipo 1 5kg', 'detergente líquido 500ml', 'dipirona 500mg'); nunca categoria "
+                "ampla como 'alimentos básicos', 'bebidas', 'ofertas' ou 'melhores produtos'\"], "
                 "\"segmento\": \"ramo em poucas palavras\"}. site_oficial não pode ser rede social nem marketplace.")
     pedido = {"model": MODELO_BUSCA, "tools": [{"type": "web_search"}], "input": pergunta}
     try:

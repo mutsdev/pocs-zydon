@@ -83,14 +83,15 @@ function rodarPython(acao, entrada, aoEvento, aoParcial) {
     };
     const limiteMs = (acao === 'banner' || acao === 'previa') && entrada.cena_ia ? 12 * 60 * 1000
       : acao === 'banner' || acao === 'previa' || acao === 'trocar_logo' ? 6 * 60 * 1000 : 25 * 60 * 1000;
-    const relogio = setTimeout(() => { log += `\ntempo limite de ${limiteMs / 60000} min: etapa encerrada`; filho.kill('SIGKILL'); }, limiteMs);
+    let porTempo = false;
+    const relogio = setTimeout(() => { porTempo = true; log += `\ntempo limite de ${limiteMs / 60000} min: etapa encerrada`; filho.kill('SIGKILL'); }, limiteMs);
     filho.on('close', () => clearTimeout(relogio));
     filho.stdout.on('data', tratar);
     filho.stderr.on('data', (b) => { log = (log + b.toString()).slice(-6000); });
     filho.on('close', (codigo, sinal) => {
       let saida;
       try { saida = JSON.parse(fs.readFileSync(arqSaida, 'utf-8')); } catch (e) {
-        saida = { ok: false, erro: sinal === 'SIGKILL' ? 'a etapa passou do tempo limite e foi encerrada; tente de novo'
+        saida = { ok: false, erro: sinal === 'SIGKILL' ? (porTempo ? 'a etapa passou do tempo limite e foi encerrada; tente de novo' : 'a etapa foi interrompida por falta de memória do servidor; tente de novo')
           : `driver saiu com código ${codigo} (sinal ${sinal}) sem resultado` };
       }
       for (const arq of [arqEntrada, arqSaida]) { try { fs.unlinkSync(arq); } catch (e) { /* ok */ } }
@@ -539,7 +540,7 @@ async function telufia(ev, execucao) {
 }
 
 
-const MAX_BUSCAS_DEXTER = 3;
+const MAX_BUSCAS_DEXTER = 2;
 
 async function despachar(ev, execucao) {
   const pega = await sql(`UPDATE travas SET pedido_id = 'despacho', execucao_id = :x, desde = now()
