@@ -633,8 +633,18 @@ async function urlPortal(ev, execucao) {
   return { ok: true, url: saida.url };
 }
 
-const ACOES = { url_portal: urlPortal, extrair, previa, criar, banner, avaliar, miniaturas, trocar_logo: trocarLogo, telufia, despachar, auto };
-const ACOES_INTERNAS = ['despachar', 'auto', 'url_portal'];
+async function lojaPublica(ev) {
+  const pedidoId = ev.pedido_id;
+  const registrar = registrador(pedidoId);
+  const pedido = await lerPedido(pedidoId);
+  if (!pedido.portal_id) return { ok: false, erro: 'SEM_PORTAL' };
+  const saida = await rodarPython('loja_publica', { pedido_id: pedidoId, portal_id: pedido.portal_id, publico: ev.publico === true }, registrar);
+  await registrar.fim();
+  return { ok: !!saida.ok && saida.situacao === 'ok', ...saida, log: undefined };
+}
+
+const ACOES = { loja_publica: lojaPublica, url_portal: urlPortal, extrair, previa, criar, banner, avaliar, miniaturas, trocar_logo: trocarLogo, telufia, despachar, auto };
+const ACOES_INTERNAS = ['despachar', 'auto', 'url_portal', 'loja_publica'];
 
 module.exports = async (event, context) => {
   const ev = (event && event.input) ? event.input : (event || {});

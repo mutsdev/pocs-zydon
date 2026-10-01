@@ -1983,7 +1983,53 @@ def url_portal(entrada):
     return {"url": url_pelo_portal_id(entrada["portal_id"])}
 
 
-ACOES = {"url_portal": url_portal, "trocar_logo": trocar_logo, "miniaturas": miniaturas, "extrair": extrair, "avaliar": avaliar, "previa": previa, "criar": criar, "banner": banner, "telufia": telufia}
+CAMPOS_APARENCIA = ("title", "billing_name", "fiscal_registration_number", "color", "brand_image",
+                    "favicon_image", "login_image", "extend_screen", "menu_guidance", "display_watermark",
+                    "floating_button", "tag_manager", "use_main_seller_phone_as_whatsapp_number", "is_open_to_public")
+
+
+def loja_publica(entrada):
+    """Liga/desliga "Loja visível para visitantes" (is_open_to_public) e confere por GET.
+    O PUT substitui a aparência inteira: manda todos os campos lidos, só troca o flag."""
+    import time
+    import requests
+    import credenciais
+    portal_id, publico = entrada["portal_id"], bool(entrada.get("publico"))
+    headers, _ = credenciais.carregar(ORG)
+    token = None
+    for tentativa in range(3):
+        login = requests.post(f"{credenciais.ACCOUNT_BASE_URL}/access-key/login", timeout=30,
+                              json={"code": headers["X-Zydon-Access-Key-Code"],
+                                    "token": headers["X-Zydon-Access-Key-Token"], "solution_id": portal_id})
+        if login.status_code == 200:
+            token = (login.json() or {}).get("accessToken")
+            break
+        if login.status_code < 500:
+            break
+        time.sleep(3)
+    if not token:
+        return {"situacao": "falhou", "motivo": f"login no portal respondeu HTTP {login.status_code}"}
+    bearer = {"Authorization": "Bearer " + token, "Content-Type": "application/json"}
+    url = "https://api.zydon.com.br/api/b2b/portals/appearance"
+    atual = requests.get(url, headers=bearer, timeout=30)
+    if atual.status_code != 200:
+        return {"situacao": "falhou", "motivo": f"GET da aparência respondeu HTTP {atual.status_code}"}
+    antes = atual.json()
+    corpo = {k: antes[k] for k in CAMPOS_APARENCIA if k in antes}
+    corpo["is_open_to_public"] = publico
+    gravacao = requests.put(url, headers=bearer, json=corpo, timeout=30)
+    if gravacao.status_code >= 300:
+        return {"situacao": "falhou", "motivo": f"PUT da aparência respondeu HTTP {gravacao.status_code}: {gravacao.text[:200]}"}
+    depois = requests.get(url, headers=bearer, timeout=30).json()
+    mudou = [k for k in CAMPOS_APARENCIA if k != "is_open_to_public" and antes.get(k) != depois.get(k)]
+    ok = depois.get("is_open_to_public") is publico
+    evento("portal", f"loja visível para visitantes: {antes.get('is_open_to_public')} -> {depois.get('is_open_to_public')}"
+           + (f" · outros campos mudaram: {', '.join(mudou)}" if mudou else ""), "info" if ok and not mudou else "aviso")
+    return {"situacao": "ok" if ok else "nao_confirmado", "antes": antes.get("is_open_to_public"),
+            "depois": depois.get("is_open_to_public"), "outros_campos_mudaram": mudou}
+
+
+ACOES = {"loja_publica": loja_publica, "url_portal": url_portal, "trocar_logo": trocar_logo, "miniaturas": miniaturas, "extrair": extrair, "avaliar": avaliar, "previa": previa, "criar": criar, "banner": banner, "telufia": telufia}
 
 
 def main():
