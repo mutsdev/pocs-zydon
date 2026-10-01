@@ -556,7 +556,7 @@ async function despachar(ev, execucao) {
     const lista = await mitra.functionsAdmin.list({ size: 100 });
     const pipeline = (lista.content || lista.items || []).find((f) => f.name === 'pipeline_poc');
     while (vagas > 0 && pipeline) {
-      const prox = await sql(`UPDATE pedidos SET status = 'extraindo', atualizado_em = now(), execucao_desde = now()
+      const prox = await sql(`UPDATE pedidos SET status = 'extraindo', atualizado_em = now(), execucao_desde = now(), saiu_fila_em = now()
         WHERE pedido_id = (SELECT pedido_id FROM pedidos WHERE automatico AND status = 'na_fila' ORDER BY id LIMIT 1)
           AND status = 'na_fila' RETURNING pedido_id`);
       if (!prox.length) break;

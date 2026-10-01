@@ -25,7 +25,7 @@ const PAGINA = 30
 
 interface Totais { total: number; na_fila: number; andamento: number; concluidos: number; falharam: number; tempo_medio_s: number | null; concluidos_24h: number }
 interface Lote { id: number; nome: string; origem: string; criado_em: string; usuario: string; total: number; na_fila: number; buscando: number; criando: number; concluidos: number; falharam: number }
-interface LinhaDexter { pedido_id: string; cliente: string; site: string; status: Status; lote_id: number | null; lote: string | null; referencia: string | null; produtos: number | null; portal_url: string | null; motivo: string | null; criado_em: string; segundos: number | null; em_execucao: boolean; usuario: string; avaliacao_nota: number | null; avaliacao_problemas: string | null; avaliacao_comentario: string | null }
+interface LinhaDexter { pedido_id: string; cliente: string; site: string; status: Status; lote_id: number | null; lote: string | null; referencia: string | null; produtos: number | null; portal_url: string | null; motivo: string | null; criado_em: string; segundos: number | null; em_execucao: boolean; usuario: string; avaliacao_nota: number | null; avaliacao_problemas: string | null; avaliacao_comentario: string | null; relogio_ativo: boolean }
 interface Token { id: number; prefixo: string; criado_em: string; ultimo_uso: string | null; revogado_em: string | null; executivo_id: number; usuario: string }
 
 const n = (v: unknown) => Number(v) || 0
@@ -89,6 +89,8 @@ export default function Dexter() {
   const [tokenNovo, setTokenNovo] = useState<{ token: string; usuario: string } | null>(null)
   const [ocupado, setOcupado] = useState<string | null>(null)
   const versao = useRef(0)
+  const recebidoEm = useRef(Date.now())
+  const [agora, setAgora] = useState(Date.now())
   const [avaliando, setAvaliando] = useState<LinhaDexter | null>(null)
   const [nota, setNota] = useState(0)
   const [problemas, setProblemas] = useState<Set<string>>(new Set())
@@ -103,6 +105,7 @@ export default function Dexter() {
     try {
       const r = await consultar<LinhaDexter>('dexter_pedidos', { status: filtroStatus, lote: filtroLote, limite: String(limite), offset: String(offset) })
       if (v !== versao.current) return
+      if (offset === 0) recebidoEm.current = Date.now()
       setLinhas((a) => (offset === 0 ? r : [...(a || []), ...r]))
       setFim(r.length < limite)
     } catch { if (v === versao.current) setErro('Não foi possível carregar os pedidos do Dexter.') }
@@ -125,15 +128,28 @@ export default function Dexter() {
   useEffect(() => { carregarPedidos(0) }, [carregarPedidos])
 
   const andamento = n(totais?.na_fila) + n(totais?.andamento) > 0
+  const qtdLinhas = useRef(0)
+  qtdLinhas.current = linhas?.length || 0
   useEffect(() => {
     if (!andamento) return
-    const t = setTimeout(() => {
+    const atualizar = () => {
       if (document.visibilityState !== 'visible') return
       carregarResumo()
-      carregarPedidos(0, Math.max(PAGINA, linhas?.length || 0))
-    }, 8000)
-    return () => clearTimeout(t)
-  }, [andamento, totais, linhas, carregarResumo, carregarPedidos])
+      carregarPedidos(0, Math.max(PAGINA, qtdLinhas.current))
+    }
+    const t = setInterval(atualizar, 8000)
+    document.addEventListener('visibilitychange', atualizar)
+    return () => { clearInterval(t); document.removeEventListener('visibilitychange', atualizar) }
+  }, [andamento, carregarResumo, carregarPedidos])
+
+  const relogioAndando = !!linhas?.some((x) => x.relogio_ativo)
+  useEffect(() => {
+    if (!relogioAndando) return
+    const t = setInterval(() => setAgora(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [relogioAndando])
+  const tempoDe = (p: LinhaDexter) => (p.segundos === null || p.segundos === undefined ? null
+    : Number(p.segundos) + (p.relogio_ativo ? Math.max(0, (agora - recebidoEm.current) / 1000) : 0))
 
   const empresas = lerLinhas(texto)
 
@@ -426,7 +442,7 @@ export default function Dexter() {
                     {falhou && p.motivo && <div className="text-sm mt-1 max-w-xs line-clamp-2" style={{ color: 'var(--color-text-secondary)' }} title={p.motivo}>{p.motivo}</div>}
                   </div></td>
                   <td className="px-3 py-3 text-right tabular-nums">{p.produtos ?? '—'}</td>
-                  <td className="px-3 py-3 text-right tabular-nums whitespace-nowrap">{duracao(p.segundos)}</td>
+                  <td className="px-3 py-3 text-right tabular-nums whitespace-nowrap">{duracao(tempoDe(p))}</td>
                   <td className="px-3 py-3">{p.portal_url ? <a href={p.portal_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 text-sm cursor-pointer" style={{ color: 'var(--color-primary-text)' }}>Abrir <ExternalLink size={14} /></a> : '—'}</td>
                   <td className="px-3 py-3 whitespace-nowrap">
                     {p.status === 'concluido' || falhou ? (
