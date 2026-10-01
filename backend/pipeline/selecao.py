@@ -662,7 +662,9 @@ Regras obrigatórias:
 - Olhe a imagem: banner com texto promocional, arte de carrossel, ícone ou foto de
   ambiente é descarte, mesmo que o nome pareça produto.
 - Priorize produtos da marca/catálogo do próprio cliente. Candidato [busca] que não é do
-  cliente só entra se faltar produto do site; marque "do_cliente": false.
+  cliente só entra se faltar produto do site; marque "do_cliente": false. Quando há poucos
+  ou nenhum candidato [site], ESCOLHA os [busca] do mesmo tipo que o cliente vende (são
+  exemplos similares, o portal avisa): não descarte por "outra_marca" nesse caso.
 - Espalhe a escolha entre as categorias do site (campo "categoria" dos candidatos): pegue
   de todas antes de repetir a mesma. Não escolha dois tamanhos do mesmo produto se houver
   outro produto disponível.
@@ -1217,6 +1219,11 @@ def completar_ate_o_alvo(itens, candidatos, motivos, categorias):
     sobra = [n for n in range(len(candidatos)) if n not in usados
              and (tipo(n) in ("limite", "sem_motivo")
                   or (curto and tipo(n) not in ("nao_e_produto", "outra_marca", "fora_do_foco")))]
+    if len(itens) + len(sobra) < alvo:
+        similares = [n for n in range(len(candidatos)) if n not in usados and n not in sobra
+                     and tipo(n) in ("outra_marca", "fora_do_foco")
+                     and candidatos[n].get("foto_conferida") is not False]
+        sobra += similares
     ja = {}
     for n, _ in itens:
         chave = sem_acento(candidatos[n]["categoria"])
