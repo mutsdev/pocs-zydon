@@ -72,6 +72,7 @@ module.exports = async (event, context) => {
   const agente = !g.sessao.admin && g.sessao.cargo === 'Agente de prospecção' && !!g.sessao.executivo_id;
   if (!g.sessao.admin && !agente) return { ok: false, erro: 'SO_ADMIN', mensagem: 'Só o administrador e o Dexter controlam esta tela.' };
   const meu = agente ? String(g.sessao.executivo_id) : '';
+  const todos = '';
   const sql = async (q, p = {}) => (await mitra.sql.executeQuery(q, p)).rows || [];
   const dml = (q, p = {}) => mitra.sql.executeDml([{ sql: q, parameters: p }]);
   const acao = String(ev.acao || '');
@@ -150,10 +151,10 @@ module.exports = async (event, context) => {
     const r = acao === 'retentar'
       ? await sql(`UPDATE pedidos SET status = 'na_fila', erro = NULL, erro_codigo = NULL, motivo_catalogo = NULL,
           execucao_atual = NULL, falhou_em = NULL, concluido_em = NULL, saiu_fila_em = NULL, atualizado_em = now()
-        WHERE pedido_id = :p AND automatico AND (:m = '' OR executivo_id = CAST(NULLIF(:m, '') AS INTEGER)) AND portal_id IS NULL AND status IN ('falhou', 'precisa_catalogo') RETURNING pedido_id, status`, { p: pedidoId, m: meu })
+        WHERE pedido_id = :p AND automatico AND (:m = '' OR executivo_id = CAST(NULLIF(:m, '') AS INTEGER)) AND portal_id IS NULL AND status IN ('falhou', 'precisa_catalogo') RETURNING pedido_id, status`, { p: pedidoId, m: todos })
       : await sql(`UPDATE pedidos SET status = 'falhou', erro = :motivo, erro_codigo = 'CANCELADO',
           falhou_em = now(), atualizado_em = now()
-        WHERE pedido_id = :p AND automatico AND (:m = '' OR executivo_id = CAST(NULLIF(:m, '') AS INTEGER)) AND status = 'na_fila' RETURNING pedido_id, status`, { p: pedidoId, m: meu, motivo: agente ? 'cancelado pelo Dexter' : 'cancelado pelo administrador' });
+        WHERE pedido_id = :p AND automatico AND (:m = '' OR executivo_id = CAST(NULLIF(:m, '') AS INTEGER)) AND status = 'na_fila' RETURNING pedido_id, status`, { p: pedidoId, m: todos, motivo: agente ? 'cancelado pelo Dexter' : 'cancelado pelo administrador' });
     if (!r.length) return { ok: false, erro: 'STATUS_NAO_PERMITE', acao };
     await dml(`INSERT INTO pedido_eventos (pedido_id, etapa, mensagem) VALUES (:p, 'dexter', :m)`,
       { p: pedidoId, m: acao === 'retentar' ? (agente ? 'de volta para a fila pelo Dexter' : 'de volta para a fila pelo administrador') : (agente ? 'cancelado pelo Dexter' : 'cancelado pelo administrador') });
@@ -169,7 +170,7 @@ module.exports = async (event, context) => {
     const problemas = (Array.isArray(ev.problemas) ? ev.problemas : []).map(String).filter((x) => validos.includes(x));
     const comentario = String(ev.comentario || '').trim().slice(0, 1000);
     const alvo = (await sql(`SELECT pedido_id, executivo_id, segmento FROM pedidos WHERE pedido_id = :p AND automatico
-      AND (:m = '' OR executivo_id = CAST(NULLIF(:m, '') AS INTEGER))`, { p: pedidoId, m: meu }))[0];
+      AND (:m = '' OR executivo_id = CAST(NULLIF(:m, '') AS INTEGER))`, { p: pedidoId, m: todos }))[0];
     if (!alvo) return { ok: false, erro: 'PEDIDO_DESCONHECIDO' };
     const r = await sql(`INSERT INTO avaliacoes_portal (pedido_id, executivo_id, nota, problemas, comentario, segmento)
       VALUES (:p, CAST(:e AS INTEGER), CAST(:n AS INTEGER), :pr, NULLIF(:c, ''), :s)
