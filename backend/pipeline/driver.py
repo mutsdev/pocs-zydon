@@ -1300,6 +1300,16 @@ def preparar_para_fundo(logo_img, fundo, limiares):
         return logo_img, dict(modo, modo="original", motivo="cor da marca visível no fundo")
     return pronta, modo
 mod_logo.preparar_para_fundo = preparar_para_fundo
+import fallback as mod_fallback
+_tinta_original = mod_fallback._tinta_da_forma
+def _tinta_da_forma(fundo_rgb):
+    r, g, b = (float(c) for c in fundo_rgb[:3])
+    lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0
+    if lum <= 0.6 or max(r, g, b) - min(r, g, b) < 6:
+        return _tinta_original(fundo_rgb)
+    marca = [max(0.0, min(255.0, 255 + (c - 255) / 0.1)) for c in (r, g, b)]
+    return tuple(int(round(c + (255 - c) * 0.4)) for c in marca)
+mod_fallback._tinta_da_forma = _tinta_da_forma
 original = gerar_banners.mod_paleta.extrair
 def extrair(logo, cor_informada=None):
     base = original(logo, cor_informada)
