@@ -1089,6 +1089,7 @@ def extrair(entrada):
         saida["logo_previa"] = miniatura_logo(logo)
         saida["logo_clara"] = logo_clara(logo)
     saida["logo_origem"] = logo_origem
+    saida["cores_navegador"] = (entrada.get("_navegador") or {}).get("cores") or None
     avisos_logo = [o for o in observacoes if "logo" in o]
     saida["logo_aviso"] = " · ".join(avisos_logo)[:800] or None
     if banner.get("fio") and banner["fio"].is_alive():
@@ -1739,6 +1740,57 @@ def montar_com_fotos(pasta, caminho_catalogo):
     return True
 
 
+FRACAO_LOGO_VISIVEL = 0.45
+
+
+def _visivel_no_fundo(logo, fundo_rgb):
+    """Fração dos pixels da logo ORIGINAL que se destacam do fundo (contraste >= 2)."""
+    from PIL import Image
+    import numpy as np
+    dados = np.asarray(Image.open(logo).convert("RGBA"), dtype=np.float64).reshape(-1, 4)
+    opacos = dados[dados[:, 3] > 128][:, :3]
+    if not len(opacos):
+        return 1.0
+    if len(opacos) > 20000:
+        opacos = opacos[::len(opacos) // 20000]
+    c = opacos / 255.0
+    c = np.where(c <= 0.03928, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+    lum = 0.2126 * c[:, 0] + 0.7152 * c[:, 1] + 0.0722 * c[:, 2]
+    lf = _lum(fundo_rgb)
+    razao = (np.maximum(lum, lf) + 0.05) / (np.minimum(lum, lf) + 0.05)
+    return float((razao >= 2.0).mean())
+
+
+def _fundo_onde_a_logo_aparece(logo, marca_hex, nome, paleta):
+    """Fundo na cor da marca só quando a logo original aparece nele. Se não aparece (logo
+    vermelha em fundo vermelho), o gerador viraria a logo uma silhueta branca sem detalhes;
+    aqui o banner passa para um fundo claro e a logo fica com as cores originais."""
+    if not logo:
+        return nome, paleta
+    try:
+        atual = _visivel_no_fundo(logo, _rgb(paleta["principal"]))
+        if atual >= FRACAO_LOGO_VISIVEL:
+            return nome, paleta
+        marca = _rgb(marca_hex)
+        opcoes = [("fundo claro na cor da marca", _misturar(marca, (255, 255, 255), 0.9)),
+                  ("fundo branco", (255, 255, 255)),
+                  ("fundo marca escura", _misturar(marca, (0, 0, 0), 0.6)),
+                  ("fundo grafite", (28, 28, 30))]
+        medidas = [(n, f, _visivel_no_fundo(logo, f)) for n, f in opcoes]
+        escolhido = next((m for m in medidas if m[2] >= FRACAO_LOGO_VISIVEL), max(medidas, key=lambda m: m[2]))
+        if escolhido[2] <= atual:
+            return nome, paleta
+        novo_nome, fundo, visivel = escolhido
+        destaque = marca if _contraste(marca, fundo) >= 3 else _legivel_sobre(marca, fundo)
+        neutra = (16, 20, 24) if _lum(fundo) > 0.4 else (247, 248, 250)
+        evento("banners", f"a logo some no {nome} ({atual:.0%} visível): usando {novo_nome} "
+                          f"{_hex(fundo)} ({visivel:.0%} visível), logo com as cores originais")
+        return novo_nome, {"principal": _hex(fundo), "destaque": _hex(destaque), "neutra": _hex(neutra)}
+    except Exception as erro:
+        evento("banners", f"não deu para medir a logo no fundo: {type(erro).__name__}", "aviso")
+        return nome, paleta
+
+
 def gerar_com_identidade(entrada, caminho, logo, variar=False, anterior=None, texto=""):
     """Banners na identidade do cliente (logo + site) e no gosto do executivo."""
     marca, apoio, origem = identidade_visual(entrada.get("site"), logo)
@@ -1753,6 +1805,8 @@ def gerar_com_identidade(entrada, caminho, logo, variar=False, anterior=None, te
              "escuro" if any(p in atual for p in PALAVRAS_ESCURO) else "")
     fonte_gosto = "pedido agora"
     nome, paleta = paleta_do_pedido(marca, apoio, gosto, anterior, variar)
+    if not gosto:
+        nome, paleta = _fundo_onde_a_logo_aparece(logo, marca, nome, paleta)
     evento("banners", f"identidade: marca {marca}" + (f", apoio {apoio}" if apoio else "") + f" (de {origem}); "
                       f"{nome} {paleta['principal']}, destaque {paleta['destaque']}"
                       + (f"; gosto {gosto} ({fonte_gosto})" if gosto else ""))
@@ -2109,9 +2163,30 @@ def loja_publica(entrada):
 ACOES = {"loja_publica": loja_publica, "url_portal": url_portal, "trocar_logo": trocar_logo, "miniaturas": miniaturas, "extrair": extrair, "avaliar": avaliar, "previa": previa, "criar": criar, "banner": banner, "telufia": telufia}
 
 
+def _restaurar_cores_navegador(entrada):
+    """As cores lidas pelo navegador ficam guardadas no pedido; cada etapa (banner, prévia,
+    criação) pode rodar em outra máquina, então o cache local é regravado antes de começar."""
+    import hashlib
+    cores = entrada.get("cores_navegador")
+    if isinstance(cores, str):
+        try:
+            cores = json.loads(cores)
+        except ValueError:
+            cores = None
+    if not cores or not entrada.get("site"):
+        return
+    try:
+        guardado = TRABALHO / "cores" / (hashlib.md5(("v2:" + entrada["site"].strip().lower()).encode()).hexdigest() + ".json")
+        guardado.parent.mkdir(parents=True, exist_ok=True)
+        guardado.write_text(json.dumps([list(_rgb(c)) for c in cores]), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def main():
     acao, arquivo_entrada, arquivo_saida = sys.argv[1:4]
     entrada = json.loads(Path(arquivo_entrada).read_text(encoding="utf-8"))
+    _restaurar_cores_navegador(entrada)
     try:
         resultado = {"ok": True, **ACOES[acao](entrada)}
     except Exception as erro:

@@ -145,6 +145,7 @@ async function lerPedido(pedidoId) {
     WHERE pedido_id = :p AND tipo = 'logo_nome'`, { p: pedidoId });
   const logo = await lerArquivo(pedidoId, 'logo');
   pedido.logo = logo && logoNome.length ? { nome: logoNome[0].conteudo_base64, conteudo_base64: logo } : null;
+  pedido.cores_navegador = await lerArquivo(pedidoId, 'cores_navegador');
   return pedido;
 }
 
@@ -271,6 +272,7 @@ async function gravarCuradoria(pedidoId, saida) {
     await salvarArquivo(pedidoId, 'logo_nome', saida.logo.nome);
   }
   await salvarArquivo(pedidoId, 'logo_previa', saida.logo_previa || null);
+  if (saida.cores_navegador) await salvarArquivo(pedidoId, 'cores_navegador', JSON.stringify(saida.cores_navegador));
   await dml('UPDATE pedidos SET logo_origem = :o, logo_aviso = :a WHERE pedido_id = :p', { p: pedidoId, o: saida.logo_origem || null, a: saida.logo_aviso || null });
   await dml('UPDATE pedidos SET catalogo = CAST(:cat AS JSONB) WHERE pedido_id = :p',
     { p: pedidoId, cat: JSON.stringify(saida.catalogo) });
@@ -339,7 +341,7 @@ async function previa(ev, execucao) {
   const registrar = registrador(pedidoId);
   const pedido = await lerPedido(pedidoId);
   await marcarExecucao(pedidoId, 'previa', execucao);
-  const saida = await rodarPython('previa', { pedido_id: pedidoId, cliente: pedido.cliente, site: pedido.site, cena_ia: await comCenaIa(pedidoId),
+  const saida = await rodarPython('previa', { pedido_id: pedidoId, cores_navegador: pedido.cores_navegador, cliente: pedido.cliente, site: pedido.site, cena_ia: await comCenaIa(pedidoId),
     preferencias: await preferenciasDoExecutivo(pedido.executivo_id),
     segmento: pedido.segmento, catalogo: pedido.catalogo, logo: pedido.logo }, registrar);
   await registrar.fim();
@@ -390,7 +392,7 @@ async function criar(ev, execucao) {
   try {
     const pedido = await lerPedido(pedidoId);
     const banners = await lerArquivo(pedidoId, 'banners');
-    const saida = await rodarPython('criar', { pedido_id: pedidoId, catalogo: pedido.catalogo,
+    const saida = await rodarPython('criar', { pedido_id: pedidoId, site: pedido.site, cores_navegador: pedido.cores_navegador, catalogo: pedido.catalogo,
       cliente: pedido.cliente, segmento: pedido.segmento || '', logo: pedido.logo, banners_tar: banners, simular,
       automatico: pedido.automatico === true || pedido.automatico === 't' || pedido.automatico === 'true' }, registrar);
     await registrar.fim();
@@ -464,7 +466,7 @@ async function banner(ev, execucao) {
       { e: String(pedido.executivo_id), p: pedidoId, t: textoFeedback.slice(0, 500) });
   }
   const preferencias = await preferenciasDoExecutivo(pedido.executivo_id);
-  const saida = await rodarPython('banner', { site: pedido.site, preferencias, pedido_id: pedidoId, acao_banner: acao, portal_id: pedido.portal_id,
+  const saida = await rodarPython('banner', { site: pedido.site, cores_navegador: pedido.cores_navegador, preferencias, pedido_id: pedidoId, acao_banner: acao, portal_id: pedido.portal_id,
     cena_ia: acao === 'regerar' ? await comCenaIa(pedidoId) : false,
     escolhas: ev.escolhas, pecas: ev.pecas, feedback: ev.feedback, cor: ev.cor, banners_tar: banners,
     cliente: pedido.cliente, segmento: pedido.segmento, catalogo: pedido.catalogo, logo: pedido.logo }, registrar);
@@ -529,7 +531,7 @@ async function trocarLogo(ev, execucao) {
     return { ok: false, erro: 'LOGO_AUSENTE' };
   }
   await registrar({ etapa: 'logo', mensagem: `logo enviada pelo usuário: ${nome}` });
-  const saida = await rodarPython('trocar_logo', { pedido_id: pedidoId, cliente: pedido.cliente,
+  const saida = await rodarPython('trocar_logo', { pedido_id: pedidoId, site: pedido.site, cores_navegador: pedido.cores_navegador, cliente: pedido.cliente,
     portal_id: pedido.portal_id, logo: { nome, conteudo_base64: conteudo } }, registrar);
   await registrar.fim();
   if (!saida.ok || saida.recusada) {
