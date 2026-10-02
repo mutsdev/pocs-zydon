@@ -53,6 +53,35 @@ def _proteger_logo_opaca():
     mod_logo.preparar_para_fundo = preparar_para_fundo
 
 
+PROTECAO_NO_ARQUIVO = """
+
+# --- protecao do pipeline_poc: logo opaca nunca vira silhueta chapada ---
+_preparar_para_fundo_original = preparar_para_fundo
+
+
+def preparar_para_fundo(logo, fundo, limiares):
+    pronta, modo = _preparar_para_fundo_original(logo, fundo, limiares)
+    if modo.get("modo") == "knockout":
+        alfa = logo.convert("RGBA").getchannel("A")
+        if sum(alfa.histogram()[:128]) < 0.05 * logo.width * logo.height:
+            return logo, dict(modo, modo="original", motivo="logo sem transparencia nao vira silhueta")
+    return pronta, modo
+"""
+
+
+def _proteger_logo_no_arquivo():
+    """O cabeçalho do portal é montado em outro processo (runner da criação), onde a
+    proteção em memória não vale: grava a mesma proteção no logo.py do repositório."""
+    arquivo = REPO / "Identidade Visual" / "logo.py"
+    try:
+        texto = arquivo.read_text(encoding="utf-8")
+        if "protecao do pipeline_poc" not in texto:
+            arquivo.write_text(texto + PROTECAO_NO_ARQUIVO, encoding="utf-8")
+    except OSError:
+        pass
+
+
+_proteger_logo_no_arquivo()
 _proteger_logo_opaca()
 
 ORG = "pocs"
