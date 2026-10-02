@@ -38,7 +38,14 @@ JS_HOME = r"""() => {
       x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height),
       svg: tipo === 'svg' ? el.outerHTML.slice(0, 60000) : ''});
   };
-  for (const img of document.images) marcar(img, 'img', img.currentSrc || img.src);
+  const fonte = (img) => {
+    const atual = img.currentSrc || img.src || '';
+    if (atual && !atual.startsWith('data:')) return atual;
+    const preguica = img.getAttribute('data-src') || img.getAttribute('data-lazy-src') || img.getAttribute('data-original')
+      || (img.getAttribute('data-srcset') || img.getAttribute('srcset') || '').split(',')[0].trim().split(' ')[0];
+    return preguica ? new URL(preguica, location.href).href : atual;
+  };
+  for (const img of document.images) marcar(img, 'img', fonte(img));
   for (const svg of document.querySelectorAll('svg')) if (!svg.parentElement.closest('svg')) marcar(svg, 'svg', '');
   for (const el of document.querySelectorAll('header *, nav *, a, div, span')) {
     if (cands.length > 40) break;

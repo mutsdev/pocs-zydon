@@ -271,7 +271,84 @@ def reduzir_imagem(caminho, lado=1600):
         return caminho
 
 
-def conferir_logo(logo):
+def _logo_vazia(caminho):
+    """Motivo quando a imagem não tem desenho de logo: transparente (imagem de espera do
+    carregamento preguiçoso) ou retângulo chapado de uma cor só. None quando há desenho."""
+    from PIL import Image
+    import numpy as np
+    with Image.open(caminho) as img:
+        dados = np.asarray(img.convert("RGBA"), dtype=np.int16)
+    opacos = dados[..., 3] > 40
+    if opacos.sum() < max(30, opacos.size * 0.01):
+        return "imagem transparente, sem desenho"
+    cores = dados[..., :3][opacos]
+    amostra = cores[:: max(1, len(cores) // 20000)] // 24
+    _, contagem = np.unique(amostra, axis=0, return_counts=True)
+    dominante = contagem.max() / len(amostra)
+    ys, xs = np.where(opacos)
+    preenchida = opacos.sum() / ((ys.max() - ys.min() + 1) * (xs.max() - xs.min() + 1))
+    if dominante > 0.99 and preenchida > 0.85:
+        return "retângulo chapado de uma cor só, sem desenho"
+    return None
+
+
+def _jpeg_sobre(caminho, fundo, largura=512):
+    from PIL import Image
+    with Image.open(caminho) as img:
+        img = img.convert("RGBA")
+        base = Image.new("RGB", img.size, fundo)
+        base.paste(img, mask=img.split()[3])
+    base.thumbnail((largura, largura))
+    saida = io.BytesIO()
+    base.save(saida, "JPEG", quality=85)
+    return base64.b64encode(saida.getvalue()).decode()
+
+
+def _ia_visao(texto, imagens):
+    """Conferência visual: Gemini primeiro, barroso-chat de reserva. (resposta, ia) ou (None, motivos)."""
+    conteudo, baixadas = [{"type": "text", "text": texto}], {}
+    for i, (rotulo, dados) in enumerate(imagens):
+        chave = f"local://conferencia/{i}"
+        conteudo += [{"type": "text", "text": rotulo}, {"type": "image_url", "image_url": {"url": chave}}]
+        baixadas[chave] = ("image/jpeg", dados)
+    mensagens = [{"role": "user", "content": conteudo}]
+    motivos = []
+    for nome, chamar in (("Gemini", selecao._ia_gemini), ("barroso-chat", selecao._ia_barroso)):
+        try:
+            resposta, custo = chamar(mensagens, baixadas)
+        except Exception as erro:
+            motivos.append(f"{nome}: {type(erro).__name__}: {str(erro)[:120]}")
+            continue
+        selecao.registrar_modelo(custo.get("modelo"), custo.get("custo_usd") or 0.0)
+        return resposta, nome
+    return None, " · ".join(motivos)
+
+
+INSTRUCAO_CONFERIR_LOGO = """Você confere a LOGO da empresa "{cliente}" que vai no cabeçalho de um portal B2B.
+A mesma imagem aparece sobre fundo branco e sobre fundo escuro.
+Reprove (ok=false) se a imagem: estiver vazia ou transparente; for um retângulo ou bloco de cor
+chapada sem desenho; for ilegível, borrada ou cortada; for ícone genérico (lupa, carrinho, menu,
+rede social, seta); for banner, foto de produto, selo ou logo de outra empresa.
+Aprove (ok=true) quando for a marca da empresa (símbolo e/ou nome) legível em pelo menos um dos fundos.
+Responda só JSON: {{"ok": true, "o_que_aparece": "nome Vitarella em vermelho", "motivo": ""}}"""
+
+
+def conferir_logo_ia(caminho, cliente):
+    """(aprovada, motivo). Sem IA disponível a logo segue (a régua de pixels já passou)."""
+    imagens = [("Logo sobre fundo branco:", _jpeg_sobre(caminho, (255, 255, 255))),
+               ("Logo sobre fundo escuro:", _jpeg_sobre(caminho, (40, 40, 44)))]
+    resposta, ia = _ia_visao(INSTRUCAO_CONFERIR_LOGO.format(cliente=cliente or "cliente"), imagens)
+    if resposta is None:
+        evento("extracao", f"conferência visual da logo indisponível ({ia}); seguindo só com a régua de pixels", "aviso")
+        return True, None
+    aprovada = resposta.get("ok") is not False
+    evento("extracao", f"conferência visual da logo ({ia}): {'aprovada' if aprovada else 'REPROVADA'} · "
+                       f"{resposta.get('o_que_aparece') or ''} {resposta.get('motivo') or ''}".strip(),
+           "info" if aprovada else "aviso")
+    return aprovada, resposta.get("motivo") or resposta.get("o_que_aparece") or "não parece a logo"
+
+
+def conferir_logo(logo, cliente=None):
     """(logo_utilizavel, observacao). Toda logo passa pela régua do repo
     (logo.normalizar com a régua do portal); SVG vira PNG com alfa antes.
     Logo que não passa não segue calada: volta o motivo para as observações."""
@@ -285,6 +362,9 @@ def conferir_logo(logo):
             caminho = svg_para_png(caminho)
         caminho = Path(reduzir_imagem(caminho))
         caminho = Path(recortar_circulo_de_perfil(caminho))
+        vazia = _logo_vazia(caminho)
+        if vazia:
+            raise ValueError(vazia)
         limiares = mod_regua.carregar()
         regua_logo = {**limiares["logo"], **limiares.get("logo_portal", {})}
         try:
@@ -300,6 +380,10 @@ def conferir_logo(logo):
             img.save(caminho, "PNG")
             mod_logo.normalizar(caminho, regua_logo)
             evento("extracao", f"logo pequena (foto de perfil) ampliada para {img.width}x{img.height}")
+        if cliente:
+            aprovada, motivo = conferir_logo_ia(caminho, cliente)
+            if not aprovada:
+                return None, f"a logo achada ({Path(str(logo)).name}) foi reprovada na conferência visual: {motivo}"
         return str(caminho), None
     except Exception as erro:
         return None, (f"a logo achada ({Path(str(logo)).name}) não foi usada: {type(erro).__name__}: {erro}")
@@ -589,9 +673,9 @@ def _logo_inicial(entrada):
         return None, None, None, None
     nav = entrada.get("_navegador") or {}
     if nav.get("logo_arquivo"):
-        logo, aviso_logo = conferir_logo(nav["logo_arquivo"])
+        logo, aviso_logo = conferir_logo(nav["logo_arquivo"], entrada.get("cliente"))
         if not logo and nav.get("logo_recorte") and nav["logo_recorte"] != nav["logo_arquivo"]:
-            logo, aviso_logo = conferir_logo(nav["logo_recorte"])
+            logo, aviso_logo = conferir_logo(nav["logo_recorte"], entrada.get("cliente"))
         if logo:
             evento("extracao", "logo do site encontrada pelo navegador (apontada pelo barroso-chat na captura)")
             return logo, nav.get("logo_url"), "navegador", aviso_logo
@@ -605,7 +689,7 @@ def _logo_inicial(entrada):
         logo_url = original
     prefixo = atendimento.prefixo(nome_arquivo(entrada.get("cliente"), entrada.get("pedido_id")))
     bruta = atendimento.baixar_logo(logo_url, prefixo)
-    logo, aviso_logo = conferir_logo(bruta)
+    logo, aviso_logo = conferir_logo(bruta, entrada.get("cliente"))
     if logo:
         evento("extracao", "logo do site encontrada (em paralelo com a busca de produtos)")
         return logo, logo_url, "site", aviso_logo
@@ -1044,7 +1128,7 @@ def extrair(entrada):
                                                   [p["nome"] for p in precos])
         if logo_web:
             baixada = atendimento.baixar_logo(logo_web, atendimento.prefixo(caminho.name))
-            baixada, aviso_web = conferir_logo(baixada)
+            baixada, aviso_web = conferir_logo(baixada, entrada.get("cliente"))
             if aviso_web:
                 observacoes.append(aviso_web)
             if baixada:
@@ -1801,7 +1885,61 @@ def _fundo_onde_a_logo_aparece(logo, marca_hex, nome, paleta):
         return nome, paleta
 
 
+INSTRUCAO_CONFERIR_PECAS = """Você confere os banners de um portal B2B da empresa "{cliente}" antes de irem ao ar.
+A primeira imagem é a logo correta da empresa; depois vêm as peças numeradas.
+Para cada peça, reprove (ok=false) se: a logo da empresa não aparece, aparece como retângulo ou
+bloco de cor chapada, borrão ou silhueta irreconhecível; há caixa vazia, placeholder ou imagem quebrada;
+texto cortado, sobreposto ou ilegível sobre o fundo. Fundo simples sem foto é aceitável.
+Responda só JSON: {{"pecas": [{{"n": 0, "ok": true, "motivo": ""}}]}}"""
+
+
+def conferir_pecas_ia(pasta, logo, cliente):
+    """Lista de motivos das peças reprovadas ([] = todas aprovadas ou IA indisponível)."""
+    import subir_banners
+    pecas, _ = subir_banners.pecas_da_pasta(pasta)
+    chaves = sorted(pecas)
+    imagens = [("Logo correta da empresa:", _jpeg_sobre(logo, (255, 255, 255)))]
+    imagens += [(f"Peça {n} ({chave}):", _jpeg_sobre(pecas[chave], (255, 255, 255), 1024))
+                for n, chave in enumerate(chaves)]
+    resposta, ia = _ia_visao(INSTRUCAO_CONFERIR_PECAS.format(cliente=cliente or "cliente"), imagens)
+    if resposta is None:
+        evento("banners", f"conferência visual dos banners indisponível ({ia})", "aviso")
+        return []
+    reprovadas = [f"{chaves[int(p['n'])]}: {p.get('motivo') or 'reprovada'}" for p in resposta.get("pecas") or []
+                  if p.get("ok") is False and str(p.get("n")).isdigit() and int(p["n"]) < len(chaves)]
+    evento("banners", f"conferência visual dos banners ({ia}): "
+                      + ("todas aprovadas" if not reprovadas else "REPROVADAS " + "; ".join(reprovadas)),
+           "aviso" if reprovadas else "info")
+    return reprovadas
+
+
 def gerar_com_identidade(entrada, caminho, logo, variar=False, anterior=None, texto=""):
+    """Gera e confere as peças. Reprovada na conferência visual: refaz uma vez com fundo claro
+    da marca e a logo nas cores originais; reprovada de novo, não sai banner (nunca vai ao ar)."""
+    nova, saida, paleta = _gerar_com_identidade(entrada, caminho, logo, variar, anterior, texto)
+    if not nova or not logo:
+        return nova, saida, paleta
+    try:
+        reprovadas = conferir_pecas_ia(nova, logo, entrada.get("cliente"))
+    except Exception as erro:
+        evento("banners", f"conferência visual dos banners falhou ({type(erro).__name__}: {erro})", "aviso")
+        reprovadas = []
+    if not reprovadas:
+        return nova, saida, paleta
+    marca = _rgb(paleta.get("destaque") or paleta["principal"])
+    fundo = _misturar(marca, (255, 255, 255), 0.9)
+    clara = {"principal": _hex(fundo), "destaque": _hex(marca if _contraste(marca, fundo) >= 3 else _legivel_sobre(marca, fundo)),
+             "neutra": "#101418"}
+    evento("banners", f"refazendo os banners com fundo claro {clara['principal']} e a logo nas cores originais")
+    nova, saida = gerar_pecas_paleta(caminho, logo, entrada.get("cliente") or "", entrada.get("segmento"), clara)
+    if nova and not conferir_pecas_ia(nova, logo, entrada.get("cliente")):
+        return nova, saida, clara
+    motivo = "banners reprovados na conferência visual: " + "; ".join(reprovadas)
+    evento("banners", motivo + " · os banners não vão para o portal", "erro")
+    return None, motivo, paleta
+
+
+def _gerar_com_identidade(entrada, caminho, logo, variar=False, anterior=None, texto=""):
     """Banners na identidade do cliente (logo + site) e no gosto do executivo."""
     marca, apoio, origem = identidade_visual(entrada.get("site"), logo)
     pedida = cor_pedida(texto)
