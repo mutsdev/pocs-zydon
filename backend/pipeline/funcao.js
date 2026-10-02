@@ -10,6 +10,7 @@ const COMMIT = '__COMMIT__';
 const DRIVER_PY = __DRIVER__;
 const SELECAO_PY = __SELECAO__;
 const ANEXO_PY = __ANEXO__;
+const NAVEGADOR_PY = __NAVEGADOR__;
 const PACOTES_EXTRAS = ['pypdfium2', 'openpyxl', 'python-docx', 'xlrd', 'cairosvg'];
 const FAIXAS_JSON = __FAIXAS__;
 const RAIZ = '/tmp/zydon-pocs';
@@ -49,6 +50,7 @@ raiz.rename(destino)
     fs.writeFileSync(`${RAIZ}/.extras`, PACOTES_EXTRAS.join(' '));
   }
   fs.mkdirSync(`${RAIZ}/driver`, { recursive: true });
+  fs.writeFileSync(`${RAIZ}/driver/navegador.py`, NAVEGADOR_PY);
   fs.writeFileSync(`${RAIZ}/driver/driver.py`, DRIVER_PY);
   fs.writeFileSync(`${RAIZ}/driver/selecao.py`, SELECAO_PY);
   fs.writeFileSync(`${RAIZ}/driver/anexo.py`, ANEXO_PY);
@@ -208,7 +210,12 @@ async function extrair(ev, execucao) {
   }
   let parcial = null;
   const aoParcial = (dados) => { if (!parcial) parcial = gravarCuradoria(pedidoId, dados).catch(() => { parcial = null; }); };
-  const entradaExtracao = { pedido_id: pedidoId, cliente: pedido.cliente,
+  let navegador = !!pedido.site && await comNavegador(pedidoId).catch(() => false);
+  if (navegador && !prepararNavegador()) {
+    navegador = false;
+    await registrar({ etapa: 'navegador', mensagem: 'navegador não instalou neste servidor; seguindo com a leitura do código da página', nivel: 'aviso' });
+  }
+  const entradaExtracao = { pedido_id: pedidoId, cliente: pedido.cliente, navegador,
     site: pedido.site || '', segmento: '', foco: pedido.foco || '', variacoes: pedido.variacoes === true || pedido.variacoes === 't' || pedido.variacoes === 'true',
     executivo: pedido.executivo, automatico: pedido.automatico === true || pedido.automatico === 't' || pedido.automatico === 'true', cena_ia: await comCenaIa(pedidoId),
     barroso_tudo: (await sql(`SELECT valor FROM configuracao WHERE chave = 'busca_barroso_tudo'`, {})).some((l) => l.valor === 'sim'),
@@ -295,6 +302,32 @@ async function gravarPecas(pedidoId, pecas, publicadas, cor) {
     { p: pedidoId, pe: peca, g: String(geracao), f: pub.file_id || null, u: pub.url || null,
       c: cor || null });
   }
+}
+
+function prepararNavegador() {
+  if (fs.existsSync(`${RAIZ}/.navegador`)) return true;
+  try {
+    execFileSync('python3', ['-m', 'pip', 'install', '-q', 'playwright==1.55.0'], { stdio: 'pipe', timeout: 300000 });
+    execFileSync('python3', ['-m', 'playwright', 'install', 'chromium'], { stdio: 'pipe', timeout: 300000 });
+    execFileSync('bash', ['-c', 'sudo -n python3 -m playwright install-deps chromium || python3 -m playwright install-deps chromium'], { stdio: 'pipe', timeout: 400000 });
+    fs.writeFileSync(`${RAIZ}/.navegador`, new Date().toISOString());
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+async function comNavegador(pedidoId) {
+  const linhas = await sql(`SELECT chave, valor FROM configuracao WHERE chave IN ('navegador_quantos', 'navegador_pedidos')`, {});
+  const conf = Object.fromEntries(linhas.map((l) => [l.chave, l.valor]));
+  const quantos = parseInt(conf.navegador_quantos || '0', 10) || 0;
+  const pedidos = String(conf.navegador_pedidos || '').split(',').filter(Boolean);
+  if (pedidos.includes(pedidoId)) return true;
+  if (pedidos.length >= quantos) return false;
+  pedidos.push(pedidoId);
+  await dml(`INSERT INTO configuracao (chave, valor) VALUES ('navegador_pedidos', :v)
+    ON CONFLICT (chave) DO UPDATE SET valor = :v, atualizado_em = now()`, { v: pedidos.join(',') });
+  return true;
 }
 
 async function comCenaIa() {

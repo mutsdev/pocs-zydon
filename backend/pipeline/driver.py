@@ -587,6 +587,15 @@ def _logo_inicial(entrada):
     site = entrada.get("site")
     if not site:
         return None, None, None, None
+    nav = entrada.get("_navegador") or {}
+    if nav.get("logo_arquivo"):
+        logo, aviso_logo = conferir_logo(nav["logo_arquivo"])
+        if not logo and nav.get("logo_recorte") and nav["logo_recorte"] != nav["logo_arquivo"]:
+            logo, aviso_logo = conferir_logo(nav["logo_recorte"])
+        if logo:
+            evento("extracao", "logo do site encontrada pelo navegador (apontada pelo barroso-chat na captura)")
+            return logo, nav.get("logo_url"), "navegador", aviso_logo
+        evento("navegador", f"logo apontada na captura não passou na régua ({aviso_logo}); tentando pelo código da página", "aviso")
     logo_url = _logo_da_home(site, entrada.get("cliente"))
     if not logo_url:
         return None, None, None, None
@@ -669,6 +678,20 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
         descartes += descartes_anexo + descartes_filtro
         coleta["plataforma"] = fonte_anexo
         evento("extracao", f"anexo: {len(validos)} produtos válidos")
+    do_navegador = (entrada.get("_navegador") or {}).get("candidatos") or []
+    if do_navegador:
+        from urllib.parse import urlparse as _up
+        brutos = [selecao.candidato(c["nome"], c["url"], c["imagem"], c.get("preco"), c.get("categoria"), "", "site")
+                  for c in do_navegador if _up(c.get("url") or "").path.strip("/")]
+        aceitos, descartes_nav = selecao.filtrar_candidatos(brutos)
+        vistos = {selecao.sem_acento(v["nome"]) for v in validos}
+        novos = [v for v in aceitos if selecao.sem_acento(v["nome"]) not in vistos]
+        validos += novos
+        descartes += descartes_nav
+        if coleta.get("plataforma") in (None, "nenhuma"):
+            coleta["plataforma"] = "navegador"
+        evento("extracao", f"navegador: {len(novos)} candidatos válidos das páginas de produtos, "
+                           f"{len(descartes_nav)} descartados")
     if site and not pelo_barroso and len(validos) < selecao.MAXIMO_PRODUTOS:
         evento("extracao", f"lendo {site}")
         try:
@@ -915,10 +938,35 @@ def _banner_antecipado(entrada, logo_futura, nomes, segmento=""):
             "banners_tar": empacotar(gerada)}
 
 
+def _explorar_no_navegador(entrada):
+    """Navegador sem tela como fonte principal: roda sozinho (antes da busca, para não
+    disputar memória), o barroso-chat lê a captura e as cores achadas viram as cores do site."""
+    import hashlib
+    import navegador
+    site = selecao.normalizar_site(entrada["site"])
+    try:
+        nav = navegador.explorar(site, entrada.get("cliente") or "", pasta_pedido(entrada["pedido_id"]),
+                                 evento, selecao._ia_barroso)
+    except Exception as erro:
+        evento("navegador", f"navegador falhou ({type(erro).__name__}: {str(erro)[:200]}); "
+                            "seguindo com a leitura do código da página", "aviso")
+        return {}
+    custo = nav.get("custo") or {}
+    selecao.registrar_modelo(custo.get("modelo"), custo.get("custo_usd"))
+    if nav.get("cores"):
+        guardado = TRABALHO / "cores" / (hashlib.md5(("v2:" + entrada["site"].strip().lower()).encode()).hexdigest() + ".json")
+        guardado.parent.mkdir(parents=True, exist_ok=True)
+        guardado.write_text(json.dumps([list(_rgb(c)) for c in nav["cores"]]), encoding="utf-8")
+        evento("navegador", "cores da marca pela captura: " + " / ".join(nav["cores"]))
+    return nav
+
+
 def extrair(entrada):
     import atendimento
     pedido_id = entrada["pedido_id"]
     observacoes = []
+    if entrada.get("navegador") and entrada.get("site"):
+        entrada["_navegador"] = _explorar_no_navegador(entrada)
     from concurrent.futures import ThreadPoolExecutor
     paralelo = ThreadPoolExecutor(2)
     logo_futura = paralelo.submit(_logo_inicial, entrada)
