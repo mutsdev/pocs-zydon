@@ -2372,7 +2372,200 @@ def loja_publica(entrada):
             "depois": depois.get("is_open_to_public"), "outros_campos_mudaram": mudou}
 
 
-ACOES = {"loja_publica": loja_publica, "url_portal": url_portal, "trocar_logo": trocar_logo, "miniaturas": miniaturas, "extrair": extrair, "avaliar": avaliar, "previa": previa, "criar": criar, "banner": banner, "telufia": telufia}
+
+# --- Laboratorio de banners: canto direito composto com as fotos reais dos produtos ---
+MODELOS_LAB = ("destaque", "trio", "padrao")
+INICIO_LIVRE = {"login": 0.58, "cabecalho": 0.58}
+
+
+def _recortar_produto(foto):
+    """Tira o fundo liso (branco/cinza) ligado às bordas. Devolve (RGBA, recortou)."""
+    from PIL import Image, ImageDraw, ImageFilter
+    img = foto.convert("RGB")
+    lado = 900
+    if max(img.size) > lado:
+        img.thumbnail((lado, lado), Image.LANCZOS)
+    marcada = img.copy()
+    sentinela = (1, 254, 3)
+    w, h = marcada.size
+    for xy in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)):
+        canto = marcada.getpixel(xy)
+        if canto != sentinela and min(canto) > 200 and max(canto) - min(canto) < 30:
+            ImageDraw.floodfill(marcada, xy, sentinela, thresh=28)
+    dados = marcada.getdata()
+    alfa = Image.new("L", marcada.size)
+    alfa.putdata([0 if px == sentinela else 255 for px in dados])
+    fora = 1 - sum(alfa.histogram()[128:]) / float(w * h)
+    if fora < 0.06 or fora > 0.92:
+        return img.convert("RGBA"), False
+    alfa = alfa.filter(ImageFilter.MinFilter(3)).filter(ImageFilter.GaussianBlur(1.2))
+    rgba = img.convert("RGBA")
+    rgba.putalpha(alfa)
+    caixa = alfa.point(lambda v: 255 if v > 40 else 0).getbbox()
+    return (rgba.crop(caixa) if caixa else rgba), True
+
+
+def _cartao(foto, raio):
+    """Foto com cenário vira cartão de cantos arredondados (não dá para recortar)."""
+    from PIL import Image, ImageDraw
+    img = foto.convert("RGBA")
+    mascara = Image.new("L", img.size, 0)
+    ImageDraw.Draw(mascara).rounded_rectangle([0, 0, img.size[0] - 1, img.size[1] - 1], radius=raio, fill=255)
+    img.putalpha(mascara)
+    return img
+
+
+def _fotos_lab(catalogo, estrito):
+    urls = [p["imagem"] for p in _produtos_do_json(catalogo) if p.get("imagem")]
+    with selecao.ThreadPoolExecutor(3) as pool:
+        fotos = [f for f in pool.map(_baixar_foto, urls[:9]) if f is not None]
+    fotos = [f for f in fotos if min(f.size) >= 220] or fotos
+    recortes, cartoes = [], []
+    for f in fotos:
+        img, ok = _recortar_produto(f)
+        (recortes if ok else cartoes).append(img)
+    if estrito:
+        return recortes, True
+    return (recortes, True) if len(recortes) >= 1 else (cartoes, False)
+
+
+def _colar_com_sombra(tela, img, cx, base_y, altura):
+    """Cola o produto com a base em base_y, sombra no chão e sombra suave atrás."""
+    from PIL import Image, ImageDraw, ImageFilter
+    fator = altura / img.size[1]
+    largura = max(1, int(img.size[0] * fator))
+    limite = int(tela.size[0] * 0.42)
+    if largura > limite:
+        fator = limite / img.size[0]
+        largura, altura = limite, max(1, int(img.size[1] * fator))
+    prod = img.resize((largura, int(altura)), Image.LANCZOS)
+    x, y = int(cx - largura / 2), int(base_y - altura)
+    chao = Image.new("RGBA", tela.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(chao)
+    rx, ry = largura * 0.42, max(6, altura * 0.035)
+    d.ellipse([cx - rx, base_y - ry, cx + rx, base_y + ry], fill=(0, 0, 0, 90))
+    chao = chao.filter(ImageFilter.GaussianBlur(max(4, altura * 0.03)))
+    tela.alpha_composite(chao)
+    sombra = Image.new("RGBA", tela.size, (0, 0, 0, 0))
+    silhueta = Image.new("RGBA", prod.size, (0, 0, 0, 70))
+    sombra.paste(silhueta, (x + int(altura * 0.025), y + int(altura * 0.03)), prod.getchannel("A"))
+    tela.alpha_composite(sombra.filter(ImageFilter.GaussianBlur(max(6, altura * 0.04))))
+    tela.alpha_composite(prod, (x, y))
+
+
+def _misturar_rgb(a, b, peso):
+    return tuple(int(a[i] * (1 - peso) + b[i] * peso) for i in range(3))
+
+
+def _compor_canto(caminho, chave, paleta, fotos, modelo, recortadas):
+    from PIL import Image, ImageDraw, ImageFilter
+    peca = Image.open(caminho).convert("RGBA")
+    w, h = peca.size
+    x0 = int(w * INICIO_LIVRE[chave])
+    fundo = peca.getpixel((6, 6))[:3]
+    destaque = _rgb(paleta.get("destaque") or paleta.get("principal"))
+    claro = _lum(fundo) > 0.5
+    regiao = Image.new("RGBA", (w - x0, h), fundo + (255,))
+    d = ImageDraw.Draw(regiao)
+    rw, rh = regiao.size
+    tom = _misturar_rgb(fundo, (0, 0, 0) if claro else (255, 255, 255), 0.07)
+    if modelo == "padrao":
+        passo = max(18, int(rh * (0.05 if chave == "login" else 0.11)))
+        ponto = max(2, passo // 7)
+        for yy in range(passo // 2, rh, passo):
+            for xx in range(passo // 2, rw, passo):
+                d.ellipse([xx - ponto, yy - ponto, xx + ponto, yy + ponto], fill=tom + (255,))
+    forma = Image.new("RGBA", regiao.size, (0, 0, 0, 0))
+    df = ImageDraw.Draw(forma)
+    cor_forma = _misturar_rgb(destaque, fundo, 0.35) if _dist_matiz(destaque, fundo) > 20 or abs(_lum(destaque) - _lum(fundo)) > 0.15 else tom
+    r = rh * (0.40 if chave == "login" else 0.62)
+    cx, cy = rw * 0.52, rh * (0.52 if chave == "login" else 0.55)
+    df.ellipse([cx - r, cy - r, cx + r, cy + r], fill=cor_forma + (255,))
+    if modelo == "trio":
+        r2 = r * 0.45
+        df.ellipse([cx + r * 0.55 - r2, cy - r * 0.75 - r2, cx + r * 0.55 + r2, cy - r * 0.75 + r2], fill=tom + (255,))
+    regiao.alpha_composite(forma)
+    base = cy + r * (0.72 if chave == "login" else 0.62)
+    alto = rh * (0.62 if chave == "login" else 0.80)
+    if not recortadas:
+        alto *= 0.85
+    if modelo == "trio" and len(fotos) >= 3:
+        _colar_com_sombra(regiao, fotos[1], cx - r * 0.62, base - rh * 0.02, alto * 0.72)
+        _colar_com_sombra(regiao, fotos[2], cx + r * 0.62, base - rh * 0.02, alto * 0.72)
+        _colar_com_sombra(regiao, fotos[0], cx, base, alto)
+    elif modelo == "padrao" and len(fotos) >= 2:
+        _colar_com_sombra(regiao, fotos[1], cx + r * 0.42, base - rh * 0.03, alto * 0.78)
+        _colar_com_sombra(regiao, fotos[0], cx - r * 0.25, base, alto)
+    else:
+        _colar_com_sombra(regiao, fotos[0], cx, base, alto)
+    peca.alpha_composite(regiao, (x0, 0))
+    peca.convert("RGB").save(caminho)
+
+
+def _modelo_da_regra(regras, indice):
+    pesos = (regras or {}).get("pesos") or {}
+    ordem = sorted(MODELOS_LAB, key=lambda m: -float(pesos.get(m, 3)))
+    vivos = [m for m in ordem if float(pesos.get(m, 3)) >= 2.2] or ordem[:1]
+    return vivos[indice % len(vivos)]
+
+
+def lab_banner(entrada):
+    import subir_banners
+    regras = entrada.get("regras") or {}
+    if isinstance(regras, str):
+        try:
+            regras = json.loads(regras) if regras.strip() else {}
+        except ValueError:
+            regras = {}
+    pedido_id = entrada["pedido_id"]
+    pasta = pasta_pedido(f"lab-{entrada['lab_id']}")
+    logo = restaurar_logo(entrada, pasta)
+    if not logo:
+        logo = logo_tipografica(entrada.get("cliente"), pasta)
+    caminho = gravar_catalogo(entrada["catalogo"], pedido_id)
+    gerada, saida, paleta = gerar_com_identidade(entrada, caminho, logo, variar=False)
+    if not gerada:
+        raise RuntimeError("peça base não saiu: " + str(saida)[-400:])
+    marcas = (regras.get("marcas") or {})
+    estrito = int(marcas.get("produto", 0)) >= 2
+    fotos, recortadas = _fotos_lab(entrada["catalogo"], estrito)
+    modelo = entrada.get("modelo") or _modelo_da_regra(regras, int(entrada.get("indice") or 0))
+    if not fotos:
+        modelo = "so_marca"
+        evento("banners", "laboratório: sem foto de produto aproveitável; banner só com a marca", "aviso")
+    else:
+        if modelo == "trio" and len(fotos) < 3:
+            modelo = "destaque"
+        if modelo == "padrao" and len(fotos) < 2:
+            modelo = "destaque"
+        pecas, _ = subir_banners.pecas_da_pasta(gerada)
+        for chave, arquivo in pecas.items():
+            _compor_canto(arquivo, chave, paleta, fotos, modelo, recortadas)
+        evento("banners", f"laboratório: modelo {modelo} com {min(len(fotos), 3)} fotos "
+                          + ("recortadas" if recortadas else "em cartão"))
+    telas = pecas_para_tela(gerada)
+    return {"modelo": modelo, "cor": cor_da_pasta(gerada), "banners_tar": empacotar(gerada),
+            "login": (telas.get("login") or {}).get("previa_base64"),
+            "cabecalho": (telas.get("cabecalho") or {}).get("previa_base64")}
+
+
+def lab_aplicar(entrada):
+    import atendimento
+    pasta = pasta_pedido(f"lab-aplicar-{entrada['lab_id']}")
+    banners = desempacotar(entrada["banners_tar"], pasta / "banners")
+    portal_id = entrada["portal_id"]
+    publicadas = atendimento.publicar_pecas(ORG, portal_id, banners)
+    escolhas = {k: v["file_id"] for k, v in (publicadas or {}).items() if v and v.get("file_id")}
+    if not escolhas:
+        raise RuntimeError("as peças não subiram para o portal")
+    try:
+        relato = atendimento.aplicar_pecas(ORG, portal_id, escolhas, cor=cor_da_pasta(banners))
+    except atendimento.GravacaoPelaMetade as erro:
+        return {"aplicado_parcial": True, "erro": str(erro), "publicadas": publicadas}
+    return {"relato": relato, "publicadas": publicadas, "escolhas": escolhas}
+
+
+ACOES = {"loja_publica": loja_publica, "url_portal": url_portal, "trocar_logo": trocar_logo, "miniaturas": miniaturas, "extrair": extrair, "avaliar": avaliar, "previa": previa, "criar": criar, "banner": banner, "telufia": telufia, "lab_banner": lab_banner, "lab_aplicar": lab_aplicar}
 
 
 def _restaurar_cores_navegador(entrada):

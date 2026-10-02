@@ -680,14 +680,86 @@ async function lojaPublica(ev) {
   return { ok: !!saida.ok && saida.situacao === 'ok', ...saida, log: undefined };
 }
 
-const ACOES = { loja_publica: lojaPublica, url_portal: urlPortal, extrair, previa, criar, banner, avaliar, miniaturas, trocar_logo: trocarLogo, telufia, despachar, auto };
-const ACOES_INTERNAS = ['despachar', 'auto', 'url_portal', 'loja_publica'];
+async function regrasDoLab() {
+  const modelos = await sql(`SELECT l.modelo, avg(a.nota) AS media, count(a.id) AS n FROM banner_lab_avaliacoes a
+    JOIN banner_lab l ON l.id = a.lab_id GROUP BY l.modelo`);
+  const avals = await sql(`SELECT a.marcas, a.comentario FROM banner_lab_avaliacoes a WHERE a.nota <= 3 ORDER BY a.id DESC LIMIT 200`);
+  const pesos = {};
+  for (const m of modelos) if (Number(m.n) >= 2) pesos[m.modelo] = Number(m.media);
+  const marcas = {};
+  for (const a of avals) for (const m of String(a.marcas || '').split(',').filter(Boolean)) marcas[m] = (marcas[m] || 0) + 1;
+  const comentarios = avals.map((a) => a.comentario).filter(Boolean).slice(0, 20);
+  return { pesos, marcas, comentarios };
+}
+
+async function labDespachar(ev, execucao) {
+  const prox = await sql(`UPDATE banner_lab SET situacao = 'gerando', execucao_id = :x, iniciado_em = now()
+    WHERE id = (SELECT id FROM banner_lab WHERE situacao = 'na_fila' ORDER BY id LIMIT 1)
+      AND situacao = 'na_fila'
+      AND NOT EXISTS (SELECT 1 FROM banner_lab WHERE situacao = 'gerando' AND COALESCE(iniciado_em, criado_em) > now() - interval '30 minutes')
+    RETURNING id, pedido_id, rodada_id`, { x: execucao || 'lab' });
+  if (!prox.length) {
+    await dml(`UPDATE banner_lab_rodadas SET situacao = 'avaliando' WHERE situacao = 'gerando' AND id > 0
+      AND NOT EXISTS (SELECT 1 FROM banner_lab l WHERE l.rodada_id = banner_lab_rodadas.id AND l.situacao IN ('na_fila', 'gerando'))`);
+    return { ok: true, ignorado: 'nada na fila do laboratório' };
+  }
+  const { id: labId, pedido_id: pedidoId, rodada_id: rodadaId } = prox[0];
+  const registrar = registrador(pedidoId);
+  try {
+    const pedido = await lerPedido(pedidoId);
+    const regras = await regrasDoLab();
+    await dml(`UPDATE banner_lab_rodadas SET regras = :r WHERE id = CAST(:i AS INTEGER) AND regras = ''`,
+      { r: JSON.stringify(regras), i: String(rodadaId) });
+    const antes = await sql(`SELECT count(*) AS n FROM banner_lab WHERE rodada_id = CAST(:r AS INTEGER) AND id < CAST(:l AS INTEGER)`,
+      { r: String(rodadaId), l: String(labId) });
+    const saida = await rodarPython('lab_banner', { lab_id: labId, pedido_id: pedidoId, indice: Number(antes[0].n), regras,
+      site: pedido.site, cores_navegador: pedido.cores_navegador, cliente: pedido.cliente, segmento: pedido.segmento,
+      catalogo: pedido.catalogo, logo: pedido.logo }, registrar);
+    await registrar.fim();
+    if (!saida.ok) throw new Error(saida.erro || 'lab_banner falhou');
+    await salvarArquivo(pedidoId, `lab:${labId}:login`, saida.login || null);
+    await salvarArquivo(pedidoId, `lab:${labId}:cabecalho`, saida.cabecalho || null);
+    await salvarArquivo(pedidoId, `lab:${labId}:tar`, saida.banners_tar || null);
+    await dml(`UPDATE banner_lab SET situacao = 'pronto', modelo = :m, erro = NULL, gerado_em = now() WHERE id = CAST(:l AS INTEGER)`,
+      { m: saida.modelo || 'destaque', l: String(labId) });
+  } catch (erro) {
+    await dml(`UPDATE banner_lab SET situacao = 'falhou', erro = :e WHERE id = CAST(:l AS INTEGER)`,
+      { e: String(erro && erro.message || erro).slice(0, 800), l: String(labId) });
+  }
+  try {
+    const lista = await mitra.functionsAdmin.list({ size: 100 });
+    const pipeline = (lista.content || lista.items || []).find((f) => f.name === 'pipeline_poc');
+    if (pipeline) await mitra.functions.executeAsync(pipeline.id, { acao: 'lab_despachar', chave_interna: ev.chave_interna });
+  } catch (e) { /* o relógio acorda depois */ }
+  return { ok: true, lab_id: labId };
+}
+
+async function labAplicar(ev) {
+  const labId = String(parseInt(ev.lab_id, 10) || '');
+  const pedidoId = ev.pedido_id;
+  const registrar = registrador(pedidoId);
+  const pedido = await lerPedido(pedidoId);
+  const tar = await lerArquivo(pedidoId, `lab:${labId}:tar`);
+  const voltar = (e) => dml(`UPDATE banner_lab SET situacao = 'pronto', erro = :e WHERE id = CAST(:l AS INTEGER)`, { e, l: labId });
+  if (!pedido.portal_id || !tar) { await voltar('portal ou peças ausentes'); return { ok: false, erro: 'PORTAL_AUSENTE' }; }
+  const saida = await rodarPython('lab_aplicar', { lab_id: labId, portal_id: pedido.portal_id, banners_tar: tar }, registrar);
+  await registrar.fim();
+  if (!saida.ok || saida.aplicado_parcial) { await voltar(String(saida.erro || 'aplicação parcial').slice(0, 800)); return { ok: false, erro: saida.erro }; }
+  await salvarArquivo(pedidoId, 'banners', tar);
+  await dml(`UPDATE banner_lab SET situacao = 'aplicado', aplicado_em = now(), erro = NULL WHERE id = CAST(:l AS INTEGER)`, { l: labId });
+  await dml(`UPDATE pedidos SET banners_situacao = 'aplicado', atualizado_em = now() WHERE pedido_id = :p`, { p: pedidoId });
+  await registrar({ etapa: 'banners', mensagem: 'banner do laboratório aprovado e aplicado no portal' });
+  return { ok: true };
+}
+
+const ACOES = { loja_publica: lojaPublica, url_portal: urlPortal, extrair, previa, criar, banner, avaliar, miniaturas, trocar_logo: trocarLogo, telufia, despachar, auto, lab_despachar: labDespachar, lab_aplicar: labAplicar };
+const ACOES_INTERNAS = ['despachar', 'auto', 'url_portal', 'loja_publica', 'lab_despachar', 'lab_aplicar'];
 
 module.exports = async (event, context) => {
   const ev = (event && event.input) ? event.input : (event || {});
   const acao = ev.acao;
   if (!ACOES[acao]) return { ok: false, erro: `ação desconhecida: ${acao}` };
-  if (!['avaliar', 'despachar'].includes(acao) && !ev.pedido_id) return { ok: false, erro: 'CAMPOS_FALTANDO', faltando: ['pedido_id'] };
+  if (!['avaliar', 'despachar', 'lab_despachar'].includes(acao) && !ev.pedido_id) return { ok: false, erro: 'CAMPOS_FALTANDO', faltando: ['pedido_id'] };
   const faltando = SEGREDOS.filter((nome) => !process.env[nome]);
   mitra = createClient();
   await mitra.init();

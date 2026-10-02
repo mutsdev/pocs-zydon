@@ -10,6 +10,7 @@ import Relatorios from './pages/Relatorios'
 import Executivos from './pages/Executivos'
 import Painel from './pages/Painel'
 import Dexter from './pages/Dexter'
+import Laboratorio from './pages/Laboratorio'
 import TelasEspera from './pages/TelasEspera'
 import Barrado from './components/app/Barrado'
 import { SessaoContexto } from './lib/sessao'
@@ -82,6 +83,7 @@ function App() {
           <Route path="/pedidos/:id" element={<Shell><PedidoDetalhe /></Shell>} />
           <Route path="/relatorios" element={<Shell><Relatorios /></Shell>} />
           {(s?.admin || s?.cargo === 'Agente de prospecção') && <Route path="/dexter" element={<Shell><Dexter /></Shell>} />}
+          {(s?.admin || s?.cargo === 'Agente de prospecção') && <Route path="/laboratorio" element={<Shell><Laboratorio /></Shell>} />}
           {s?.admin && <Route path="/painel" element={<Shell><Painel /></Shell>} />}
           {s?.admin && <Route path="/telas-espera" element={<Shell><TelasEspera /></Shell>} />}
       {s?.admin && <Route path="/usuarios" element={<Shell><Executivos /></Shell>} />}

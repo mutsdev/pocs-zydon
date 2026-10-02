@@ -1,5 +1,8 @@
 export const SF = {
   anexo_parte: '5fd9c4d2-60a1-4c64-8c24-ca1b57d29cca',
+  banner_lab_acao: '6277691e-31e6-41ae-9ca3-951e8842f4e2',
+  banner_lab_listar: 'ef7b380f-9875-4a4f-b02a-5b5a0ca8a502',
+  banner_lab_rodadas: '697443f3-b0e7-4ec8-b169-f765b766dbef',
   curadoria_salvar: '61451fd2-3b69-4f59-bc82-44d54c79e773',
   dexter_admin: 'f8495772-cd90-454a-b3a1-925e03d80df4',
   dexter_api: '8bc8f6b2-ad34-4b8d-963c-c4b6784c671c',
