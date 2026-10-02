@@ -586,6 +586,14 @@ async function despachar(ev, execucao) {
         await mitra.functions.executeAsync(pipeline.id, { acao: 'url_portal', pedido_id: linha.pedido_id, chave_interna: ev.chave_interna });
       } catch (erro) { /* tenta no próximo despacho */ }
     }
+    const vencidos = await sql(`SELECT pedido_id FROM pedidos WHERE automatico AND status = 'concluido' AND portal_id IS NOT NULL
+      AND loja_desativada_em IS NULL AND concluido_em < now() - interval '15 days' ORDER BY id LIMIT 3`);
+    for (const linha of vencidos) {
+      if (!pipeline) break;
+      try {
+        await mitra.functions.executeAsync(pipeline.id, { acao: 'loja_publica', pedido_id: linha.pedido_id, publico: false, chave_interna: ev.chave_interna });
+      } catch (erro) { /* tenta no próximo despacho */ }
+    }
   } finally {
     await dml("UPDATE travas SET pedido_id = NULL, execucao_id = NULL WHERE nome = 'despacho'", {});
   }
@@ -640,6 +648,9 @@ async function lojaPublica(ev) {
   if (!pedido.portal_id) return { ok: false, erro: 'SEM_PORTAL' };
   const saida = await rodarPython('loja_publica', { pedido_id: pedidoId, portal_id: pedido.portal_id, publico: ev.publico === true }, registrar);
   await registrar.fim();
+  if (saida.ok && saida.situacao === 'ok') {
+    await dml(`UPDATE pedidos SET loja_desativada_em = ${ev.publico === true ? 'NULL' : 'now()'}, atualizado_em = now() WHERE pedido_id = :p`, { p: pedidoId });
+  }
   return { ok: !!saida.ok && saida.situacao === 'ok', ...saida, log: undefined };
 }
 
