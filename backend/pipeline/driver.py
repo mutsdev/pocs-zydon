@@ -1875,12 +1875,12 @@ def criar(entrada):
     evento("criacao", "simulação: valida sem criar nada" if simular else "criando o portal na org pocs")
     resultado = atendimento.atender(caminho, logo, ORG, True, pedido_id=pedido_id,
                                     origem_id=pedido_id, simular=simular)
-    if (not simular and resultado.get("status") == "falhou" and resultado.get("portal_id")
-            and not resultado.get("url")):
+    if not simular and resultado.get("portal_id"):
         url = url_pelo_portal_id(resultado["portal_id"])
-        if url:
-            evento("criacao", f"portal achado pelo id (o nome longo não bateu na busca por nome): {url}")
-            resultado = dict(resultado, status="concluido", url=url, observacoes="")
+        if url and url.rstrip("/") != (resultado.get("url") or "").rstrip("/"):
+            evento("criacao", f"endereço lido pelo id do portal (o nome pode repetir outro portal): {url}")
+            resultado = dict(resultado, status="concluido", url=url,
+                             observacoes=resultado.get("observacoes") if resultado.get("status") == "concluido" else "")
     saida = {"resultado": resultado}
     if resultado.get("status") == "concluido" and banners:
         try:
