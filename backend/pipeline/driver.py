@@ -402,7 +402,28 @@ def logo_do_instagram(site):
     return ""
 
 
-def _logo_da_home(site):
+def _logo_pelo_nome(soup, base, cliente):
+    """Logo sem 'logo' no arquivo nem na classe (mabel.com.br: <img src=".../mabel.png" alt="Mabel">):
+    imagem do cabeçalho cujo alt ou nome de arquivo é o nome do cliente."""
+    from urllib.parse import urljoin
+    palavras = [p for p in re.findall(r"[a-z0-9]{3,}", _sem_acento(cliente or ""))
+                if p not in {"ltda", "distribuidora", "comercio", "industria", "atacado", "biscoitos", "alimentos"}]
+    if not palavras:
+        return ""
+    for img in soup.find_all("img")[:15]:
+        src = img.get("src") or img.get("data-src") or ""
+        if not src or src.startswith("data:"):
+            continue
+        if re.search(r"(?i)slider|carousel|banner|/produtos?/|/receitas?/|/cache/", src):
+            continue
+        arquivo = _sem_acento(src.split("?")[0].rsplit("/", 1)[-1])
+        alt = _sem_acento(img.get("alt") or "")
+        if any(p in arquivo or alt.strip() == p for p in palavras[:2]):
+            return urljoin(base, src)
+    return ""
+
+
+def _logo_da_home(site, cliente=""):
     if re.search(r"instagram\.com/", site or ""):
         achada = logo_do_instagram(site)
         if achada:
@@ -417,7 +438,7 @@ def _logo_da_home(site):
     achada = extracao._logo(soup, final, organizacao)
     if achada:
         return achada
-    return _logo_pelo_arquivo(soup, final)
+    return _logo_pelo_arquivo(soup, final) or _logo_pelo_nome(soup, final, cliente)
 
 
 def _home_fala_dos_produtos(base, nomes_produtos):
@@ -459,7 +480,7 @@ def logo_pela_web(cliente, site_informado="", nomes_produtos=()):
             vistos.add(base)
             if nomes_produtos and not _home_fala_dos_produtos(base, nomes_produtos):
                 continue
-            achada = _logo_da_home(base)
+            achada = _logo_da_home(base, cliente)
             if achada:
                 return base, achada
     return "", ""
@@ -566,7 +587,7 @@ def _logo_inicial(entrada):
     site = entrada.get("site")
     if not site:
         return None, None, None, None
-    logo_url = _logo_da_home(site)
+    logo_url = _logo_da_home(site, entrada.get("cliente"))
     if not logo_url:
         return None, None, None, None
     original = selecao._imagem_cheia(logo_url)
@@ -734,9 +755,9 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
     def conferir(lista):
         if not lista:
             return []
-        evento("extracao", f"IA (fila gratuita) conferindo as fotos dos {min(len(lista), selecao.MAXIMO_PRODUTOS)} "
-                           "primeiros produtos, com os próximos já na reserva")
-        aprovados, descartes_fotos, custo_fotos = selecao.conferir_ate(lista, cliente)
+        evento("extracao", f"IA (fila gratuita) conferindo as fotos dos {len(lista)} "
+                           "candidatos")
+        aprovados, descartes_fotos, custo_fotos = selecao.conferir_ate(lista, cliente, alvo=len(lista))
         for k in ("custo_usd", "tokens_entrada", "tokens_saida"):
             custo[k] += custo_fotos.get(k) or 0
         descartes.extend(descartes_fotos)
@@ -1422,7 +1443,7 @@ def cores_do_site(site):
     import hashlib
     if not site or re.search(r"instagram\.com|facebook\.com|linktr\.ee", site):
         return []
-    guardado = TRABALHO / "cores" / (hashlib.md5(site.strip().lower().encode()).hexdigest() + ".json")
+    guardado = TRABALHO / "cores" / (hashlib.md5(("v2:" + site.strip().lower()).encode()).hexdigest() + ".json")
     try:
         return [tuple(c) for c in json.loads(guardado.read_text(encoding="utf-8"))]
     except (OSError, ValueError):
@@ -1444,15 +1465,23 @@ def _cores_do_site(site):
         pagina = requests.get(base, headers=cab, timeout=15).text
     except Exception:
         return []
+    from urllib.parse import urlparse
+    dominio = lambda u: ".".join((urlparse(u).hostname or "").lower().split(".")[-3:]).removeprefix("www.")
+    proprio = dominio(base)
     textos = [pagina]
-    for href in re.findall(r'<link[^>]+rel="?stylesheet"?[^>]+href="([^"]+)"', pagina)[:4]:
+    folhas = [urljoin(base, h) for h in re.findall(r'<link[^>]+rel="?stylesheet"?[^>]+href="([^"]+)"', pagina)
+              + re.findall(r'<link[^>]+href="([^"]+)"[^>]+rel="?stylesheet"?', pagina)]
+    for url in [u for u in dict.fromkeys(folhas) if dominio(u) == proprio][:4]:
         try:
-            textos.append(requests.get(urljoin(base, href), headers=cab, timeout=10).text[:400000])
+            textos.append(requests.get(url, headers=cab, timeout=10).text[:400000])
         except Exception:
             pass
     contagem = {}
     for m in re.findall(r'name="theme-color"\s+content="(#[0-9a-fA-F]{6})"', pagina):
         contagem[m.upper()] = contagem.get(m.upper(), 0) + 40
+    for texto in textos:
+        for m in re.findall(r"--[a-z-]*(?:primary|brand|marca|principal|main)[a-z-]*\s*:\s*(#[0-9a-fA-F]{6})\b", texto, re.I):
+            contagem[m.upper()] = contagem.get(m.upper(), 0) + 60
     for texto in textos:
         for m in re.findall(r"#([0-9a-fA-F]{6})\b", texto):
             contagem["#" + m.upper()] = contagem.get("#" + m.upper(), 0) + 1

@@ -22,7 +22,7 @@ GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{modelo}:g
 CONFERENCIA_POR_CHAMADA = 20
 MODELO_OPENROUTER = "google/gemini-2.5-flash"
 MINIMO_PRODUTOS = 5
-MAXIMO_PRODUTOS = 12
+MAXIMO_PRODUTOS = 30
 MAXIMO_CANDIDATOS = 60
 MAXIMO_IMAGENS_NO_PROMPT = 40
 MAXIMO_TOKENS_SAIDA = 4000
@@ -36,7 +36,7 @@ NOME_NAO_PRODUTO = re.compile(
     r"\b(img|image|imagem|foto|dsc|wp|screenshot|captura|whatsapp image)[\s_-]*\d|"
     r"\bmais de \d|\banos no mercado\b|\bclientes em todo\b|\bsmiling\b|\bheadset\b")
 IMAGEM_NAO_E_PRODUTO = re.compile(
-    r"(/slider/|/slides?/|/banners?/|/icons?/|logo|favicon|sprite|placeholder|\.svg($|\?))", re.I)
+    r"(/slider/|/slides?/|/banners?/|/icons?/|/receitas?/|logo|favicon|sprite|placeholder|\.svg($|\?))", re.I)
 
 
 PRAZO = {"fim": None}
@@ -650,8 +650,9 @@ Observação do usuário (tipo de produto que ele quer no portal, público, rest
 
 Regras obrigatórias:
 - Escolha SOMENTE pelos números da lista. Nunca invente produto, nome, imagem ou preço.
-- Quantidade: escolha EXATAMENTE {alvo} produtos (há {total} candidatos). Só escolha menos se
-  não houver {alvo} produtos reais; nesse caso explique cada descarte.
+- Quantidade: escolha TODOS os produtos reais e vendáveis, até {alvo} (há {total} candidatos).
+  Mais produtos é melhor: nunca deixe de fora um produto real só para variar ou enxugar.
+  Só escolha menos se não houver {alvo} produtos reais; nesse caso explique cada descarte.
 - Descarte o que não é produto vendável: banner, slide de carrossel, seta de navegação,
   ícone, logo, foto institucional, foto de ambiente, depoimento de cliente, nome de
   categoria ou menu ("CERAS", "PNEUS"), contato, blog.
@@ -666,8 +667,8 @@ Regras obrigatórias:
   ou nenhum candidato [site], ESCOLHA os [busca] do mesmo tipo que o cliente vende (são
   exemplos similares, o portal avisa): não descarte por "outra_marca" nesse caso.
 - Espalhe a escolha entre as categorias do site (campo "categoria" dos candidatos): pegue
-  de todas antes de repetir a mesma. Não escolha dois tamanhos do mesmo produto se houver
-  outro produto disponível.
+  de todas antes de repetir a mesma. Sabores e versões diferentes são produtos diferentes e entram;
+  só descarte como "repetido" o mesmo produto em outro tamanho quando ainda faltar produto para o alvo.
 - Agrupe os escolhidos em exatamente 3 categorias com nomes curtos em português; use os
   nomes das categorias do site quando existirem.
 - Para CADA candidato não escolhido, devolva o número e o motivo em uma frase curta, com
@@ -1158,7 +1159,7 @@ def conferir_ate(candidatos, cliente, alvo=None, reserva=6):
             break
         lote = candidatos[posicao:posicao + rodada]
         posicao += len(lote)
-        novos, recusados, custo_rodada = conferir_fotos(lote, cliente, por_chamada=alvo, teto=min(TETO_CONFERENCIA, sobra))
+        novos, recusados, custo_rodada = conferir_fotos(lote, cliente, por_chamada=min(alvo, CONFERENCIA_POR_CHAMADA), teto=min(TETO_CONFERENCIA, sobra))
         aprovados += novos
         descartes += recusados
         for k in custo:
@@ -1219,7 +1220,7 @@ def ler_descartes(escolha, candidatos, usados):
 
 
 def completar_ate_o_alvo(itens, candidatos, motivos, categorias):
-    """Com 12+ validos saem 12: completa com os 'limite' e 'sem_motivo', na ordem,
+    """Com mais validos que o alvo saem o alvo: completa com os 'limite' e 'sem_motivo', na ordem,
     alternando categoria do site para espalhar. Nunca com 'nao_e_produto'."""
     alvo = min(alvo_pedido(), len(candidatos))
     usados = {n for n, _ in itens}
