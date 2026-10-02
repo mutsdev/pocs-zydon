@@ -319,16 +319,7 @@ function prepararNavegador() {
   }
 }
 
-async function comNavegador(pedidoId) {
-  const linhas = await sql(`SELECT chave, valor FROM configuracao WHERE chave IN ('navegador_quantos', 'navegador_pedidos')`, {});
-  const conf = Object.fromEntries(linhas.map((l) => [l.chave, l.valor]));
-  const quantos = parseInt(conf.navegador_quantos || '0', 10) || 0;
-  const pedidos = String(conf.navegador_pedidos || '').split(',').filter(Boolean);
-  if (pedidos.includes(pedidoId)) return true;
-  if (pedidos.length >= quantos) return false;
-  pedidos.push(pedidoId);
-  await dml(`INSERT INTO configuracao (chave, valor) VALUES ('navegador_pedidos', :v)
-    ON CONFLICT (chave) DO UPDATE SET valor = :v, atualizado_em = now()`, { v: pedidos.join(',') });
+async function comNavegador() {
   return true;
 }
 
