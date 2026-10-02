@@ -25,6 +25,7 @@ ARGS = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--disable-e
         "--js-flags=--jitless --max-old-space-size=128"]
 LARGURA, ALTURA = 1280, 800
 MAXIMO_PAGINAS = 3
+MAXIMO_VITRINES = 4
 
 JS_HOME = r"""() => {
   const topo = 260, cands = [], links = [], vistos = new Set();
@@ -277,6 +278,20 @@ def explorar(site, cliente, pasta, evento, ia_barroso):
     if paginas:
         t_lista = time.monotonic()
         lidas = _rodar(["listas", str(pasta)] + paginas, 150)
+        lidas_urls = {p.get("url", "").rstrip("/") for p in lidas} | {u.rstrip("/") for u in paginas}
+        vitrines = []
+        for pagina in lidas:
+            for item in pagina.get("itens") or []:
+                url = (item.get("url") or "").split("#")[0]
+                if (url and host in (urlparse(url).hostname or "") and url.rstrip("/") not in lidas_urls
+                        and re.search(r"categoria|category|linha|marca|busca|colec|departamento|/c/", url, re.I)
+                        and url not in vitrines):
+                    vitrines.append(url)
+        if vitrines:
+            extras = vitrines[:MAXIMO_VITRINES]
+            evento("navegador", f"a página de produtos mostra categorias/marcas: abrindo {len(extras)} delas "
+                                "para chegar aos produtos")
+            lidas += _rodar(["listas", str(pasta)] + extras, 200)
         for pagina in lidas:
             categoria = re.split(r"\s[|\-–]\s", pagina.get("titulo") or "")[0][:60]
             achados = 0

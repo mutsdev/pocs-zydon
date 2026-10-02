@@ -132,11 +132,33 @@ def sem_acento(texto):
     return "".join(c for c in texto if not unicodedata.combining(c)).lower().strip()
 
 
+PALAVRAS_NEUTRAS = {"de", "da", "do", "das", "dos", "em", "com", "e", "a", "o", "para", "pet", "-", "–", "|"}
+
+
+def chave_produto(nome):
+    """Mesmo produto escrito de outro jeito ("Ketchup Tradicional 400g Quero" e
+    "Ketchup Quero Tradicional PET 400g") dá a mesma chave: palavras sem acento, sem
+    preposição e em ordem alfabética. Sabor ou tamanho diferente muda a chave."""
+    palavras = re.findall(r"[a-z0-9]+(?:[.,][0-9]+)?", sem_acento(nome).lower())
+    return " ".join(sorted(p for p in palavras if p not in PALAVRAS_NEUTRAS))
+
+
+def nome_de_arquivo(nome):
+    """Nome que é nome de arquivo ou rótulo genérico, não produto: "Imagem",
+    "DISPLAY_DACOPRO_BROWNIE_800X800", "IMG_2041"."""
+    limpo = sem_acento(nome or "").strip().lower()
+    if limpo in {"imagem", "image", "foto", "produto", "produtos", "img", "picture", "sem titulo", "untitled"}:
+        return True
+    if nome.count("_") >= 2 or re.search(r"\d{2,4}\s*[x×]\s*\d{2,4}(?![\d\s]*(cm|mm|m|pol)\b)", limpo):
+        return True
+    return bool(re.search(r"\.(jpe?g|png|webp|gif|avif)\b", limpo))
+
+
 def nome_valido(nome, url=""):
     """Codigo sem espaco ("SUP390") so vale com pagina de produto propria;
     na home e nome de arquivo de slide ("biscoito2", "pizza-1")."""
     nome = (nome or "").strip()
-    if len(nome) < 4 or not re.search(r"[A-Za-zÀ-ú]{2}", nome):
+    if len(nome) < 4 or not re.search(r"[A-Za-zÀ-ú]{2}", nome) or nome_de_arquivo(nome):
         return False
     pagina_propria = len([p for p in urlparse(url or "").path.split("/") if p]) >= 1
     if " " not in nome and re.search(r"\d", nome) and not pagina_propria:
@@ -619,14 +641,14 @@ def filtrar_candidatos(candidatos):
             motivo = "nome não parece produto"
         elif IMAGEM_NAO_E_PRODUTO.search(c["imagem"]):
             motivo = "imagem de banner, ícone ou carrossel"
-        elif c["imagem"] in vistos or (c.get("origem") != "busca" and sem_acento(c["nome"]) in vistos):
+        elif c["imagem"] in vistos or (c.get("origem") != "busca" and chave_produto(c["nome"]) in vistos):
             motivo = "duplicado"
         if motivo:
             descartes.append({"nome": c.get("nome"), "motivo": motivo})
             continue
         vistos.add(c["imagem"])
         if c.get("origem") != "busca":
-            vistos.add(sem_acento(c["nome"]))
+            vistos.add(chave_produto(c["nome"]))
         antes.append(c)
     with ThreadPoolExecutor(12) as pool:
         laudos = list(pool.map(verificar_imagens.conferir, [(c["nome"], c["imagem"]) for c in antes]))
@@ -666,6 +688,9 @@ Regras obrigatórias:
   cliente só entra se faltar produto do site; marque "do_cliente": false. Quando há poucos
   ou nenhum candidato [site], ESCOLHA os [busca] do mesmo tipo que o cliente vende (são
   exemplos similares, o portal avisa): não descarte por "outra_marca" nesse caso.
+- Produto do site cujo NOME traz a marca de outra empresa (licenciamento ou revenda,
+  ex.: "Moedor de Sal com Chimichurri Brahma" no site da Kisabor) é "outra_marca": só entra
+  se faltar produto com a marca do cliente. Linhas e submarcas do próprio cliente valem.
 - Espalhe a escolha entre as categorias do site (campo "categoria" dos candidatos): pegue
   de todas antes de repetir a mesma. Sabores e versões diferentes são produtos diferentes e entram;
   só descarte como "repetido" o mesmo produto em outro tamanho quando ainda faltar produto para o alvo.

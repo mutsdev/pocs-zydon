@@ -81,7 +81,42 @@ def _proteger_logo_no_arquivo():
         pass
 
 
+COR_PORTAL_NO_ARQUIVO = """
+
+# --- protecao do pipeline_poc: cor clara da marca escurece no mesmo tom, nao vira preto ---
+_cor_de_portal_original = cor_de_portal
+
+
+def cor_de_portal(hexa, contraste_minimo=CONTRASTE_MINIMO_COR_PORTAL):
+    rgb = de_hex(hexa)
+    if contraste(BRANCO, rgb) >= contraste_minimo:
+        return para_hex(rgb), None
+    if max(rgb) - min(rgb) < 40:
+        return _cor_de_portal_original(hexa, contraste_minimo)
+    for passo in range(1, 20):
+        peso = passo * 0.05
+        escura = tuple(round(c * (1 - peso)) for c in rgb)
+        if contraste(BRANCO, escura) >= contraste_minimo:
+            return para_hex(escura), (f"a cor {para_hex(rgb)} era clara demais sobre o branco: "
+                                      f"o portal vai no mesmo tom, mais escuro ({para_hex(escura)})")
+    return _cor_de_portal_original(hexa, contraste_minimo)
+"""
+
+
+def _proteger_cor_no_arquivo():
+    """Cor da marca clara demais (azul-claro da Nutrimental) virava PRETO no menu e nos
+    botões do portal: escurece no mesmo tom até ter contraste. Cinza continua indo de preto."""
+    arquivo = REPO / "Identidade Visual" / "cor.py"
+    try:
+        texto = arquivo.read_text(encoding="utf-8")
+        if "protecao do pipeline_poc: cor clara" not in texto:
+            arquivo.write_text(texto + COR_PORTAL_NO_ARQUIVO, encoding="utf-8")
+    except OSError:
+        pass
+
+
 _proteger_logo_no_arquivo()
+_proteger_cor_no_arquivo()
 _proteger_logo_opaca()
 
 ORG = "pocs"
@@ -902,9 +937,9 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
     def sem_repetidos(lista):
         unicos, nomes = [], set()
         for v in lista:
-            chave = selecao.sem_acento(v["nome"])
+            chave = selecao.chave_produto(v["nome"])
             if chave in nomes:
-                descartes.append({"nome": v["nome"], "motivo": "duplicado (mesmo produto em outra loja)"})
+                descartes.append({"nome": v["nome"], "motivo": "duplicado (mesmo produto escrito de outro jeito)"})
                 continue
             nomes.add(chave)
             unicos.append(v)
