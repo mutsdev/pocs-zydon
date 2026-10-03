@@ -1411,6 +1411,7 @@ import json, sys
 from pathlib import Path
 gerador = Path(sys.argv[1]); paleta = json.loads(sys.argv[2])
 feedback = paleta.pop("_feedback", None)
+lab = paleta.pop("_lab", None)
 sys.path.insert(0, str(gerador.parent))
 sys.argv = [str(gerador)] + sys.argv[3:]
 import gerar_banners
@@ -1421,6 +1422,12 @@ if feedback:
         contexto["feedback"] = {"login": feedback, "cabecalho": feedback}
         return contexto
     gerar_banners.mod_segmento.resolver = _resolver_com_pedido
+if lab:
+    import tipografia as _tipo
+    _ajustar_base = _tipo.ajustar
+    def _ajustar_lab(desenho, texto, largura_max, corpo_inicial, corpo_minimo, *a, **k):
+        return _ajustar_base(desenho, texto, largura_max, int(corpo_inicial * 1.18), int(corpo_minimo * 1.08), *a, **k)
+    _tipo.ajustar = _ajustar_lab
 import numpy as np
 import logo as mod_logo
 _preparar = mod_logo.preparar_para_fundo
@@ -1766,6 +1773,8 @@ def gerar_pecas_paleta(caminho, logo, cliente, segmento, paleta, cena_ia=False, 
     embrulho = pasta / "embrulho_paleta.py"
     embrulho.write_text(EMBRULHO_PALETA, encoding="utf-8")
     dados = dict(paleta, _feedback=texto.strip()) if cena_ia and (texto or "").strip() else paleta
+    if LAB_ATIVO:
+        dados = dict(dados, _lab=True)
     comando = [sys.executable, str(embrulho), str(atendimento.GERADOR), json.dumps(dados), "auto",
                "--logo", str(logo), "--nome", cliente,
                "--segmento", segmento or atendimento.SEGMENTO_PADRAO,
@@ -2374,8 +2383,131 @@ def loja_publica(entrada):
 
 
 # --- Laboratorio de banners: canto direito composto com as fotos reais dos produtos ---
-MODELOS_LAB = ("destaque", "trio", "padrao")
-INICIO_LIVRE = {"login": 0.58, "cabecalho": 0.58}
+# Rodada 2: sem bolas nem pontos; divisor em arco na cor da marca, fundo contínuo com o
+# painel, produto com o fundo trocado pela cor do painel (Images API) e recortado por ela.
+MODELOS_LAB = ("diagonal", "vitrine", "em_uso", "padrao_marca", "trio", "destaque")
+INICIO_LIVRE = {"login": 0.58, "cabecalho": 0.50}
+PINTAR_DE = {"login": 0.58, "cabecalho": 0.45}
+LAB_ATIVO = False
+IMAGES_URL = ("https://dhsseifv2j3ti.cloudfront.net/legacy/public/serverFunction/"
+              "b0320b4b-8957-4ce4-ad7d-afa12c6c87df/2b57e9c5-cf8e-4686-ab1a-a86b9e8eeaa8/execute")
+PALETA_WORDPRESS = {"#000000", "#FFFFFF", "#ABB8C3", "#F78DA7", "#CF2E2E", "#FF6900", "#FCB900", "#7BDCB5",
+                    "#00D084", "#8ED1FC", "#0693E3", "#9B51E0", "#EEEEEE", "#313131", "#32373C",
+                    "#9B59B6", "#3498DB", "#2ECC71", "#E74C3C", "#F1C40F", "#1ABC9C", "#E67E22", "#34495E"}
+CDN_DE_BIBLIOTECA = re.compile(r"fonts\.googleapis|fontawesome|bootstrapcdn|jsdelivr\.net/npm/(bootstrap|swiper|slick)"
+                               r"|cdnjs\.cloudflare\.com|unpkg\.com|wp-includes|wp-block-library", re.I)
+
+
+def _cores_do_site_lab(site):
+    """Como _cores_do_site, mas lê também as folhas do CDN do próprio site (não as de
+    bibliotecas) e ignora a paleta padrão do WordPress/Gutenberg e de temas prontos."""
+    import requests
+    from urllib.parse import urljoin
+    cab = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128 Safari/537.36"}
+    try:
+        base = selecao.normalizar_site(site)
+        pagina = requests.get(base, headers=cab, timeout=15).text
+    except Exception:
+        return []
+    textos = [pagina]
+    folhas = [urljoin(base, h) for h in re.findall(r'<link[^>]+rel="?stylesheet"?[^>]+href="([^"]+)"', pagina)
+              + re.findall(r'<link[^>]+href="([^"]+)"[^>]+rel="?stylesheet"?', pagina)]
+    for url in [u for u in dict.fromkeys(folhas) if not CDN_DE_BIBLIOTECA.search(u)][:6]:
+        try:
+            textos.append(requests.get(url, headers=cab, timeout=10).text[:400000])
+        except Exception:
+            pass
+    limpos = [re.sub(r"--wp--preset--[a-z0-9-]+\s*:[^;}]+[;}]", "", t, flags=re.I) for t in textos]
+    contagem = {}
+    for m in re.findall(r'name="theme-color"\s+content="(#[0-9a-fA-F]{6})"', pagina):
+        contagem[m.upper()] = contagem.get(m.upper(), 0) + 40
+    for texto in limpos:
+        for m in re.findall(r"--[a-z-]*(?:primary|brand|marca|principal|main)[a-z-]*\s*:\s*(#[0-9a-fA-F]{6})\b", texto, re.I):
+            contagem[m.upper()] = contagem.get(m.upper(), 0) + 60
+        for m in re.findall(r"#([0-9a-fA-F]{6})\b", texto):
+            contagem["#" + m.upper()] = contagem.get("#" + m.upper(), 0) + 1
+    saida = []
+    for hexa, _ in sorted(contagem.items(), key=lambda kv: -kv[1]):
+        if hexa in PALETA_WORDPRESS:
+            continue
+        rgb = _rgb(hexa)
+        if _saturacao(rgb) < 0.4 or max(rgb) < 60:
+            continue
+        if all(_dist_matiz(rgb, o) > 20 for o in saida):
+            saida.append(rgb)
+        if len(saida) >= 4:
+            break
+    return saida
+
+
+def _identidade_lab(site, logo, navegador=None):
+    """Cor do lab: a do navegador (site renderizado) vale mais; sem ela, a do site só vale se
+    conversar com a logo; site fraco ou sem cor cai na cor da logo."""
+    da_logo = cores_da_logo(logo) if logo else []
+    do_site = [ _rgb(c) for c in (navegador or []) if isinstance(c, str) and c.startswith("#")]
+    origem = "navegador"
+    if not do_site:
+        do_site, origem = _cores_do_site_lab(site) if site else [], "site"
+    marca = None
+    if do_site and da_logo:
+        casadas = [c for c in do_site if any(_dist_matiz(c, l) <= 18 for l in da_logo)]
+        if casadas:
+            marca, origem = casadas[0], origem + "+logo"
+        elif origem == "navegador":
+            marca = do_site[0]
+        else:
+            marca, origem = da_logo[0], "logo (site fraco)"
+    elif do_site:
+        marca = do_site[0]
+    elif da_logo:
+        marca, origem = da_logo[0], "logo"
+    if marca is None:
+        return None, None, "nenhuma"
+    candidatas = [c for c in do_site + da_logo if _dist_matiz(c, marca) > 40]
+    apoio = candidatas[0] if candidatas else None
+    return _hex(marca), (_hex(apoio) if apoio else None), origem
+
+
+def _images_api(nome, argumentos):
+    import requests
+    chave = os.environ.get("IMAGES_API_KEY")
+    if not chave:
+        return None
+    corpo = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": nome, "arguments": argumentos}}
+    r = requests.post(IMAGES_URL, json=corpo, headers={"x-api-key": chave}, timeout=150)
+    saida = (r.json().get("result") or {}).get("output") or {}
+    if isinstance(saida, str):
+        saida = json.loads(saida)
+    res = saida.get("result") if isinstance(saida, dict) else None
+    if isinstance(res, str):
+        res = json.loads(res)
+    return res or None
+
+
+def _editar_imagem(foto, prompt, espera=300):
+    """Edita a foto pela Images API (sempre devolve JPEG). None quando falha ou demora."""
+    import time
+    from PIL import Image
+    try:
+        img = foto.convert("RGB")
+        img.thumbnail((1024, 1024), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, "JPEG", quality=92)
+        uri = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+        res = _images_api("editar_imagem", {"prompt": prompt, "imagem": uri, "formato": "jpeg"})
+        inicio = time.time()
+        while res:
+            sc = res.get("structuredContent") or {}
+            dado = next((c.get("data") for c in res.get("content") or [] if c.get("type") == "image" and c.get("data")), None)
+            if dado:
+                return Image.open(io.BytesIO(base64.b64decode(dado))).convert("RGB")
+            if sc.get("status") != "processando" or not sc.get("id") or time.time() - inicio > espera:
+                return None
+            time.sleep(max(6, min(20, float(sc.get("retryAfterSeconds") or 10))))
+            res = _images_api("consultar_imagem", {"id": sc["id"]})
+    except Exception as erro:
+        evento("banners", f"laboratório: Images API falhou ({str(erro)[:160]})", "aviso")
+    return None
 
 
 def _recortar_produto(foto):
@@ -2405,100 +2537,226 @@ def _recortar_produto(foto):
     return (rgba.crop(caixa) if caixa else rgba), True
 
 
-def _cartao(foto, raio):
-    """Foto com cenário vira cartão de cantos arredondados (não dá para recortar)."""
-    from PIL import Image, ImageDraw
-    img = foto.convert("RGBA")
-    mascara = Image.new("L", img.size, 0)
-    ImageDraw.Draw(mascara).rounded_rectangle([0, 0, img.size[0] - 1, img.size[1] - 1], radius=raio, fill=255)
-    img.putalpha(mascara)
-    return img
+def _recortar_pela_cor(img):
+    """A foto voltou da Images API com fundo liso de cor conhecida: tudo que é dessa cor e
+    toca a borda vira transparente, e também os vãos internos quase idênticos a ela."""
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFilter
+    rgb = img.convert("RGB")
+    w, h = rgb.size
+    arr = np.asarray(rgb, dtype=np.int16)
+    bordas = np.concatenate([arr[0], arr[-1], arr[:, 0], arr[:, -1]])
+    chave = np.median(bordas, axis=0)
+    dist = np.abs(arr - chave).sum(axis=2)
+    marcada = Image.fromarray(np.where(dist < 54, 255, 0).astype("uint8"))
+    for xy in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1), (w // 2, 0), (w // 2, h - 1), (0, h // 2), (w - 1, h // 2)):
+        if marcada.getpixel(xy) == 255:
+            ImageDraw.floodfill(marcada, xy, 128)
+    m = np.asarray(marcada)
+    fora = (m == 128) | (dist < 20)
+    alfa = Image.fromarray(np.where(fora, 0, 255).astype("uint8"))
+    frac = float(fora.mean())
+    if frac < 0.08 or frac > 0.93:
+        return None
+    alfa = alfa.filter(ImageFilter.MinFilter(3)).filter(ImageFilter.GaussianBlur(1.4))
+    saida = rgb.convert("RGBA")
+    saida.putalpha(alfa)
+    caixa = alfa.point(lambda v: 255 if v > 40 else 0).getbbox()
+    return saida.crop(caixa) if caixa else saida
 
 
-def _fotos_lab(catalogo, estrito):
+def _qualidade(foto):
+    """Nota da foto como candidata: grande, fundo liso recortável, produto ocupando bem."""
+    if min(foto.size) < 300:
+        return -1, None
+    recorte, ok = _recortar_produto(foto)
+    if not ok:
+        return 0.5, None
+    ocupa = (recorte.size[0] * recorte.size[1]) / float(min(foto.size[0], 900) * min(foto.size[1], 900) or 1)
+    if ocupa < 0.08:
+        return 0.2, recorte
+    return 1 + min(1.0, min(foto.size) / 800.0) + min(0.6, ocupa), recorte
+
+
+def _fotos_lab(catalogo, quantas, fundo_hex):
+    """Escolhe as melhores fotos do catálogo e troca o fundo pela cor do painel (Images API),
+    recortando pela cor conhecida. Sem API, cai no recorte por fundo branco."""
     urls = [p["imagem"] for p in _produtos_do_json(catalogo) if p.get("imagem")]
-    with selecao.ThreadPoolExecutor(3) as pool:
-        fotos = [f for f in pool.map(_baixar_foto, urls[:9]) if f is not None]
-    fotos = [f for f in fotos if min(f.size) >= 220] or fotos
-    recortes, cartoes = [], []
-    for f in fotos:
-        img, ok = _recortar_produto(f)
-        (recortes if ok else cartoes).append(img)
-    if estrito:
-        return recortes, True
-    return (recortes, True) if len(recortes) >= 1 else (cartoes, False)
+    with selecao.ThreadPoolExecutor(4) as pool:
+        fotos = [f for f in pool.map(_baixar_foto, urls[:12]) if f is not None]
+    avaliadas = sorted(((_qualidade(f), f) for f in fotos), key=lambda t: -t[0][0])
+    boas = [(f, r) for (nota, r), f in avaliadas if nota >= 1][:quantas]
+    if not boas:
+        return [], []
+    prompt = (f"Fotografia publicitária de estúdio. Mantenha o produto exatamente igual: forma, cores, logotipos, "
+              f"rótulos e peças. Substitua todo o fundo por um fundo liso e uniforme na cor exata {fundo_hex}, "
+              f"sem textura, sem gradiente, sem objetos, sem texto, sem sombra no fundo. Inclua os vãos internos do produto.")
+    with selecao.ThreadPoolExecutor(len(boas)) as pool:
+        editadas = list(pool.map(lambda par: _editar_imagem(par[0], prompt), boas))
+    saida = []
+    for (foto, recorte), editada in zip(boas, editadas):
+        limpa = _recortar_pela_cor(editada) if editada is not None else None
+        saida.append(limpa or recorte)
+    evento("banners", f"laboratório: {len(saida)} fotos escolhidas de {len(fotos)}; "
+                      f"{sum(1 for e in editadas if e is not None)} com fundo trocado pela Images API")
+    return saida, [f for f, _ in boas]
 
 
-def _colar_com_sombra(tela, img, cx, base_y, altura):
-    """Cola o produto com a base em base_y, sombra no chão e sombra suave atrás."""
+def _produto_em_uso(foto, fundo_hex, segmento):
+    prompt = (f"Fotografia publicitária realista do mesmo produto em uso, num ambiente coerente com o segmento "
+              f"{segmento or 'do cliente'}. Mantenha o produto idêntico (forma, cores, rótulos). Luz natural, "
+              f"composição limpa, sem pessoas com rosto visível, sem texto, sem logotipos novos. "
+              f"Tons do ambiente que combinem com a cor {fundo_hex}.")
+    return _editar_imagem(foto, prompt)
+
+
+def _colar_com_sombra(tela, img, cx, base_y, altura, limite_largura=0.46, chao=True):
+    """Cola o produto com a base em base_y e uma sombra de contato discreta."""
     from PIL import Image, ImageDraw, ImageFilter
     fator = altura / img.size[1]
     largura = max(1, int(img.size[0] * fator))
-    limite = int(tela.size[0] * 0.42)
+    limite = int(tela.size[0] * limite_largura)
     if largura > limite:
         fator = limite / img.size[0]
         largura, altura = limite, max(1, int(img.size[1] * fator))
     prod = img.resize((largura, int(altura)), Image.LANCZOS)
     x, y = int(cx - largura / 2), int(base_y - altura)
-    chao = Image.new("RGBA", tela.size, (0, 0, 0, 0))
-    d = ImageDraw.Draw(chao)
-    rx, ry = largura * 0.42, max(6, altura * 0.035)
-    d.ellipse([cx - rx, base_y - ry, cx + rx, base_y + ry], fill=(0, 0, 0, 90))
-    chao = chao.filter(ImageFilter.GaussianBlur(max(4, altura * 0.03)))
-    tela.alpha_composite(chao)
+    if chao:
+        camada = Image.new("RGBA", tela.size, (0, 0, 0, 0))
+        rx, ry = largura * 0.40, max(5, altura * 0.025)
+        ImageDraw.Draw(camada).ellipse([cx - rx, base_y - ry, cx + rx, base_y + ry], fill=(0, 0, 0, 70))
+        tela.alpha_composite(camada.filter(ImageFilter.GaussianBlur(max(4, altura * 0.025))))
     sombra = Image.new("RGBA", tela.size, (0, 0, 0, 0))
-    silhueta = Image.new("RGBA", prod.size, (0, 0, 0, 70))
-    sombra.paste(silhueta, (x + int(altura * 0.025), y + int(altura * 0.03)), prod.getchannel("A"))
-    tela.alpha_composite(sombra.filter(ImageFilter.GaussianBlur(max(6, altura * 0.04))))
+    sombra.paste(Image.new("RGBA", prod.size, (0, 0, 0, 45)), (x + int(altura * 0.02), y + int(altura * 0.025)), prod.getchannel("A"))
+    tela.alpha_composite(sombra.filter(ImageFilter.GaussianBlur(max(6, altura * 0.035))))
     tela.alpha_composite(prod, (x, y))
+    return x, y, largura, int(altura)
 
 
 def _misturar_rgb(a, b, peso):
     return tuple(int(a[i] * (1 - peso) + b[i] * peso) for i in range(3))
 
 
-def _compor_canto(caminho, chave, paleta, fotos, modelo, recortadas):
+def _tons_lab(fundo, destaque):
+    escuro = _lum(fundo) < 0.08
+    claro = _lum(fundo) > 0.6
+    arco = _misturar_rgb(fundo, (255, 255, 255), 0.10) if escuro else _misturar_rgb(fundo, (0, 0, 0), 0.10 if claro else 0.20)
+    linha = destaque if _contraste(destaque, arco) >= 1.8 else _misturar_rgb(arco, (255, 255, 255) if not claro else (0, 0, 0), 0.35)
+    sutil = _misturar_rgb(fundo, (0, 0, 0) if claro else (255, 255, 255), 0.06)
+    return arco, linha, sutil
+
+
+def _arco(regiao, chave, cor, linha, deslocar=0.0):
+    """Divisor em arco (referência Voolt3D/Panattos): um grande arco entra pela direita na
+    cor da marca mais funda, com um fio fino de destaque acompanhando a curva."""
+    from PIL import Image, ImageDraw
+    rw, rh = regiao.size
+    camada = Image.new("RGBA", regiao.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(camada)
+    if chave == "login":
+        r = rh * 0.78
+        cx, cy = rw * (1.02 + deslocar) + r * 0.30, rh * 0.62
+    else:
+        r = rw * 0.60
+        cx, cy = rw * (0.98 + deslocar) + r * 0.15, rh * 0.5
+    d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=cor + (255,))
+    folga = max(10, int(min(rw, rh) * (0.035 if chave == "login" else 0.06)))
+    largura = max(3, int(min(rw, rh) * (0.006 if chave == "login" else 0.012)))
+    d.ellipse([cx - r - folga, cy - r - folga, cx + r + folga, cy + r + folga], outline=linha + (255,), width=largura)
+    regiao.alpha_composite(camada)
+    return cx, cy, r
+
+
+def _linhas_sutis(regiao, cor, chave):
+    """Linhas diagonais finas derivadas da marca (referência Ceasa), nunca pontos."""
+    from PIL import ImageDraw
+    rw, rh = regiao.size
+    d = ImageDraw.Draw(regiao)
+    passo = max(22, int((rh if chave == "login" else rw) * 0.05))
+    largura = max(2, passo // 9)
+    for k in range(-rh, rw + rh, passo):
+        d.line([(k, rh), (k + rh * 0.6, 0)], fill=cor + (255,), width=largura)
+
+
+def _mascara_arco(tamanho, chave):
     from PIL import Image, ImageDraw, ImageFilter
+    rw, rh = tamanho
+    m = Image.new("L", tamanho, 0)
+    d = ImageDraw.Draw(m)
+    if chave == "login":
+        r = rh * 1.1
+        cx, cy = rw * 0.18 + r, rh * 0.5
+    else:
+        r = rw * 1.4
+        cx, cy = rw * 0.10 + r, rh * 0.5
+    d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=255)
+    return m.filter(ImageFilter.GaussianBlur(1.5))
+
+
+def _compor_canto(caminho, chave, paleta, fotos, modelo, cena=None):
+    from PIL import Image, ImageDraw
     peca = Image.open(caminho).convert("RGBA")
     w, h = peca.size
-    x0 = int(w * INICIO_LIVRE[chave])
+    xp = int(w * PINTAR_DE[chave])
+    xc = int(w * INICIO_LIVRE[chave])
     fundo = peca.getpixel((6, 6))[:3]
     destaque = _rgb(paleta.get("destaque") or paleta.get("principal"))
-    claro = _lum(fundo) > 0.5
-    regiao = Image.new("RGBA", (w - x0, h), fundo + (255,))
-    d = ImageDraw.Draw(regiao)
+    arco_cor, linha, sutil = _tons_lab(fundo, destaque)
+    ImageDraw.Draw(peca).rectangle([xp, 0, w, h], fill=fundo + (255,))
+    regiao = Image.new("RGBA", (w - xc, h), (0, 0, 0, 0))
     rw, rh = regiao.size
-    tom = _misturar_rgb(fundo, (0, 0, 0) if claro else (255, 255, 255), 0.07)
-    if modelo == "padrao":
-        passo = max(18, int(rh * (0.05 if chave == "login" else 0.11)))
-        ponto = max(2, passo // 7)
-        for yy in range(passo // 2, rh, passo):
-            for xx in range(passo // 2, rw, passo):
-                d.ellipse([xx - ponto, yy - ponto, xx + ponto, yy + ponto], fill=tom + (255,))
-    forma = Image.new("RGBA", regiao.size, (0, 0, 0, 0))
-    df = ImageDraw.Draw(forma)
-    cor_forma = _misturar_rgb(destaque, fundo, 0.35) if _dist_matiz(destaque, fundo) > 20 or abs(_lum(destaque) - _lum(fundo)) > 0.15 else tom
-    r = rh * (0.40 if chave == "login" else 0.62)
-    cx, cy = rw * 0.52, rh * (0.52 if chave == "login" else 0.55)
-    df.ellipse([cx - r, cy - r, cx + r, cy + r], fill=cor_forma + (255,))
-    if modelo == "trio":
-        r2 = r * 0.45
-        df.ellipse([cx + r * 0.55 - r2, cy - r * 0.75 - r2, cx + r * 0.55 + r2, cy - r * 0.75 + r2], fill=tom + (255,))
-    regiao.alpha_composite(forma)
-    base = cy + r * (0.72 if chave == "login" else 0.62)
-    alto = rh * (0.62 if chave == "login" else 0.80)
-    if not recortadas:
-        alto *= 0.85
-    if modelo == "trio" and len(fotos) >= 3:
-        _colar_com_sombra(regiao, fotos[1], cx - r * 0.62, base - rh * 0.02, alto * 0.72)
-        _colar_com_sombra(regiao, fotos[2], cx + r * 0.62, base - rh * 0.02, alto * 0.72)
-        _colar_com_sombra(regiao, fotos[0], cx, base, alto)
-    elif modelo == "padrao" and len(fotos) >= 2:
-        _colar_com_sombra(regiao, fotos[1], cx + r * 0.42, base - rh * 0.03, alto * 0.78)
-        _colar_com_sombra(regiao, fotos[0], cx - r * 0.25, base, alto)
+    login = chave == "login"
+    if modelo == "em_uso" and cena is not None:
+        foto = cena.convert("RGB")
+        escala = max(rw / foto.size[0], rh / foto.size[1])
+        foto = foto.resize((int(foto.size[0] * escala) + 1, int(foto.size[1] * escala) + 1), Image.LANCZOS)
+        ox, oy = (foto.size[0] - rw) // 2, (foto.size[1] - rh) // 2
+        foto = foto.crop((ox, oy, ox + rw, oy + rh)).convert("RGBA")
+        mascara = _mascara_arco(regiao.size, chave)
+        borda = Image.new("RGBA", regiao.size, (0, 0, 0, 0))
+        folga = max(8, int(min(rw, rh) * (0.02 if login else 0.04)))
+        borda.paste(Image.new("RGBA", regiao.size, linha + (255,)), (-folga, 0), mascara)
+        regiao.alpha_composite(borda)
+        foto.putalpha(mascara)
+        regiao.alpha_composite(foto)
     else:
-        _colar_com_sombra(regiao, fotos[0], cx, base, alto)
-    peca.alpha_composite(regiao, (x0, 0))
+        if modelo == "padrao_marca":
+            _linhas_sutis(regiao, sutil, chave)
+        cx, cy, r = _arco(regiao, chave, arco_cor, linha, deslocar=0.08 if modelo == "vitrine" else 0.0)
+        base = rh * (0.84 if login else 0.92)
+        if modelo == "diagonal":
+            from PIL import ImageFilter
+            girado = fotos[0].rotate(16, expand=True, resample=Image.BICUBIC)
+            alvo_w, alvo_h = rw * (1.02 if login else 0.62), rh * (0.80 if login else 0.98)
+            fator = min(alvo_w / girado.size[0], alvo_h / girado.size[1])
+            girado = girado.resize((max(1, int(girado.size[0] * fator)), max(1, int(girado.size[1] * fator))), Image.LANCZOS)
+            gx = int(rw - girado.size[0] * (0.90 if login else 0.95))
+            gy = int((rh - girado.size[1]) * (0.62 if login else 0.5))
+            sombra = Image.new("RGBA", regiao.size, (0, 0, 0, 0))
+            sombra.paste(Image.new("RGBA", girado.size, (0, 0, 0, 60)), (gx + 18, gy + 26), girado)
+            regiao.alpha_composite(sombra.filter(ImageFilter.GaussianBlur(22)))
+            camada = Image.new("RGBA", regiao.size, (0, 0, 0, 0))
+            camada.paste(girado, (gx, gy), girado)
+            regiao.alpha_composite(camada)
+        elif modelo == "vitrine" and len(fotos) >= 3:
+            n = 3
+            if login:
+                alto = rh * 0.30
+                _colar_com_sombra(regiao, fotos[0], rw * 0.55, rh * 0.52, rh * 0.40, 0.82)
+                for i in range(1, n):
+                    _colar_com_sombra(regiao, fotos[i], rw * (0.32 + 0.46 * (i - 1)), base, alto, 0.46)
+            else:
+                for i in range(n):
+                    _colar_com_sombra(regiao, fotos[i], rw * (0.30 + 0.27 * i), base, rh * 0.84, 0.30)
+        elif modelo == "trio" and len(fotos) >= 3:
+            alto = rh * (0.56 if login else 0.86)
+            _colar_com_sombra(regiao, fotos[1], rw * (0.32 if login else 0.24), rh * (0.50 if login else 0.90), alto * 0.72, 0.50 if login else 0.36)
+            _colar_com_sombra(regiao, fotos[2], rw * (0.74 if login else 0.80), rh * (0.50 if login else 0.90), alto * 0.72, 0.50 if login else 0.36)
+            _colar_com_sombra(regiao, fotos[0], rw * 0.55, base, alto, 0.80 if login else 0.50)
+        else:
+            alto = rh * (0.64 if login else 0.88)
+            _colar_com_sombra(regiao, fotos[0], rw * 0.55, base, alto, 0.92 if login else 0.50)
+    peca.alpha_composite(regiao, (xc, 0))
     peca.convert("RGB").save(caminho)
 
 
@@ -2510,6 +2768,7 @@ def _modelo_da_regra(regras, indice):
 
 
 def lab_banner(entrada):
+    global LAB_ATIVO, identidade_visual
     import subir_banners
     regras = entrada.get("regras") or {}
     if isinstance(regras, str):
@@ -2517,6 +2776,14 @@ def lab_banner(entrada):
             regras = json.loads(regras) if regras.strip() else {}
         except ValueError:
             regras = {}
+    navegador = entrada.get("cores_navegador")
+    if isinstance(navegador, str):
+        try:
+            navegador = json.loads(navegador)
+        except ValueError:
+            navegador = None
+    LAB_ATIVO = True
+    identidade_visual = lambda site, logo: _identidade_lab(site, logo, navegador)
     pedido_id = entrada["pedido_id"]
     pasta = pasta_pedido(f"lab-{entrada['lab_id']}")
     logo = restaurar_logo(entrada, pasta)
@@ -2526,23 +2793,31 @@ def lab_banner(entrada):
     gerada, saida, paleta = gerar_com_identidade(entrada, caminho, logo, variar=False)
     if not gerada:
         raise RuntimeError("peça base não saiu: " + str(saida)[-400:])
-    marcas = (regras.get("marcas") or {})
-    estrito = int(marcas.get("produto", 0)) >= 2
-    fotos, recortadas = _fotos_lab(entrada["catalogo"], estrito)
     modelo = entrada.get("modelo") or _modelo_da_regra(regras, int(entrada.get("indice") or 0))
+    pecas, _ = subir_banners.pecas_da_pasta(gerada)
+    fundo_hex = paleta.get("principal") or "#FFFFFF"
+    try:
+        from PIL import Image
+        fundo_hex = _hex(Image.open(pecas.get("login") or next(iter(pecas.values()))).convert("RGB").getpixel((6, 6)))
+    except Exception:
+        pass
+    quantas = 4 if modelo == "vitrine" else 3 if modelo == "trio" else 1
+    fotos, originais = _fotos_lab(entrada["catalogo"], quantas, fundo_hex)
+    cena = None
     if not fotos:
         modelo = "so_marca"
-        evento("banners", "laboratório: sem foto de produto aproveitável; banner só com a marca", "aviso")
+        evento("banners", "laboratório: nenhuma foto de produto boa o bastante; banner só com a marca", "aviso")
     else:
-        if modelo == "trio" and len(fotos) < 3:
-            modelo = "destaque"
-        if modelo == "padrao" and len(fotos) < 2:
-            modelo = "destaque"
-        pecas, _ = subir_banners.pecas_da_pasta(gerada)
+        if modelo in ("trio", "vitrine") and len(fotos) < 3:
+            modelo = "diagonal"
+        if modelo == "em_uso":
+            cena = _produto_em_uso(originais[0], fundo_hex, entrada.get("segmento"))
+            if cena is None:
+                modelo = "destaque"
         for chave, arquivo in pecas.items():
-            _compor_canto(arquivo, chave, paleta, fotos, modelo, recortadas)
-        evento("banners", f"laboratório: modelo {modelo} com {min(len(fotos), 3)} fotos "
-                          + ("recortadas" if recortadas else "em cartão"))
+            if chave in INICIO_LIVRE:
+                _compor_canto(arquivo, chave, paleta, fotos, modelo, cena)
+        evento("banners", f"laboratório: modelo {modelo} com {len(fotos)} foto(s), fundo {fundo_hex}")
     telas = pecas_para_tela(gerada)
     return {"modelo": modelo, "cor": cor_da_pasta(gerada), "banners_tar": empacotar(gerada),
             "login": (telas.get("login") or {}).get("previa_base64"),
