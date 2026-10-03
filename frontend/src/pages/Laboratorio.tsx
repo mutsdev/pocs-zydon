@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { CheckCircle2, ExternalLink, FlaskConical, Loader2, Maximize2, Sparkles, Star } from 'lucide-react'
+import { CheckCircle2, ExternalLink, FlaskConical, Loader2, Maximize2, RefreshCw, Sparkles, Star } from 'lucide-react'
 import { Card } from '../components/ui/Card'
 import Badge from '../components/ui/Badge'
 import Button from '../components/ui/Button'
@@ -132,6 +132,25 @@ export default function Laboratorio() {
 
   const atual = rodadas?.[0]
   const gerandoAgora = num(atual?.gerando) > 0
+  const [atualizando, setAtualizando] = useState(false)
+  const pendentes = gerandoAgora || (itens || []).some((x) => ['na_fila', 'gerando', 'aplicando'].includes(x.situacao))
+
+  const atualizar = useCallback(async () => {
+    setAtualizando(true)
+    try { await Promise.allSettled([carregarRodadas(), carregarItens(0)]) } finally { setAtualizando(false) }
+  }, [carregarRodadas, carregarItens])
+
+  useEffect(() => {
+    if (!pendentes) return
+    const t = setTimeout(() => { if (document.visibilityState === 'visible') atualizar() }, 20000)
+    return () => clearTimeout(t)
+  }, [pendentes, itens, atualizar])
+
+  useEffect(() => {
+    const aoVoltar = () => { if (document.visibilityState === 'visible') atualizar() }
+    document.addEventListener('visibilitychange', aoVoltar)
+    return () => document.removeEventListener('visibilitychange', aoVoltar)
+  }, [atualizar])
 
   const novaRodada = async () => {
     setAbrindo(true)
@@ -207,6 +226,9 @@ export default function Laboratorio() {
         <div className="w-44"><Select label="Rodada" options={opcoesRodada} value={rodada} onChange={setRodada} /></div>
         <div className="w-44"><Select label="Mostrar" value={filtro} onChange={setFiltro}
           options={[{ value: '', label: 'Todos' }, { value: 'pendentes', label: 'Falta eu avaliar' }, { value: 'avaliados', label: 'Já avaliei' }]} /></div>
+        <Button variant="secondary" className="ml-auto" onClick={atualizar} disabled={atualizando}>
+          <RefreshCw size={16} className={atualizando ? 'animate-spin' : ''} /> Atualizar
+        </Button>
       </div>
 
       {erro && <Aviso tipo="danger" titulo={erro}>Tente recarregar a página.</Aviso>}
