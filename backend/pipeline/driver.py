@@ -2510,19 +2510,28 @@ def _editar_imagem(foto, prompt, espera=300, lado=1024):
         buf = io.BytesIO()
         img.save(buf, "JPEG", quality=92)
         uri = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
-        res = _images_api("editar_imagem", {"prompt": prompt, "imagem": uri, "formato": "jpeg"})
-        inicio = time.time()
-        while res:
-            sc = res.get("structuredContent") or {}
-            dado = next((c.get("data") for c in res.get("content") or [] if c.get("type") == "image" and c.get("data")), None)
-            if dado:
-                return Image.open(io.BytesIO(base64.b64decode(dado))).convert("RGB")
-            if sc.get("status") != "processando" or not sc.get("id") or time.time() - inicio > espera:
+        for tentativa in range(4):
+            if tentativa:
+                time.sleep(15 * tentativa + random.uniform(0, 10))
+            res = _images_api("editar_imagem", {"prompt": prompt, "imagem": uri, "formato": "jpeg"})
+            inicio = time.time()
+            while res:
+                sc = res.get("structuredContent") or {}
+                dado = next((c.get("data") for c in res.get("content") or [] if c.get("type") == "image" and c.get("data")), None)
+                if dado:
+                    return Image.open(io.BytesIO(base64.b64decode(dado))).convert("RGB")
+                if sc.get("status") == "processando" and sc.get("id") and time.time() - inicio <= espera:
+                    time.sleep(max(6, min(20, float(sc.get("retryAfterSeconds") or 10))))
+                    res = _images_api("consultar_imagem", {"id": sc["id"]})
+                    continue
+                break
+            if res and (res.get("structuredContent") or {}).get("status") == "processando":
+                evento("banners", "API de imagem demorou demais; desisti desta peça", "aviso")
                 return None
-            time.sleep(max(6, min(20, float(sc.get("retryAfterSeconds") or 10))))
-            res = _images_api("consultar_imagem", {"id": sc["id"]})
+            texto = " ".join(c.get("text", "") for c in (res or {}).get("content") or [] if c.get("type") == "text")
+            evento("banners", f"API de imagem não devolveu a imagem (tentativa {tentativa + 1} de 4): {texto[:200] or 'sem resposta'}", "aviso")
     except Exception as erro:
-        evento("banners", f"laboratório: Images API falhou ({str(erro)[:160]})", "aviso")
+        evento("banners", f"API de imagem falhou ({str(erro)[:160]})", "aviso")
     return None
 
 
@@ -2884,7 +2893,7 @@ def _ajustar_do_zero(img, chave):
     return img.resize((W, H), Image.LANCZOS)
 
 
-def _banner_livre(chave, logo, cliente, vende, pedido=""):
+def _banner_livre(chave, logo, cliente, vende, pedido="", marca_hex=None):
     """Prompt mínimo: a logo, o que a empresa vende e o objetivo do banner. O resto é com a IA."""
     from PIL import Image
     tela = Image.new("RGB", (1600, 1200), (255, 255, 255))
@@ -2896,6 +2905,7 @@ def _banner_livre(chave, logo, cliente, vende, pedido=""):
     prompt = (f"Esta é a logo da empresa {cliente}, que vende {vende} para lojistas e revendedores. "
               f"Crie um banner para o portal de pedidos B2B dela, {formato}. Objetivo do banner: receber os clientes "
               f"que entram no portal e convidar a fazer os pedidos por ali. Use esta logo, sem alterá-la."
+              + (f" A cor principal da marca é {marca_hex}." if marca_hex else "")
               + (f" Pedido do executivo: {pedido}." if pedido else ""))
     img = _editar_imagem(tela, prompt, lado=1600)
     return _ajustar_do_zero(img, chave) if img is not None else None
@@ -2947,7 +2957,7 @@ def _lab_do_zero(pecas, logo_arq, entrada, paleta, minimo=False, pedido=""):
     alvos = [c for c in ("login", "cabecalho") if c in pecas]
 
     def uma(chave):
-        tentativas = ([("livre", lambda: _banner_livre(chave, logo, cliente, vende, pedido))] * 2 if minimo else []) + \
+        tentativas = ([("livre", lambda: _banner_livre(chave, logo, cliente, vende, pedido, marca))] * 2 if minimo else []) + \
                      [("guiado", lambda: _banner_guiado(chave, logo, cliente, vende, marca, cena, pedido))] * 2
         for modo, gerar in tentativas:
             img = gerar()
