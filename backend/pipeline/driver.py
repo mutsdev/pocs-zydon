@@ -1995,7 +1995,7 @@ def gerar_com_identidade(entrada, caminho, logo, variar=False, anterior=None, te
         try:
             import subir_banners
             pecas, _ = subir_banners.pecas_da_pasta(nova)
-            if not _lab_do_zero(pecas, logo, entrada, paleta, pedido=(texto or "").strip()[:300]):
+            if not _lab_do_zero(pecas, logo, entrada, paleta, minimo=True, pedido=(texto or "").strip()[:300]):
                 evento("banners", "banner do zero não saiu; ficaram as peças padrão", "aviso")
         except Exception as erro:
             evento("banners", f"banner do zero falhou ({type(erro).__name__}: {str(erro)[:160]}); ficaram as peças padrão", "aviso")
@@ -2884,7 +2884,7 @@ def _ajustar_do_zero(img, chave):
     return img.resize((W, H), Image.LANCZOS)
 
 
-def _banner_livre(chave, logo, cliente, vende):
+def _banner_livre(chave, logo, cliente, vende, pedido=""):
     """Prompt mínimo: a logo, o que a empresa vende e o objetivo do banner. O resto é com a IA."""
     from PIL import Image
     tela = Image.new("RGB", (1600, 1200), (255, 255, 255))
@@ -2895,7 +2895,8 @@ def _banner_livre(chave, logo, cliente, vende):
                else "faixa horizontal muito larga 6:1, cabeçalho do site (o conteúdo importante na faixa central da altura)")
     prompt = (f"Esta é a logo da empresa {cliente}, que vende {vende} para lojistas e revendedores. "
               f"Crie um banner para o portal de pedidos B2B dela, {formato}. Objetivo do banner: receber os clientes "
-              f"que entram no portal e convidar a fazer os pedidos por ali. Use esta logo, sem alterá-la.")
+              f"que entram no portal e convidar a fazer os pedidos por ali. Use esta logo, sem alterá-la."
+              + (f" Pedido do executivo: {pedido}." if pedido else ""))
     img = _editar_imagem(tela, prompt, lado=1600)
     return _ajustar_do_zero(img, chave) if img is not None else None
 
@@ -2946,7 +2947,7 @@ def _lab_do_zero(pecas, logo_arq, entrada, paleta, minimo=False, pedido=""):
     alvos = [c for c in ("login", "cabecalho") if c in pecas]
 
     def uma(chave):
-        tentativas = ([("livre", lambda: _banner_livre(chave, logo, cliente, vende))] * 2 if minimo else []) + \
+        tentativas = ([("livre", lambda: _banner_livre(chave, logo, cliente, vende, pedido))] * 2 if minimo else []) + \
                      [("guiado", lambda: _banner_guiado(chave, logo, cliente, vende, marca, cena, pedido))] * 2
         for modo, gerar in tentativas:
             img = gerar()
