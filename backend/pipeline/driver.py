@@ -16,6 +16,7 @@ import base64
 import io
 import json
 import os
+import random
 import re
 import sys
 import tarfile
@@ -1987,6 +1988,21 @@ def conferir_pecas_ia(pasta, logo, cliente):
 
 
 def gerar_com_identidade(entrada, caminho, logo, variar=False, anterior=None, texto=""):
+    """Peças base conferidas; fora do laboratório, login e cabeçalho viram o banner do zero guiado
+    (se a Images API falhar ou reprovar, ficam as peças base)."""
+    nova, saida, paleta = _gerar_base_conferida(entrada, caminho, logo, variar, anterior, texto)
+    if nova and logo and not LAB_ATIVO:
+        try:
+            import subir_banners
+            pecas, _ = subir_banners.pecas_da_pasta(nova)
+            if not _lab_do_zero(pecas, logo, entrada, paleta, pedido=(texto or "").strip()[:300]):
+                evento("banners", "banner do zero não saiu; ficaram as peças padrão", "aviso")
+        except Exception as erro:
+            evento("banners", f"banner do zero falhou ({type(erro).__name__}: {str(erro)[:160]}); ficaram as peças padrão", "aviso")
+    return nova, saida, paleta
+
+
+def _gerar_base_conferida(entrada, caminho, logo, variar=False, anterior=None, texto=""):
     """Gera e confere as peças. Reprovada na conferência visual: refaz uma vez com fundo claro
     da marca e a logo nas cores originais; reprovada de novo, não sai banner (nunca vai ao ar)."""
     nova, saida, paleta = _gerar_com_identidade(entrada, caminho, logo, variar, anterior, texto)
@@ -2802,10 +2818,92 @@ def _logo_clara(logo):
     return sum(_lum(px[:3]) for px in dados) / len(dados) > 0.6
 
 
-def _banner_do_zero(chave, logo_arq, cliente, segmento, marca_hex):
+CENAS_DO_ZERO = (
+    "um centro de distribuição organizado, com paletes e corredores, luz de fim de tarde",
+    "a entrega chegando na loja de um cliente: van ou caminhão descarregando caixas na porta",
+    "um lojista recebendo e conferindo a mercadoria no balcão da própria loja",
+    "o ambiente onde os produtos são usados pelo cliente final, sem pessoas, bem iluminado",
+    "detalhe próximo dos produtos do segmento bem arrumados, fotografia com profundidade de campo",
+    "uma equipe pequena e diversa conversando no salão de vendas, ninguém olhando para a câmera",
+)
+PESSOAS_DO_ZERO = ("uma mulher de meia-idade", "um jovem", "uma jovem", "um senhor grisalho", "duas pessoas conversando")
+
+INSTRUCAO_CONFERIR_DO_ZERO = """Você confere um banner do portal B2B da empresa "{cliente}" antes de ir ao ar.
+A primeira imagem é a logo correta da empresa; a segunda é o banner.
+Reprove (ok=false) se: a logo do banner estiver ausente ou diferente da correta (letras, símbolo ou cores trocados);
+houver texto com erro de português, letra trocada, palavra inventada ou texto ilegível; texto cortado na borda;
+houver outra marca ou logotipo de terceiros em destaque.
+Responda só JSON: {{"ok": true, "motivo": ""}}"""
+
+
+def _o_que_vende(entrada):
+    try:
+        catalogo = entrada.get("catalogo")
+        if isinstance(catalogo, str):
+            catalogo = json.loads(catalogo)
+        nomes = [p["nome"] for p in _produtos_do_json(catalogo or {}) if p.get("nome")][:6]
+    except Exception:
+        nomes = []
+    segmento = entrada.get("segmento") or "produtos para revenda"
+    return segmento + (f" (por exemplo: {', '.join(nomes)})" if nomes else "")
+
+
+def _b64_pil(img, lado=1024):
+    from PIL import Image
+    copia = img.convert("RGBA")
+    base = Image.new("RGB", copia.size, (255, 255, 255))
+    base.paste(copia, mask=copia.getchannel("A"))
+    base.thumbnail((lado, lado))
+    buf = io.BytesIO()
+    base.save(buf, "JPEG", quality=85)
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+def _conferir_do_zero(img, logo, cliente):
+    """Motivo da reprovação, ou None (aprovado ou conferência indisponível)."""
+    try:
+        resposta, _ = _ia_visao(INSTRUCAO_CONFERIR_DO_ZERO.format(cliente=cliente or "cliente"),
+                                [("Logo correta da empresa:", _b64_pil(logo, 512)), ("Banner:", _b64_pil(img))])
+    except Exception:
+        return None
+    if isinstance(resposta, dict) and resposta.get("ok") is False:
+        return str(resposta.get("motivo") or "reprovado")[:200]
+    return None
+
+
+def _ajustar_do_zero(img, chave):
     from PIL import Image
     W, H = DO_ZERO_TAMANHO[chave]
-    logo = Image.open(logo_arq).convert("RGBA")
+    if chave == "login":
+        return img.resize((W, H), Image.LANCZOS)
+    alto = int(img.size[1] * W / img.size[0])
+    img = img.resize((W, alto), Image.LANCZOS)
+    if alto > H:
+        topo = (alto - H) // 2
+        return img.crop((0, topo, W, topo + H))
+    return img.resize((W, H), Image.LANCZOS)
+
+
+def _banner_livre(chave, logo, cliente, vende):
+    """Prompt mínimo: a logo, o que a empresa vende e o objetivo do banner. O resto é com a IA."""
+    from PIL import Image
+    tela = Image.new("RGB", (1600, 1200), (255, 255, 255))
+    ref = logo.copy()
+    ref.thumbnail((900, 600), Image.LANCZOS)
+    tela.paste(ref, ((1600 - ref.size[0]) // 2, (1200 - ref.size[1]) // 2), ref)
+    formato = ("formato paisagem 4:3, tela de login" if chave == "login"
+               else "faixa horizontal muito larga 6:1, cabeçalho do site (o conteúdo importante na faixa central da altura)")
+    prompt = (f"Esta é a logo da empresa {cliente}, que vende {vende} para lojistas e revendedores. "
+              f"Crie um banner para o portal de pedidos B2B dela, {formato}. Objetivo do banner: receber os clientes "
+              f"que entram no portal e convidar a fazer os pedidos por ali. Use esta logo, sem alterá-la.")
+    img = _editar_imagem(tela, prompt, lado=1600)
+    return _ajustar_do_zero(img, chave) if img is not None else None
+
+
+def _banner_guiado(chave, logo, cliente, vende, marca_hex, cena, pedido=""):
+    """Layout fixo (logo original colada por cima), cena sorteada para os portais não ficarem iguais."""
+    W, H = DO_ZERO_TAMANHO[chave]
+    from PIL import Image
     clara = _logo_clara(logo)
     fundo_logo = _rgb(marca_hex) if clara and marca_hex else ((28, 28, 30) if clara else (255, 255, 255))
     tela = Image.new("RGB", (W, H), fundo_logo)
@@ -2813,51 +2911,62 @@ def _banner_do_zero(chave, logo_arq, cliente, segmento, marca_hex):
     tela.paste(ref, pos, ref)
     tom = "escuro na cor da marca" if clara else "claro e limpo"
     if chave == "login":
-        layout = (f"formato paisagem 4:3. Lado esquerdo (40%): fundo {tom} e liso; no canto superior esquerdo um espaço VAZIO "
-                  f"reservado à logo (não desenhe logo nem texto ali, mantenha a cor {_hex(fundo_logo)}); abaixo, o título "
-                  f"'PORTAL DO CLIENTE' em caixa alta e a frase 'Compre com agilidade e segurança, direto do seu fornecedor.' "
-                  f"Lado direito (60%): ")
+        layout = (f"formato paisagem 4:3. Lado esquerdo (40%): fundo {tom} e liso. A logo ocupa o canto superior esquerdo "
+                  f"(até 30% da altura): deixe essa área VAZIA na cor {_hex(fundo_logo)}, sem desenhar logo nem texto. "
+                  f"Logo abaixo dela, sem vão grande, o título 'PORTAL DO CLIENTE' em caixa alta, grande, e a frase "
+                  f"'Compre com agilidade e segurança, direto do seu fornecedor.' alinhados à esquerda. Lado direito (60%): ")
     else:
-        layout = (f"faixa horizontal muito larga, 6:1 (cabeçalho de site); todo o conteúdo importante fica na faixa central da altura. "
+        layout = (f"faixa horizontal muito larga, 6:1 (cabeçalho de site); todo o conteúdo importante na faixa central da altura. "
                   f"Terço esquerdo: fundo {tom}, liso e totalmente VAZIO na cor {_hex(fundo_logo)} (sem logo, sem texto). Restante: ")
-    prompt = (f"A imagem mostra a logo da empresa só como referência de cores e estilo. Crie do zero um banner profissional de portal "
-              f"B2B de pedidos, como feito por um designer gráfico sênior, {layout}"
-              f"uma cena fotográfica que transmita o contexto do negócio de {cliente}, empresa de {segmento or 'distribuição'} que "
-              f"atende lojistas e revendedores (ambiente, sensação, uso). Composição coesa com iluminação única e transição suave "
-              f"entre os dois lados; sem produtos soltos colados, sem colagem, sem elementos jogados. Use as cores da logo como "
-              f"paleta. Não reproduza a logo nem o nome da empresa. Sem texto além do pedido, sem marca d'água, tipografia correta "
-              f"em português.")
+    prompt = (f"A imagem mostra a logo da empresa só como referência de cores. Crie do zero um banner profissional de portal B2B "
+              f"de pedidos, como feito por um designer gráfico sênior, {layout}uma cena fotográfica de {cena}, no contexto de "
+              f"{cliente}, que vende {vende} para lojistas e revendedores. Se aparecer gente, use {random.choice(PESSOAS_DO_ZERO)}; "
+              f"evite o clichê de homem de avental com tablet. Composição coesa, iluminação única, transição suave entre os "
+              f"dois lados; sem produtos colados, sem colagem. Use as cores da logo como paleta. Não reproduza a logo nem o "
+              f"nome da empresa. Sem texto além do pedido, sem marca d'água, tipografia correta em português."
+              + (f" Pedido do executivo: {pedido}." if pedido else ""))
     img = _editar_imagem(tela, prompt, lado=1920)
     if img is None:
         return None
-    if chave == "login":
-        img = img.resize((W, H), Image.LANCZOS)
-    else:
-        alto = int(img.size[1] * W / img.size[0])
-        img = img.resize((W, alto), Image.LANCZOS)
-        if alto > H:
-            topo = (alto - H) // 2
-            img = img.crop((0, topo, W, topo + H))
-        else:
-            img = img.resize((W, H), Image.LANCZOS)
+    img = _ajustar_do_zero(img, chave)
     ref, pos = _caixa_logo(chave, W, H, logo)
     img.paste(ref, pos, ref)
     return img
 
 
-def _lab_do_zero(pecas, logo, entrada, paleta):
+def _lab_do_zero(pecas, logo_arq, entrada, paleta, minimo=False, pedido=""):
+    """Gera login e cabeçalho do zero, conferidos (logo fiel, texto sem erro); até 2 tentativas por peça.
+    Devolve o modo usado ('do_zero_livre' ou 'do_zero') ou None se não saiu."""
     from PIL import Image
+    logo = Image.open(logo_arq).convert("RGBA")
+    cliente = entrada.get("cliente") or ""
+    vende = _o_que_vende(entrada)
     marca = paleta.get("principal")
+    cena = random.choice(CENAS_DO_ZERO)
     alvos = [c for c in ("login", "cabecalho") if c in pecas]
+
+    def uma(chave):
+        tentativas = ([("livre", lambda: _banner_livre(chave, logo, cliente, vende))] * 2 if minimo else []) + \
+                     [("guiado", lambda: _banner_guiado(chave, logo, cliente, vende, marca, cena, pedido))] * 2
+        for modo, gerar in tentativas:
+            img = gerar()
+            if img is None:
+                continue
+            motivo = _conferir_do_zero(img, logo, cliente)
+            if not motivo:
+                return modo, img
+            evento("banners", f"banner do zero ({chave}, {modo}) reprovado na conferência: {motivo}; refazendo", "aviso")
+        return None, None
+
     with selecao.ThreadPoolExecutor(2) as pool:
-        feitas = dict(zip(alvos, pool.map(lambda c: _banner_do_zero(c, logo, entrada.get("cliente") or "",
-                                                                       entrada.get("segmento"), marca), alvos)))
-    if not all(feitas.get(c) is not None for c in alvos):
-        return False
-    for chave, img in feitas.items():
-        destino = Image.open(pecas[chave]).size
-        img.resize(destino, Image.LANCZOS).save(pecas[chave])
-    return True
+        feitas = dict(zip(alvos, pool.map(uma, alvos)))
+    if not all(feitas[c][1] is not None for c in alvos):
+        return None
+    for chave, (_, img) in feitas.items():
+        img.resize(Image.open(pecas[chave]).size, Image.LANCZOS).save(pecas[chave])
+    modos = {m for m, _ in feitas.values()}
+    evento("banners", f"banner criado do zero ({', '.join(sorted(modos))}); cena: {cena if 'guiado' in modos else 'livre'}")
+    return "do_zero_livre" if modos == {"livre"} else "do_zero"
 
 
 def _modelo_da_regra(regras, indice):
@@ -2895,10 +3004,10 @@ def lab_banner(entrada):
         raise RuntimeError("peça base não saiu: " + str(saida)[-400:])
     pecas, _ = subir_banners.pecas_da_pasta(gerada)
     if (entrada.get("modelo") or "do_zero") == "do_zero":
-        if _lab_do_zero(pecas, logo, entrada, paleta):
-            evento("banners", "laboratório: banner criado do zero pela Images API (logo + briefing da empresa)")
+        modo = _lab_do_zero(pecas, logo, entrada, paleta, minimo=True)
+        if modo:
             telas = pecas_para_tela(gerada)
-            return {"modelo": "do_zero", "cor": cor_da_pasta(gerada), "banners_tar": empacotar(gerada),
+            return {"modelo": modo, "cor": cor_da_pasta(gerada), "banners_tar": empacotar(gerada),
                     "login": (telas.get("login") or {}).get("previa_base64"),
                     "cabecalho": (telas.get("cabecalho") or {}).get("previa_base64")}
         evento("banners", "laboratório: criação do zero falhou; caiu na composição com fotos", "aviso")

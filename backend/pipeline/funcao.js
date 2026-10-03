@@ -83,8 +83,8 @@ function rodarPython(acao, entrada, aoEvento, aoParcial) {
         } else { log = (log + linha + '\n').slice(-6000); }
       }
     };
-    const limiteMs = (acao === 'banner' || acao === 'previa') && entrada.cena_ia ? 12 * 60 * 1000
-      : acao === 'banner' || acao === 'previa' || acao === 'trocar_logo' ? 6 * 60 * 1000 : 25 * 60 * 1000;
+    const limiteMs = acao === 'banner' || acao === 'previa' ? 14 * 60 * 1000
+      : acao === 'trocar_logo' ? 6 * 60 * 1000 : 25 * 60 * 1000;
     let porTempo = false;
     const relogio = setTimeout(() => { porTempo = true; log += `\ntempo limite de ${limiteMs / 60000} min: etapa encerrada`; filho.kill('SIGKILL'); }, limiteMs);
     filho.on('close', () => clearTimeout(relogio));

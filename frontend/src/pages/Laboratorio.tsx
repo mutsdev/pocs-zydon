@@ -23,7 +23,7 @@ const MARCAS: [string, string][] = [
   ['logo', 'Logo'], ['cores', 'Cores'], ['produto', 'Produto'],
   ['composicao', 'Composição'], ['texto', 'Texto'], ['amador', 'Parece amador'],
 ]
-const MODELO: Record<string, string> = { do_zero: 'Do zero (IA)', destaque: 'Destaque', trio: 'Trio', padrao: 'Padrão gráfico', so_marca: 'Só a marca', diagonal: 'Diagonal', vitrine: 'Vitrine', em_uso: 'Produto em uso', padrao_marca: 'Linhas da marca' }
+const MODELO: Record<string, string> = { do_zero_livre: 'Do zero livre (IA)', do_zero: 'Do zero (IA)', destaque: 'Destaque', trio: 'Trio', padrao: 'Padrão gráfico', so_marca: 'Só a marca', diagonal: 'Diagonal', vitrine: 'Vitrine', em_uso: 'Produto em uso', padrao_marca: 'Linhas da marca' }
 const SITUACAO: Record<string, { rotulo: string; variante: 'success' | 'danger' | 'info' | 'warning' | 'neutral' }> = {
   na_fila: { rotulo: 'Na fila', variante: 'neutral' },
   gerando: { rotulo: 'Gerando', variante: 'info' },
