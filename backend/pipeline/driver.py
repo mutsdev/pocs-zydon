@@ -2693,12 +2693,32 @@ def _mascara_arco(tamanho, chave):
     return m.filter(ImageFilter.GaussianBlur(1.5))
 
 
+def _fim_do_texto(peca, inicio):
+    """Primeira coluna depois de inicio sem texto do painel (cor da tinta) por uma faixa de
+    3% da largura: o texto maior do lab pode passar do painel e não pode ser cortado."""
+    import numpy as np
+    arr = np.asarray(peca.convert("RGB"), dtype=np.int16)
+    w = arr.shape[1]
+    fundo = arr[6, 6]
+    tintas = [np.array(c, dtype=np.int16) for c in ((255, 255, 255), (16, 20, 24), (28, 28, 30))]
+    tinta = max(tintas, key=lambda c: int(np.abs(c - fundo).sum()))
+    tem = (np.abs(arr - tinta).sum(axis=2) < 90).any(axis=0)
+    folga = max(8, int(w * 0.03))
+    x, vazio = inicio, 0
+    while x < int(w * 0.70):
+        vazio = vazio + 1 if not tem[x] else 0
+        if vazio >= folga:
+            return x - folga + max(4, folga // 3)
+        x += 1
+    return inicio
+
+
 def _compor_canto(caminho, chave, paleta, fotos, modelo, cena=None):
     from PIL import Image, ImageDraw
     peca = Image.open(caminho).convert("RGBA")
     w, h = peca.size
-    xp = int(w * PINTAR_DE[chave])
-    xc = int(w * INICIO_LIVRE[chave])
+    xp = _fim_do_texto(peca, int(w * PINTAR_DE[chave]))
+    xc = max(int(w * INICIO_LIVRE[chave]), xp + int(w * 0.02))
     fundo = peca.getpixel((6, 6))[:3]
     destaque = _rgb(paleta.get("destaque") or paleta.get("principal"))
     arco_cor, linha, sutil = _tons_lab(fundo, destaque)
