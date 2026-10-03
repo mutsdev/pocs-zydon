@@ -2484,13 +2484,13 @@ def _images_api(nome, argumentos):
     return res or None
 
 
-def _editar_imagem(foto, prompt, espera=300):
+def _editar_imagem(foto, prompt, espera=300, lado=1024):
     """Edita a foto pela Images API (sempre devolve JPEG). None quando falha ou demora."""
     import time
     from PIL import Image
     try:
         img = foto.convert("RGB")
-        img.thumbnail((1024, 1024), Image.LANCZOS)
+        img.thumbnail((lado, lado), Image.LANCZOS)
         buf = io.BytesIO()
         img.save(buf, "JPEG", quality=92)
         uri = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
@@ -2780,6 +2780,86 @@ def _compor_canto(caminho, chave, paleta, fotos, modelo, cena=None):
     peca.convert("RGB").save(caminho)
 
 
+
+# --- Rodada 3: banner inteiro pedido do zero à Images API (logo + briefing), logo original colada por cima ---
+DO_ZERO_TAMANHO = {"login": (2400, 1800), "cabecalho": (1920, 320)}
+
+
+def _caixa_logo(chave, W, H, logo):
+    from PIL import Image
+    ref = logo.copy()
+    if chave == "login":
+        ref.thumbnail((int(W * 0.30), int(H * 0.20)), Image.LANCZOS)
+        return ref, (int(W * 0.06), int(H * 0.07))
+    ref.thumbnail((int(W * 0.14), int(H * 0.55)), Image.LANCZOS)
+    return ref, (int(W * 0.04), (H - ref.size[1]) // 2)
+
+
+def _logo_clara(logo):
+    dados = [px for px in logo.convert("RGBA").getdata() if px[3] > 128]
+    if not dados:
+        return False
+    return sum(_lum(px[:3]) for px in dados) / len(dados) > 0.6
+
+
+def _banner_do_zero(chave, logo_arq, cliente, segmento, marca_hex):
+    from PIL import Image
+    W, H = DO_ZERO_TAMANHO[chave]
+    logo = Image.open(logo_arq).convert("RGBA")
+    clara = _logo_clara(logo)
+    fundo_logo = _rgb(marca_hex) if clara and marca_hex else ((28, 28, 30) if clara else (255, 255, 255))
+    tela = Image.new("RGB", (W, H), fundo_logo)
+    ref, pos = _caixa_logo(chave, W, H, logo)
+    tela.paste(ref, pos, ref)
+    tom = "escuro na cor da marca" if clara else "claro e limpo"
+    if chave == "login":
+        layout = (f"formato paisagem 4:3. Lado esquerdo (40%): fundo {tom} e liso; no canto superior esquerdo um espaço VAZIO "
+                  f"reservado à logo (não desenhe logo nem texto ali, mantenha a cor {_hex(fundo_logo)}); abaixo, o título "
+                  f"'PORTAL DO CLIENTE' em caixa alta e a frase 'Compre com agilidade e segurança, direto do seu fornecedor.' "
+                  f"Lado direito (60%): ")
+    else:
+        layout = (f"faixa horizontal muito larga, 6:1 (cabeçalho de site); todo o conteúdo importante fica na faixa central da altura. "
+                  f"Terço esquerdo: fundo {tom}, liso e totalmente VAZIO na cor {_hex(fundo_logo)} (sem logo, sem texto). Restante: ")
+    prompt = (f"A imagem mostra a logo da empresa só como referência de cores e estilo. Crie do zero um banner profissional de portal "
+              f"B2B de pedidos, como feito por um designer gráfico sênior, {layout}"
+              f"uma cena fotográfica que transmita o contexto do negócio de {cliente}, empresa de {segmento or 'distribuição'} que "
+              f"atende lojistas e revendedores (ambiente, sensação, uso). Composição coesa com iluminação única e transição suave "
+              f"entre os dois lados; sem produtos soltos colados, sem colagem, sem elementos jogados. Use as cores da logo como "
+              f"paleta. Não reproduza a logo nem o nome da empresa. Sem texto além do pedido, sem marca d'água, tipografia correta "
+              f"em português.")
+    img = _editar_imagem(tela, prompt, lado=1920)
+    if img is None:
+        return None
+    if chave == "login":
+        img = img.resize((W, H), Image.LANCZOS)
+    else:
+        alto = int(img.size[1] * W / img.size[0])
+        img = img.resize((W, alto), Image.LANCZOS)
+        if alto > H:
+            topo = (alto - H) // 2
+            img = img.crop((0, topo, W, topo + H))
+        else:
+            img = img.resize((W, H), Image.LANCZOS)
+    ref, pos = _caixa_logo(chave, W, H, logo)
+    img.paste(ref, pos, ref)
+    return img
+
+
+def _lab_do_zero(pecas, logo, entrada, paleta):
+    from PIL import Image
+    marca = paleta.get("principal")
+    alvos = [c for c in ("login", "cabecalho") if c in pecas]
+    with selecao.ThreadPoolExecutor(2) as pool:
+        feitas = dict(zip(alvos, pool.map(lambda c: _banner_do_zero(c, logo, entrada.get("cliente") or "",
+                                                                       entrada.get("segmento"), marca), alvos)))
+    if not all(feitas.get(c) is not None for c in alvos):
+        return False
+    for chave, img in feitas.items():
+        destino = Image.open(pecas[chave]).size
+        img.resize(destino, Image.LANCZOS).save(pecas[chave])
+    return True
+
+
 def _modelo_da_regra(regras, indice):
     pesos = (regras or {}).get("pesos") or {}
     ordem = sorted(MODELOS_LAB, key=lambda m: -float(pesos.get(m, 3)))
@@ -2813,8 +2893,16 @@ def lab_banner(entrada):
     gerada, saida, paleta = gerar_com_identidade(entrada, caminho, logo, variar=False)
     if not gerada:
         raise RuntimeError("peça base não saiu: " + str(saida)[-400:])
-    modelo = entrada.get("modelo") or _modelo_da_regra(regras, int(entrada.get("indice") or 0))
     pecas, _ = subir_banners.pecas_da_pasta(gerada)
+    if (entrada.get("modelo") or "do_zero") == "do_zero":
+        if _lab_do_zero(pecas, logo, entrada, paleta):
+            evento("banners", "laboratório: banner criado do zero pela Images API (logo + briefing da empresa)")
+            telas = pecas_para_tela(gerada)
+            return {"modelo": "do_zero", "cor": cor_da_pasta(gerada), "banners_tar": empacotar(gerada),
+                    "login": (telas.get("login") or {}).get("previa_base64"),
+                    "cabecalho": (telas.get("cabecalho") or {}).get("previa_base64")}
+        evento("banners", "laboratório: criação do zero falhou; caiu na composição com fotos", "aviso")
+    modelo = _modelo_da_regra(regras, int(entrada.get("indice") or 0))
     fundo_hex = paleta.get("principal") or "#FFFFFF"
     try:
         from PIL import Image

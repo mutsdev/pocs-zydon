@@ -1,9 +1,9 @@
-// Laboratorio de banners (admin e Dexter): abre rodada de 10, salva avaliacao e aprova (aplica no portal).
+// Laboratorio de banners (admin e Dexter): abre rodada de 5, salva avaliacao e aprova (aplica no portal).
 const { createClient } = require('@mitralab.io/functions-sdk');
 
 __GUARDA__
 
-const TAMANHO_RODADA = 10;
+const TAMANHO_RODADA = 5;
 const MARCAS = ['logo', 'cores', 'produto', 'composicao', 'texto', 'amador'];
 
 module.exports = async (event, context) => {

@@ -23,7 +23,7 @@ const MARCAS: [string, string][] = [
   ['logo', 'Logo'], ['cores', 'Cores'], ['produto', 'Produto'],
   ['composicao', 'Composição'], ['texto', 'Texto'], ['amador', 'Parece amador'],
 ]
-const MODELO: Record<string, string> = { destaque: 'Destaque', trio: 'Trio', padrao: 'Padrão gráfico', so_marca: 'Só a marca', diagonal: 'Diagonal', vitrine: 'Vitrine', em_uso: 'Produto em uso', padrao_marca: 'Linhas da marca' }
+const MODELO: Record<string, string> = { do_zero: 'Do zero (IA)', destaque: 'Destaque', trio: 'Trio', padrao: 'Padrão gráfico', so_marca: 'Só a marca', diagonal: 'Diagonal', vitrine: 'Vitrine', em_uso: 'Produto em uso', padrao_marca: 'Linhas da marca' }
 const SITUACAO: Record<string, { rotulo: string; variante: 'success' | 'danger' | 'info' | 'warning' | 'neutral' }> = {
   na_fila: { rotulo: 'Na fila', variante: 'neutral' },
   gerando: { rotulo: 'Gerando', variante: 'info' },
@@ -174,10 +174,10 @@ export default function Laboratorio() {
   const opcoesRodada = [{ value: '', label: 'Todas as rodadas' }, ...(rodadas || []).map((r) => ({ value: String(r.numero), label: `Rodada ${r.numero}` }))]
 
   return (
-    <Pagina titulo="Laboratório de banners" subtitulo="Banners novos de 10 em 10. Dê nota e comente: a próxima rodada sai com as correções."
+    <Pagina titulo="Laboratório de banners" subtitulo="Banners novos de 5 em 5. Dê nota e comente: a próxima rodada sai com as correções."
       acao={<Button onClick={novaRodada} disabled={abrindo || gerandoAgora}>
         {abrindo ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
-        {gerandoAgora ? 'Rodada em geração' : 'Gerar próximos 10'}
+        {gerandoAgora ? 'Rodada em geração' : 'Gerar próximos 5'}
       </Button>}>
       <ToastContainer toasts={toasts} onRemove={removeToast} />
 
@@ -212,8 +212,8 @@ export default function Laboratorio() {
       {erro && <Aviso tipo="danger" titulo={erro}>Tente recarregar a página.</Aviso>}
       {!itens && !erro && <Card><Esqueleto linhas={6} /></Card>}
       {itens && itens.length === 0 && (
-        <Card><Vazio titulo="Nenhum banner aqui ainda" texto="Gere a primeira rodada: pego 10 portais já criados e faço banners novos para vocês avaliarem."
-          acao={<Button onClick={novaRodada} disabled={abrindo || gerandoAgora}><FlaskConical size={16} /> Gerar próximos 10</Button>} /></Card>
+        <Card><Vazio titulo="Nenhum banner aqui ainda" texto="Gere a primeira rodada: pego 5 portais já criados e faço banners novos para vocês avaliarem."
+          acao={<Button onClick={novaRodada} disabled={abrindo || gerandoAgora}><FlaskConical size={16} /> Gerar próximos 5</Button>} /></Card>
       )}
 
       <div className="flex flex-col gap-6">
