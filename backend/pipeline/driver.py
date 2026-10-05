@@ -2848,7 +2848,8 @@ INSTRUCAO_CONFERIR_DO_ZERO = """Você confere um banner do portal B2B da empresa
 A primeira imagem é a logo correta da empresa; a segunda é o banner.
 Reprove (ok=false) se: a logo do banner estiver ausente ou diferente da correta (letras, símbolo ou cores trocados);
 houver texto com erro de português, letra trocada, palavra inventada ou texto ilegível; texto cortado na borda;
-houver outra marca ou logotipo de terceiros em destaque.
+houver outra marca ou logotipo de terceiros em destaque; houver BOTÃO desenhado (ex.: "Faça seu pedido", "Comprar");
+qualquer letra, título, logo ou botão encostando ou cortado na borda de cima, de baixo ou das laterais.
 Responda só JSON: {{"ok": true, "motivo": ""}}"""
 
 
@@ -2908,10 +2909,13 @@ def _banner_livre(chave, logo, cliente, vende, pedido="", marca_hex=None):
     ref.thumbnail((900, 600), Image.LANCZOS)
     tela.paste(ref, ((1600 - ref.size[0]) // 2, (1200 - ref.size[1]) // 2), ref)
     formato = ("formato paisagem 4:3, tela de login" if chave == "login"
-               else "faixa horizontal muito larga 6:1, cabeçalho do site (o conteúdo importante na faixa central da altura)")
+               else "faixa horizontal muito larga 6:1, cabeçalho do site. A imagem será RECORTADA para uma faixa fina: "
+                    "logo e textos devem ficar TODOS numa faixa horizontal central que ocupa só 1/5 da altura da imagem; acima e "
+                    "abaixo dessa faixa, só fundo ou cena, sem letra nenhuma; títulos pequenos, em uma linha cada")
     prompt = (f"Esta é a logo da empresa {cliente}, que vende {vende} para lojistas e revendedores. "
               f"Crie um banner para o portal de pedidos B2B dela, {formato}. Objetivo do banner: receber os clientes "
-              f"que entram no portal e convidar a fazer os pedidos por ali. Use esta logo, sem alterá-la."
+              f"que entram no portal e convidar a fazer os pedidos por ali. Use esta logo, sem alterá-la. "
+              f"Não desenhe botão nenhum (nada de 'Faça seu pedido', 'Comprar', 'Saiba mais' em botão ou caixa)."
               + (f" A cor principal da marca é {marca_hex}." if marca_hex else "")
               + (f" Pedido do executivo: {pedido}." if pedido else ""))
     img = _editar_imagem(tela, prompt, lado=1600)
