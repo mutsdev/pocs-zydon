@@ -2354,6 +2354,29 @@ def telufia(entrada):
         catalogo = json.loads(catalogo)
     return {"telufia": ativar_telufia(catalogo, entrada["cliente"], entrada.get("segmento") or "", entrada["portal_id"])}
 
+
+def telufia_portal(entrada):
+    """Ativa a Telufia num portal sem pedido no banco: acha o id pelo nome em /account/solutions,
+    confere que o endereço bate e usa o catálogo JSON do repositório."""
+    import requests
+    import credenciais
+    nome, url_esperada = entrada["nome_portal"], (entrada.get("url") or "").rstrip("/")
+    headers, _ = credenciais.carregar(ORG)
+    lista = requests.get(credenciais.SOLUTIONS_URL, headers=headers, timeout=30)
+    if lista.status_code != 200:
+        return {"telufia": {"situacao": "falhou", "motivo": f"lista de portais respondeu HTTP {lista.status_code}"}}
+    candidatos = [s.get("id") for s in (lista.json() or {}).get("items", []) if (s.get("name") or "").strip() == nome]
+    portal_id = None
+    for candidato in candidatos:
+        url = (url_pelo_portal_id(candidato) or "").rstrip("/")
+        if not url_esperada or url == url_esperada:
+            portal_id = candidato
+            break
+    if not portal_id:
+        return {"telufia": {"situacao": "falhou", "motivo": f"portal '{nome}' não achado ({len(candidatos)} com esse nome)"}}
+    catalogo = json.loads((REPO / entrada["catalogo_arquivo"]).read_text(encoding="utf-8"))
+    return {"portal_id": portal_id, "telufia": ativar_telufia(catalogo, entrada["cliente"], entrada.get("segmento") or "", portal_id)}
+
 def url_portal(entrada):
     return {"url": url_pelo_portal_id(entrada["portal_id"])}
 
@@ -3253,7 +3276,7 @@ def _mobile_seguro(pasta, logo=None, cliente="", so_se_faltar=False):
         return None
 
 
-ACOES = {"loja_publica": loja_publica, "url_portal": url_portal, "trocar_logo": trocar_logo, "miniaturas": miniaturas, "extrair": extrair, "avaliar": avaliar, "previa": previa, "criar": criar, "banner": banner, "telufia": telufia, "lab_banner": lab_banner, "lab_aplicar": lab_aplicar}
+ACOES = {"loja_publica": loja_publica, "url_portal": url_portal, "trocar_logo": trocar_logo, "miniaturas": miniaturas, "extrair": extrair, "avaliar": avaliar, "previa": previa, "criar": criar, "banner": banner, "telufia": telufia, "telufia_portal": telufia_portal, "lab_banner": lab_banner, "lab_aplicar": lab_aplicar}
 
 
 def _restaurar_cores_navegador(entrada):

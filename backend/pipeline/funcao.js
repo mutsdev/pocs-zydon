@@ -758,14 +758,21 @@ async function labAplicar(ev) {
   return { ok: true };
 }
 
-const ACOES = { loja_publica: lojaPublica, url_portal: urlPortal, extrair, previa, criar, banner, avaliar, miniaturas, trocar_logo: trocarLogo, telufia, despachar, auto, lab_despachar: labDespachar, lab_aplicar: labAplicar };
-const ACOES_INTERNAS = ['despachar', 'auto', 'url_portal', 'loja_publica', 'lab_despachar', 'lab_aplicar'];
+async function telufiaPortal(ev) {
+  const saida = await rodarPython('telufia_portal', { nome_portal: ev.nome_portal, url: ev.url || '', cliente: ev.cliente,
+    segmento: ev.segmento || '', catalogo_arquivo: ev.catalogo_arquivo }, (e) => console.log(e.etapa, e.mensagem));
+  return { ok: !!(saida.ok && saida.telufia && saida.telufia.situacao === 'ativada'), portal_id: saida.portal_id,
+    telufia: saida.telufia, erro: saida.erro };
+}
+
+const ACOES = { loja_publica: lojaPublica, url_portal: urlPortal, extrair, previa, criar, banner, avaliar, miniaturas, trocar_logo: trocarLogo, telufia, telufia_portal: telufiaPortal, despachar, auto, lab_despachar: labDespachar, lab_aplicar: labAplicar };
+const ACOES_INTERNAS = ['telufia_portal', 'despachar', 'auto', 'url_portal', 'loja_publica', 'lab_despachar', 'lab_aplicar'];
 
 module.exports = async (event, context) => {
   const ev = (event && event.input) ? event.input : (event || {});
   const acao = ev.acao;
   if (!ACOES[acao]) return { ok: false, erro: `ação desconhecida: ${acao}` };
-  if (!['avaliar', 'despachar', 'lab_despachar'].includes(acao) && !ev.pedido_id) return { ok: false, erro: 'CAMPOS_FALTANDO', faltando: ['pedido_id'] };
+  if (!['avaliar', 'despachar', 'lab_despachar', 'telufia_portal'].includes(acao) && !ev.pedido_id) return { ok: false, erro: 'CAMPOS_FALTANDO', faltando: ['pedido_id'] };
   const faltando = SEGREDOS.filter((nome) => !process.env[nome]);
   mitra = createClient();
   await mitra.init();
