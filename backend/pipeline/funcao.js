@@ -231,8 +231,14 @@ async function extrair(ev, execucao) {
   await registrar.fim();
   const jaGravada = parcial ? await parcial : false;
   if (!saida.ok && jaGravada) {
-    await registrar({ etapa: 'banners', mensagem: `banner não terminou: ${saida.erro}`, nivel: 'aviso' });
-    await dml(`UPDATE pedidos SET banners_situacao = 'sem_banner', execucao_atual = NULL WHERE pedido_id = :p`, { p: pedidoId });
+    await registrar({ etapa: 'banners', mensagem: `banner não terminou junto com a busca (${saida.erro}); gerando agora, sozinho`, nivel: 'aviso' });
+    await dml(`UPDATE pedidos SET banners_situacao = 'gerando', execucao_atual = NULL WHERE pedido_id = :p`, { p: pedidoId });
+    try {
+      await previa({ pedido_id: pedidoId }, execucao);
+    } catch (erro) {
+      await registrar({ etapa: 'banners', mensagem: `banner falhou: ${erro.message}`, nivel: 'erro' });
+      await dml(`UPDATE pedidos SET banners_situacao = 'sem_banner', execucao_atual = NULL WHERE pedido_id = :p`, { p: pedidoId });
+    }
     return { ok: true, status: 'curadoria' };
   }
   if (!saida.ok) { await falhar(pedidoId, saida.erro, registrar); return saida; }

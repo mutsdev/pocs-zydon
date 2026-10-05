@@ -1690,7 +1690,7 @@ def produtos_pelo_barroso(cliente, site, observacao, alvo):
                                                      observacao=observacao or "nenhuma", alvo=max(alvo * 2, alvo + 6))}
     evento("extracao", f"modo barroso-chat: a IA pesquisa o site e a web sozinha ({MODELO_BUSCA})")
     try:
-        r = requests.post(BARROSO_URL, json=pedido, headers={"Authorization": "Bearer " + chave}, timeout=150)
+        r = requests.post(BARROSO_URL, json=pedido, headers={"Authorization": "Bearer " + chave}, timeout=240)
     except requests.RequestException as erro:
         evento("extracao", f"modo barroso-chat falhou ({type(erro).__name__}); seguindo a busca normal", "aviso")
         return [], ""
