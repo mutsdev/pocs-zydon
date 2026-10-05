@@ -1999,6 +1999,8 @@ def gerar_com_identidade(entrada, caminho, logo, variar=False, anterior=None, te
                 evento("banners", "banner do zero não saiu; ficaram as peças padrão", "aviso")
         except Exception as erro:
             evento("banners", f"banner do zero falhou ({type(erro).__name__}: {str(erro)[:160]}); ficaram as peças padrão", "aviso")
+    if nova and not LAB_ATIVO:
+        _mobile_seguro(nova, logo, entrada.get("cliente") or "")
     return nova, saida, paleta
 
 
@@ -2084,7 +2086,7 @@ def previa(entrada):
         except Exception as erro:
             return {"sem_banner": f"sem logo e a logo de texto falhou ({type(erro).__name__}: {erro})"}
     caminho = gravar_catalogo(entrada["catalogo"], pedido_id)
-    evento("banners", "gerando as peças (login e cabeçalho)")
+    evento("banners", "gerando as peças (login, cabeçalho web e mobile)")
     gerada, saida, _ = gerar_com_identidade(entrada, caminho, logo, variar=False)
     if not gerada:
         return {"sem_banner": str(saida)[-800:]}
@@ -2174,6 +2176,7 @@ def criar(entrada):
                              observacoes=resultado.get("observacoes") if resultado.get("status") == "concluido" else "")
     saida = {"resultado": resultado}
     if resultado.get("status") == "concluido" and banners:
+        _mobile_seguro(banners, logo, entrada.get("cliente") or "", so_se_faltar=True)
         try:
             evento("banners", "publicando as peças no portal (ainda não aplicadas)")
             saida["publicadas"] = atendimento.publicar_pecas(ORG, resultado["portal_id"], banners)
@@ -2226,10 +2229,14 @@ def banner(entrada):
     elif acao == "recolorir":
         pecas = list(atendimento.DESTINOS_BANNER)
         nova, saida = atendimento.repintar_pecas(banners, entrada["cor"])
+        if nova:
+            _mobile_seguro(nova, None, entrada.get("cliente") or "")
     else:
         raise RuntimeError(f"ação de banner desconhecida: {acao}")
     if not nova:
         raise RuntimeError(str(saida)[-800:])
+    if "cabecalho" in pecas and MOBILE not in pecas:
+        pecas = list(pecas) + [MOBILE]
     resposta = {"pecas": pecas_para_tela(nova, set(pecas)), "cor": cor_da_pasta(nova),
                 "banners_tar": empacotar(nova)}
     if portal_id:
@@ -3017,6 +3024,7 @@ def lab_banner(entrada):
     if (entrada.get("modelo") or "do_zero") == "do_zero":
         modo = _lab_do_zero(pecas, logo, entrada, paleta, minimo=True)
         if modo:
+            _mobile_seguro(gerada, logo, entrada.get("cliente") or "")
             telas = pecas_para_tela(gerada)
             return {"modelo": modo, "cor": cor_da_pasta(gerada), "banners_tar": empacotar(gerada),
                     "login": (telas.get("login") or {}).get("previa_base64"),
@@ -3046,6 +3054,7 @@ def lab_banner(entrada):
             if chave in INICIO_LIVRE:
                 _compor_canto(arquivo, chave, paleta, fotos, modelo, cena)
         evento("banners", f"laboratório: modelo {modelo} com {len(fotos)} foto(s), fundo {fundo_hex}")
+    _mobile_seguro(gerada, logo, entrada.get("cliente") or "")
     telas = pecas_para_tela(gerada)
     return {"modelo": modelo, "cor": cor_da_pasta(gerada), "banners_tar": empacotar(gerada),
             "login": (telas.get("login") or {}).get("previa_base64"),
@@ -3057,6 +3066,7 @@ def lab_aplicar(entrada):
     pasta = pasta_pedido(f"lab-aplicar-{entrada['lab_id']}")
     banners = desempacotar(entrada["banners_tar"], pasta / "banners")
     portal_id = entrada["portal_id"]
+    _mobile_seguro(banners, None, entrada.get("cliente") or "", so_se_faltar=True)
     publicadas = atendimento.publicar_pecas(ORG, portal_id, banners)
     escolhas = {k: v["file_id"] for k, v in (publicadas or {}).items() if v and v.get("file_id")}
     if not escolhas:
@@ -3066,6 +3076,177 @@ def lab_aplicar(entrada):
     except atendimento.GravacaoPelaMetade as erro:
         return {"aplicado_parcial": True, "erro": str(erro), "publicadas": publicadas}
     return {"relato": relato, "publicadas": publicadas, "escolhas": escolhas}
+
+
+# --- Banner mobile: o banner principal da Zydon tem imagem Web (imageLarge 1920x320) e Mobile (imageSmall 720x270) ---
+MOBILE = "cabecalho_mobile"
+MOBILE_TAMANHO = (720, 270)
+ACOES_COM_BANNER = {"previa", "criar", "banner", "lab_banner", "lab_aplicar"}
+
+
+def _registrar_mobile():
+    """Ensina o repositório (sem editá-lo) que existe a peça mobile: formato, destino imageSmall
+    e a aplicação no mesmo banner do cabeçalho, conferida por GET."""
+    import formatos
+    import subir_banners
+    import atendimento
+    import portal as mod_portal
+    if MOBILE not in formatos.POR_CHAVE:
+        formatos.POR_CHAVE[MOBILE] = formatos.Formato(MOBILE, *MOBILE_TAMANHO, painel=MOBILE_TAMANHO[0], proporcao_pedida="")
+    subir_banners.DESTINOS.setdefault(MOBILE, {"onde": "banner", "campo": "imageSmall", "dimensao": MOBILE_TAMANHO})
+    if MOBILE not in atendimento.DESTINOS_BANNER:
+        atendimento.DESTINOS_BANNER = tuple(atendimento.DESTINOS_BANNER) + (MOBILE,)
+    original = subir_banners.aplicar
+    if getattr(original, "_mobile", False):
+        return
+
+    def aplicar(jwt, ids, aparencia=None, banner=None, ecoar=None, cor=None):
+        ids = dict(ids or {})
+        movel = ids.pop(MOBILE, None)
+        if ids or cor or not movel:
+            relato = original(jwt, ids, aparencia=aparencia, banner=banner, ecoar=ecoar, cor=cor)
+        else:
+            relato = {"gravados": [], "confere": {}}
+        if not movel:
+            return relato
+        alvo = subir_banners._banner_alvo(jwt)
+        if not alvo:
+            relato["confere"][MOBILE] = False
+            return relato
+        identificador = alvo.get("id") or alvo.get("bannerId")
+        try:
+            mod_portal.atualizar_banner(jwt, identificador, alvo, {"imageSmall": movel})
+        except mod_portal.ErroDoPortal as erro:
+            if not relato["gravados"]:
+                raise
+            raise subir_banners.GravacaoPelaMetade(erro, relato["gravados"], [MOBILE]) from erro
+        relato["gravados"].append(MOBILE)
+        if ecoar:
+            ecoar("  [OK] banner.images[0].imageSmall")
+        agora = mod_portal.obter_banner(jwt, identificador)
+        relato["confere"][MOBILE] = ((agora.get("images") or [{}])[0]).get("imageSmall") == movel
+        return relato
+    aplicar._mobile = True
+    subir_banners.aplicar = aplicar
+
+
+def _montar_mobile(cabecalho, logo, marca_hex, modo):
+    """720x270: painel liso com a logo original e a frase; à direita, a cena do próprio cabeçalho
+    (modo 'cena'). No modo 'marca' a peça inteira é o painel, sem foto."""
+    from PIL import Image, ImageDraw
+    import formatos
+    import tipografia as tipo
+    W, H = MOBILE_TAMANHO
+    clara = _logo_clara(logo)
+    fundo = _rgb(marca_hex) if clara and marca_hex else ((28, 28, 30) if clara else (255, 255, 255))
+    tinta = (255, 255, 255) if _lum(fundo) < 0.4 else (16, 20, 24)
+    peca = Image.new("RGB", (W, H), fundo)
+    painel = 300 if modo == "cena" else W
+    if modo == "cena":
+        largura_cab, altura_cab = cabecalho.size
+        alvo_w, alvo_h = W - painel, H
+        corte = min(int(largura_cab * 0.30), round(altura_cab * alvo_w / alvo_h))
+        cena = cabecalho.crop((largura_cab - corte, 0, largura_cab, altura_cab))
+        escala = max(alvo_w / cena.width, alvo_h / cena.height)
+        cena = cena.resize((max(alvo_w, round(cena.width * escala)), max(alvo_h, round(cena.height * escala))), Image.LANCZOS)
+        esquerda, topo = (cena.width - alvo_w) // 2, (cena.height - alvo_h) // 2
+        peca.paste(cena.crop((esquerda, topo, esquerda + alvo_w, topo + alvo_h)), (painel, 0))
+    margem = 32
+    util = (painel if modo == "cena" else int(W * 0.55)) - margem * 2
+    ref = logo.copy()
+    ref.thumbnail((util, int(H * 0.38)), Image.LANCZOS)
+    desenho = ImageDraw.Draw(peca)
+    fonte, linhas, _ = tipo.ajustar(desenho, formatos.FRASE_CABECALHO, util, 24, 16, "Medium", 2)
+    frase = formatos.FRASE_CABECALHO
+    if "," in frase:
+        partes = [frase[:frase.index(",") + 1].strip(), frase[frase.index(",") + 1:].strip()]
+        for corpo in range(24, 15, -2):
+            candidata = tipo.fonte(corpo, "Medium")
+            if all(desenho.textlength(parte, font=candidata) <= util for parte in partes):
+                fonte, linhas = candidata, partes
+                break
+    passo = int(fonte.size * 1.3)
+    y = (H - (ref.height + 22 + passo * len(linhas))) // 2
+    if modo == "cena":
+        peca.paste(ref, (margem, y), ref)
+        x_texto = lambda linha: margem
+    else:
+        peca.paste(ref, ((W - ref.width) // 2, y), ref)
+        x_texto = lambda linha: (W - int(desenho.textlength(linha, font=fonte))) // 2
+    y += ref.height + 22
+    for i, linha in enumerate(linhas):
+        desenho.text((x_texto(linha), y + i * passo), linha, font=fonte, fill=tinta)
+    return peca
+
+
+INSTRUCAO_CONFERIR_MOBILE = """Você confere o banner MOBILE (720x270) do portal B2B da empresa "{cliente}" antes de ir ao ar.
+A primeira imagem é a logo correta da empresa; a segunda é o banner.
+Reprove (ok=false) se: a logo estiver ausente, deformada ou diferente da correta; houver texto com erro, ilegível ou
+cortado; aparecer QUALQUER pedaço de letra, palavra, botão ou logo cortado pela borda da foto ou da peça (sobra de
+outro banner recortado); houver marca de terceiros em destaque; houver caixa vazia ou imagem quebrada.
+Responda só JSON: {{"ok": true, "motivo": ""}}"""
+
+
+def _conferir_mobile(img, logo, cliente):
+    try:
+        resposta, _ = _ia_visao(INSTRUCAO_CONFERIR_MOBILE.format(cliente=cliente or "cliente"),
+                                [("Logo correta da empresa:", _b64_pil(logo, 512)), ("Banner mobile:", _b64_pil(img, 720))])
+    except Exception:
+        return None
+    if isinstance(resposta, dict) and resposta.get("ok") is False:
+        return str(resposta.get("motivo") or "reprovado")[:200]
+    return None
+
+
+def peca_mobile(pasta, logo=None, cliente="", so_se_faltar=False):
+    """Gera a peça mobile do banner a partir do cabeçalho já aprovado e a registra no manifesto.
+    Conferida pela IA (logo fiel, texto legível); reprovada nos dois modos, não vai ao portal."""
+    from PIL import Image
+    pasta = Path(pasta)
+    arquivo = pasta / "manifesto.json"
+    try:
+        manifesto = json.loads(arquivo.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    pecas = manifesto.setdefault("pecas", {})
+    if so_se_faltar and MOBILE in pecas and (pasta / "aprovados" / pecas[MOBILE]["arquivo"]).exists():
+        return pasta / "aprovados" / pecas[MOBILE]["arquivo"]
+    cab = pecas.get("cabecalho")
+    origem = pasta / "aprovados" / cab["arquivo"] if cab else None
+    fonte_logo = next((c for c in (pasta / "logo-normalizada.png", Path(logo) if logo else None) if c and c.exists()), None)
+    if not origem or not origem.exists() or not fonte_logo:
+        return None
+    logo_img = Image.open(fonte_logo).convert("RGBA")
+    cabecalho = Image.open(origem).convert("RGB")
+    marca = cor_da_pasta(pasta)
+    motivos = []
+    for modo in ("cena", "marca"):
+        img = _montar_mobile(cabecalho, logo_img, marca, modo)
+        motivo = _conferir_mobile(img, logo_img, cliente)
+        if not motivo:
+            break
+        motivos.append(f"{modo}: {motivo}")
+        evento("banners", f"banner mobile ({modo}) reprovado na conferência: {motivo}", "aviso")
+    else:
+        pecas.pop(MOBILE, None)
+        arquivo.write_text(json.dumps(manifesto, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        evento("banners", "banner mobile reprovado: " + "; ".join(motivos) + " · não vai para o portal", "erro")
+        return None
+    destino = pasta / "aprovados" / f"{MOBILE}.png"
+    img.save(destino, optimize=True)
+    pecas[MOBILE] = {"origem": f"derivado_{modo}", "arquivo": destino.name, "tentativas": len(motivos) + 1,
+                     "dimensao": list(MOBILE_TAMANHO)}
+    arquivo.write_text(json.dumps(manifesto, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    evento("banners", f"banner mobile {MOBILE_TAMANHO[0]}x{MOBILE_TAMANHO[1]} pronto ({modo}) e conferido")
+    return destino
+
+
+def _mobile_seguro(pasta, logo=None, cliente="", so_se_faltar=False):
+    try:
+        return peca_mobile(pasta, logo, cliente, so_se_faltar)
+    except Exception as erro:
+        evento("banners", f"banner mobile falhou ({type(erro).__name__}: {str(erro)[:160]})", "aviso")
+        return None
 
 
 ACOES = {"loja_publica": loja_publica, "url_portal": url_portal, "trocar_logo": trocar_logo, "miniaturas": miniaturas, "extrair": extrair, "avaliar": avaliar, "previa": previa, "criar": criar, "banner": banner, "telufia": telufia, "lab_banner": lab_banner, "lab_aplicar": lab_aplicar}
@@ -3095,6 +3276,11 @@ def main():
     acao, arquivo_entrada, arquivo_saida = sys.argv[1:4]
     entrada = json.loads(Path(arquivo_entrada).read_text(encoding="utf-8"))
     _restaurar_cores_navegador(entrada)
+    if acao in ACOES_COM_BANNER:
+        try:
+            _registrar_mobile()
+        except Exception as erro:
+            evento("banners", f"peça mobile indisponível ({type(erro).__name__}: {erro})", "aviso")
     try:
         resultado = {"ok": True, **ACOES[acao](entrada)}
     except Exception as erro:

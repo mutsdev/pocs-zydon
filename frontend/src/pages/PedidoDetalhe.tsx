@@ -52,6 +52,12 @@ function Origem({ url }: { url?: string }) {
   return <a href={url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 cursor-pointer" style={{ color: 'var(--color-primary-text)' }}>origem <ExternalLink size={12} /></a>
 }
 
+const NOMES_PECA: Record<string, string> = {
+  login: 'Tela de login (2400x1800)',
+  cabecalho: 'Banner principal web (1920x320)',
+  cabecalho_mobile: 'Banner principal mobile (720x270)',
+}
+
 export default function PedidoDetalhe() {
   const { id = '' } = useParams()
   const { toasts, addToast, removeToast } = useToast()
@@ -597,7 +603,7 @@ export default function PedidoDetalhe() {
                   {x.previa_base64 ? <img src={`data:${x.previa_base64.startsWith("iVBOR") ? "image/png" : "image/jpeg"};base64,${x.previa_base64}`} alt={x.peca} className="w-full rounded-md" /> :
                     <div className="h-32 rounded-md flex items-center justify-center" style={{ backgroundColor: 'var(--color-bg)' }}><ImageOff size={20} /></div>}
                   <div className="flex flex-wrap items-center gap-2 text-sm">
-                    <span className="font-medium">{x.peca}</span>
+                    <span className="font-medium">{NOMES_PECA[x.peca] || x.peca}</span>
                     <span style={{ color: 'var(--color-text-secondary)' }}>geração {x.geracao}</span>
                     {x.aplicada && <Badge variant={x.conferida_get ? 'success' : 'danger'}>{x.conferida_get ? 'aplicada e conferida' : 'não confirmada no portal'}</Badge>}
                   </div>
