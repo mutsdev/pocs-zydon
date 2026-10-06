@@ -3172,9 +3172,9 @@ def _registrar_mobile():
     subir_banners.aplicar = aplicar
 
 
-def _montar_mobile(cabecalho, logo, marca_hex, modo):
+def _montar_mobile(cabecalho, logo, marca_hex, modo, lado="direita"):
     """720x270: painel liso com a logo original e a frase; à direita, a cena do próprio cabeçalho
-    (modo 'cena'). No modo 'marca' a peça inteira é o painel, sem foto."""
+    (modo 'cena'), recortada do lado pedido do banner web. No modo 'marca' a peça inteira é o painel."""
     from PIL import Image, ImageDraw
     import formatos
     import tipografia as tipo
@@ -3188,7 +3188,8 @@ def _montar_mobile(cabecalho, logo, marca_hex, modo):
         largura_cab, altura_cab = cabecalho.size
         alvo_w, alvo_h = W - painel, H
         corte = min(int(largura_cab * 0.30), round(altura_cab * alvo_w / alvo_h))
-        cena = cabecalho.crop((largura_cab - corte, 0, largura_cab, altura_cab))
+        inicio = 0 if lado == "esquerda" else largura_cab - corte
+        cena = cabecalho.crop((inicio, 0, inicio + corte, altura_cab))
         escala = max(alvo_w / cena.width, alvo_h / cena.height)
         cena = cena.resize((max(alvo_w, round(cena.width * escala)), max(alvo_h, round(cena.height * escala))), Image.LANCZOS)
         esquerda, topo = (cena.width - alvo_w) // 2, (cena.height - alvo_h) // 2
@@ -3240,6 +3241,26 @@ def _conferir_mobile(img, logo, cliente):
     return None
 
 
+def _detalhe_da_faixa(img):
+    """Quanto contorno (letra, logo) há na faixa: média da diferença entre pixels vizinhos."""
+    import numpy as np
+    cinza = np.asarray(img.convert("L").resize((240, 120)), dtype=np.int16)
+    return float(np.abs(np.diff(cinza, axis=1)).mean() + np.abs(np.diff(cinza, axis=0)).mean())
+
+
+def _ordem_mobile(cabecalho):
+    """Tenta primeiro o lado do banner web com menos texto; depois o outro; por fim só a marca."""
+    largura, altura = cabecalho.size
+    corte = int(largura * 0.30)
+    try:
+        direita = _detalhe_da_faixa(cabecalho.crop((largura - corte, 0, largura, altura)))
+        esquerda = _detalhe_da_faixa(cabecalho.crop((0, 0, corte, altura)))
+    except Exception:
+        direita = esquerda = 0
+    lados = ["esquerda", "direita"] if esquerda < direita else ["direita", "esquerda"]
+    return [("cena", lado) for lado in lados] + [("marca", None)]
+
+
 def peca_mobile(pasta, logo=None, cliente="", so_se_faltar=False):
     """Gera a peça mobile do banner a partir do cabeçalho já aprovado e a registra no manifesto.
     Conferida pela IA (logo fiel, texto legível); reprovada nos dois modos, não vai ao portal."""
@@ -3262,13 +3283,14 @@ def peca_mobile(pasta, logo=None, cliente="", so_se_faltar=False):
     cabecalho = Image.open(origem).convert("RGB")
     marca = cor_da_pasta(pasta)
     motivos = []
-    for modo in ("cena", "marca"):
-        img = _montar_mobile(cabecalho, logo_img, marca, modo)
+    for modo, lado in _ordem_mobile(cabecalho):
+        img = _montar_mobile(cabecalho, logo_img, marca, modo, lado)
         motivo = _conferir_mobile(img, logo_img, cliente)
         if not motivo:
             break
-        motivos.append(f"{modo}: {motivo}")
-        evento("banners", f"banner mobile ({modo}) reprovado na conferência: {motivo}", "aviso")
+        rotulo = f"{modo} {lado}" if modo == "cena" else modo
+        motivos.append(f"{rotulo}: {motivo}")
+        evento("banners", f"banner mobile ({rotulo}) reprovado na conferência: {motivo}", "aviso")
     else:
         pecas.pop(MOBILE, None)
         arquivo.write_text(json.dumps(manifesto, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -3276,10 +3298,10 @@ def peca_mobile(pasta, logo=None, cliente="", so_se_faltar=False):
         return None
     destino = pasta / "aprovados" / f"{MOBILE}.png"
     img.save(destino, optimize=True)
-    pecas[MOBILE] = {"origem": f"derivado_{modo}", "arquivo": destino.name, "tentativas": len(motivos) + 1,
+    pecas[MOBILE] = {"origem": f"derivado_{modo}" + (f"_{lado}" if modo == "cena" else ""), "arquivo": destino.name, "tentativas": len(motivos) + 1,
                      "dimensao": list(MOBILE_TAMANHO)}
     arquivo.write_text(json.dumps(manifesto, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    evento("banners", f"banner mobile {MOBILE_TAMANHO[0]}x{MOBILE_TAMANHO[1]} pronto ({modo}) e conferido")
+    evento("banners", f"banner mobile {MOBILE_TAMANHO[0]}x{MOBILE_TAMANHO[1]} pronto ({modo}{' ' + lado if modo == 'cena' else ''}) e conferido")
     return destino
 
 
