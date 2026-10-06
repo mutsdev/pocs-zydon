@@ -33,7 +33,7 @@ function lerMudo() {
   try { return localStorage.getItem(CHAVE_SOM) === '1' } catch { return false }
 }
 
-interface Som { ativar: () => void; mar: (vel: number) => void; tensao: (progresso: number, jogando: boolean) => void; mordida: () => void; derrota: () => void; mudar: (mudo: boolean) => void; fechar: () => void }
+interface Som { ativar: () => void; mar: (vel: number) => void; tensao: (progresso: number, jogando: boolean) => void; mordida: () => void; acerto: (sequencia: number) => void; derrota: () => void; mudar: (mudo: boolean) => void; fechar: () => void }
 
 function criarSom(mudoInicial: boolean): Som {
   let audio: AudioContext | null = null
@@ -224,6 +224,52 @@ function criarSom(mudoInicial: boolean): Som {
     croc(agora + 0.14, 200)
   }
 
+  const acerto = (sequencia: number) => {
+    if (!audio || !mestre || !ruido) return
+    const agora = audio.currentTime
+    const subir = Math.pow(2, Math.min(sequencia, 12) / 12)
+    const notas = [523.25, 659.25, 783.99, 1046.5]
+    notas.forEach((base, i) => {
+      const t0 = agora + i * 0.06
+      const freq = base * subir
+      const corpo = audio!.createOscillator()
+      corpo.type = 'triangle'
+      corpo.frequency.setValueAtTime(freq * 0.98, t0)
+      corpo.frequency.exponentialRampToValueAtTime(freq, t0 + 0.03)
+      const brilho = audio!.createOscillator()
+      brilho.type = 'sine'
+      brilho.frequency.value = freq * 2
+      const g = audio!.createGain()
+      const final = i === notas.length - 1
+      const duracao = final ? 0.55 : 0.18
+      g.gain.setValueAtTime(0.0001, t0)
+      g.gain.exponentialRampToValueAtTime(final ? 0.26 : 0.2, t0 + 0.012)
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + duracao)
+      const gb = audio!.createGain()
+      gb.gain.value = 0.35
+      corpo.connect(g)
+      brilho.connect(gb).connect(g)
+      g.connect(mestre!)
+      corpo.start(t0)
+      brilho.start(t0)
+      corpo.stop(t0 + duracao + 0.02)
+      brilho.stop(t0 + duracao + 0.02)
+    })
+    const t1 = agora + 0.18
+    const faisca = audio.createBufferSource()
+    faisca.buffer = ruido
+    const agudo = audio.createBiquadFilter()
+    agudo.type = 'highpass'
+    agudo.frequency.value = 6000
+    const gf = audio.createGain()
+    gf.gain.setValueAtTime(0.0001, t1)
+    gf.gain.exponentialRampToValueAtTime(0.18, t1 + 0.02)
+    gf.gain.exponentialRampToValueAtTime(0.0001, t1 + 0.45)
+    faisca.connect(agudo).connect(gf).connect(mestre)
+    faisca.start(t1, Math.random())
+    faisca.stop(t1 + 0.5)
+  }
+
   const derrota = () => {
     if (!audio || !mestre) return
     const notas = [392, 311.13, 233.08, 155.56]
@@ -249,7 +295,7 @@ function criarSom(mudoInicial: boolean): Som {
 
   const fechar = () => { tensao(0, false); void audio?.close(); audio = null }
 
-  return { ativar, mar, tensao, mordida, derrota, mudar, fechar }
+  return { ativar, mar, tensao, mordida, acerto, derrota, mudar, fechar }
 }
 
 function lerRecorde() {
@@ -344,6 +390,7 @@ export default function BarcosTabuada() {
       if (fase === 'inicio' || fase === 'fim') { comecar(); return }
       if (fase !== 'jogando' || afundando.includes(i)) return
       if (pergunta.opcoes[i] === pergunta.resposta) {
+        som.current?.acerto(pontos)
         fase = 'pulo'
         destino = i
         t = 0
