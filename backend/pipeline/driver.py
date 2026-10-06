@@ -3178,7 +3178,7 @@ def _registrar_mobile():
     subir_banners.aplicar = aplicar
 
 
-def _montar_mobile(cabecalho, logo, marca_hex, modo, lado="direita"):
+def _montar_mobile(cabecalho, logo, marca_hex, modo, lado="direita", login=None):
     """720x270: painel liso com a logo original e a frase; à direita, a cena do próprio cabeçalho
     (modo 'cena'), recortada do lado pedido do banner web. No modo 'marca' a peça inteira é o painel."""
     from PIL import Image, ImageDraw
@@ -3187,15 +3187,25 @@ def _montar_mobile(cabecalho, logo, marca_hex, modo, lado="direita"):
     W, H = MOBILE_TAMANHO
     clara = _logo_clara(logo)
     fundo = _rgb(marca_hex) if clara and marca_hex else ((28, 28, 30) if clara else (255, 255, 255))
+    borda = _borda_opaca(logo)
+    if borda:
+        fundo = borda
     tinta = (255, 255, 255) if _lum(fundo) < 0.4 else (16, 20, 24)
     peca = Image.new("RGB", (W, H), fundo)
     painel = 300 if modo == "cena" else W
     if modo == "cena":
         largura_cab, altura_cab = cabecalho.size
         alvo_w, alvo_h = W - painel, H
-        corte = min(int(largura_cab * 0.30), round(altura_cab * alvo_w / alvo_h))
-        inicio = 0 if lado == "esquerda" else largura_cab - corte
-        cena = cabecalho.crop((inicio, 0, inicio + corte, altura_cab))
+        if lado == "login" and login is not None:
+            lw, lh = login.size
+            x0 = int(lw * INICIO_LIVRE["login"])
+            faixa_h = min(lh, round((lw - x0) * alvo_h / alvo_w))
+            y0 = (lh - faixa_h) // 2
+            cena = login.crop((x0, y0, lw, y0 + faixa_h))
+        else:
+            corte = min(int(largura_cab * 0.30), round(altura_cab * alvo_w / alvo_h))
+            inicio = 0 if lado == "esquerda" else largura_cab - corte
+            cena = cabecalho.crop((inicio, 0, inicio + corte, altura_cab))
         escala = max(alvo_w / cena.width, alvo_h / cena.height)
         cena = cena.resize((max(alvo_w, round(cena.width * escala)), max(alvo_h, round(cena.height * escala))), Image.LANCZOS)
         esquerda, topo = (cena.width - alvo_w) // 2, (cena.height - alvo_h) // 2
@@ -3254,7 +3264,40 @@ def _detalhe_da_faixa(img):
     return float(np.abs(np.diff(cinza, axis=1)).mean() + np.abs(np.diff(cinza, axis=0)).mean())
 
 
-def _ordem_mobile(cabecalho):
+def _borda_opaca(logo):
+    """Logo sem transparência (foto retangular): cor média da borda, para o painel emendar com ela."""
+    import numpy as np
+    arr = np.asarray(logo.convert("RGBA"), dtype=np.float32)
+    borda = np.concatenate([arr[0], arr[-1], arr[:, 0], arr[:, -1]])
+    if borda[:, 3].min() < 250:
+        return None
+    return tuple(int(v) for v in borda[:, :3].mean(axis=0))
+
+
+def _mobile_ia(cabecalho, cliente):
+    """Recompõe o banner web aprovado em 8:3 pela IA: mesma cena e logo integrada, sem caixa colada."""
+    from PIL import Image
+    W, H = MOBILE_TAMANHO
+    tela = Image.new("RGB", (1600, 600), (255, 255, 255))
+    ref = cabecalho.copy()
+    ref.thumbnail((1600, 600), Image.LANCZOS)
+    tela.paste(ref, (0, (600 - ref.size[1]) // 2))
+    prompt = (f"Esta faixa é o banner web aprovado do portal B2B de pedidos da empresa {cliente}. Recrie-o como banner "
+              f"para CELULAR, formato 8:3, preenchendo a imagem INTEIRA com a mesma cena, as mesmas cores e o mesmo estilo "
+              f"(nada de faixa branca em cima ou embaixo). Use a logo exatamente como está no banner, sem alterar letras, "
+              f"símbolo nem cores, integrada à cena. No máximo uma frase curta de boas-vindas em português correto, "
+              f"legível no celular. Logo e texto no centro, com margem folgada de todas as bordas: nada encostando "
+              f"ou cortado. Não desenhe botão nenhum. Sem marca d'água.")
+    img = _editar_imagem(tela, prompt, lado=1600)
+    if img is None:
+        return None
+    escala = max(W / img.width, H / img.height)
+    img = img.resize((max(W, round(img.width * escala)), max(H, round(img.height * escala))), Image.LANCZOS)
+    x, y = (img.width - W) // 2, (img.height - H) // 2
+    return img.crop((x, y, x + W, y + H))
+
+
+def _ordem_mobile(cabecalho, tem_login=False, opaca=False):
     """Tenta primeiro o lado do banner web com menos texto; depois o outro; por fim só a marca."""
     largura, altura = cabecalho.size
     corte = int(largura * 0.30)
@@ -3264,7 +3307,10 @@ def _ordem_mobile(cabecalho):
     except Exception:
         direita = esquerda = 0
     lados = ["esquerda", "direita"] if esquerda < direita else ["direita", "esquerda"]
-    return [("cena", lado) for lado in lados] + [("marca", None)]
+    recortes = [("cena", lado) for lado in lados] + ([("cena", "login")] if tem_login else [])
+    if opaca:
+        return [("ia", None)] + recortes + [("marca", None)]
+    return recortes + [("ia", None), ("marca", None)]
 
 
 def peca_mobile(pasta, logo=None, cliente="", so_se_faltar=False):
@@ -3288,9 +3334,17 @@ def peca_mobile(pasta, logo=None, cliente="", so_se_faltar=False):
     logo_img = Image.open(fonte_logo).convert("RGBA")
     cabecalho = Image.open(origem).convert("RGB")
     marca = cor_da_pasta(pasta)
+    arq_login = pasta / "aprovados" / pecas["login"]["arquivo"] if pecas.get("login") else None
+    login_img = Image.open(arq_login).convert("RGB") if arq_login and arq_login.exists() else None
     motivos = []
-    for modo, lado in _ordem_mobile(cabecalho):
-        img = _montar_mobile(cabecalho, logo_img, marca, modo, lado)
+    for modo, lado in _ordem_mobile(cabecalho, login_img is not None, _borda_opaca(logo_img) is not None):
+        if modo == "ia":
+            img = _mobile_ia(cabecalho, cliente)
+            if img is None:
+                evento("banners", "banner mobile (ia) não saiu da API de imagem; seguindo", "aviso")
+                continue
+        else:
+            img = _montar_mobile(cabecalho, logo_img, marca, modo, lado, login_img)
         motivo = _conferir_mobile(img, logo_img, cliente)
         if not motivo:
             break
