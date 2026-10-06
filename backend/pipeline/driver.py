@@ -2521,13 +2521,21 @@ def _images_api(nome, argumentos):
         return None
     corpo = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": nome, "arguments": argumentos}}
     r = requests.post(IMAGES_URL, json=corpo, headers={"x-api-key": chave}, timeout=150)
-    saida = (r.json().get("result") or {}).get("output") or {}
+    try:
+        corpo_resp = r.json()
+    except ValueError:
+        corpo_resp = {}
+    saida = (corpo_resp.get("result") or {}).get("output") or {}
     if isinstance(saida, str):
         saida = json.loads(saida)
     res = saida.get("result") if isinstance(saida, dict) else None
     if isinstance(res, str):
         res = json.loads(res)
-    return res or None
+    if not res:
+        motivo = (saida.get("error") if isinstance(saida, dict) else None) or (corpo_resp.get("result") or {}).get("error") \
+            or corpo_resp.get("error") or r.text
+        return {"content": [{"type": "text", "text": f"HTTP {r.status_code}: {str(motivo)[:200]}"}], "erro": True}
+    return res
 
 
 def _editar_imagem(foto, prompt, espera=300, lado=1024):
@@ -2540,10 +2548,17 @@ def _editar_imagem(foto, prompt, espera=300, lado=1024):
         buf = io.BytesIO()
         img.save(buf, "JPEG", quality=92)
         uri = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
-        for tentativa in range(4):
+        limite_fila = time.time() + 480
+        tentativa = 0
+        while tentativa < 4:
             if tentativa:
                 time.sleep(15 * tentativa + random.uniform(0, 10))
             res = _images_api("editar_imagem", {"prompt": prompt, "imagem": uri, "formato": "jpeg"})
+            texto_ini = " ".join(c.get("text", "") for c in (res or {}).get("content") or [] if c.get("type") == "text")
+            if "em andamento" in texto_ini and time.time() < limite_fila:
+                time.sleep(25 + random.uniform(0, 15))
+                continue
+            tentativa += 1
             inicio = time.time()
             while res:
                 sc = res.get("structuredContent") or {}
@@ -2559,7 +2574,7 @@ def _editar_imagem(foto, prompt, espera=300, lado=1024):
                 evento("banners", "API de imagem demorou demais; desisti desta peça", "aviso")
                 return None
             texto = " ".join(c.get("text", "") for c in (res or {}).get("content") or [] if c.get("type") == "text")
-            evento("banners", f"API de imagem não devolveu a imagem (tentativa {tentativa + 1} de 4): {texto[:200] or 'sem resposta'}", "aviso")
+            evento("banners", f"API de imagem não devolveu a imagem (tentativa {tentativa} de 4): {texto[:200] or 'sem resposta'}", "aviso")
     except Exception as erro:
         evento("banners", f"API de imagem falhou ({str(erro)[:160]})", "aviso")
     return None
@@ -3108,7 +3123,7 @@ def lab_aplicar(entrada):
 # --- Banner mobile: o banner principal da Zydon tem imagem Web (imageLarge 1920x320) e Mobile (imageSmall 720x270) ---
 MOBILE = "cabecalho_mobile"
 MOBILE_TAMANHO = (720, 270)
-ACOES_COM_BANNER = {"previa", "criar", "banner", "lab_banner", "lab_aplicar"}
+ACOES_COM_BANNER = {"extrair", "previa", "criar", "banner", "lab_banner", "lab_aplicar"}
 
 
 def _registrar_mobile():
