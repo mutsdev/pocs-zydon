@@ -1206,6 +1206,11 @@ def selecionar(candidatos, cliente, site, segmento, foco="", licoes=None):
                                      foco=foco or "nenhum (catálogo variado do cliente)",
                                      alvo=min(alvo_pedido(), len(candidatos)),
                                      total=len(candidatos), lista="\n".join(linhas))
+    if MARCAS["lista"]:
+        bloco = (f"Marcas que o cliente trabalha (lidas no site dele): {', '.join(MARCAS['lista'])}. "
+                 "Produto dessas marcas é do cliente (\"do_cliente\": true). Produto de QUALQUER outra marca "
+                 "nunca entra: descarte com tipo \"outra_marca\".")
+        texto = texto.replace("\n\nCandidatos:\n", f"\n\n{bloco}\n\nCandidatos:\n", 1)
     if licoes:
         bloco = ("Lições das avaliações dos portais anteriores (feitas pelo time; siga-as, "
                  "sem quebrar as regras acima):\n" + "\n".join(f"- {l}" for l in licoes[:15]))
@@ -1297,13 +1302,16 @@ def montar_pela_selecao(coleta, candidatos, escolha, cliente, segmento, descrica
         usados.add(n)
         itens.append((n, ci if 0 <= ci < 3 else 0))
         do_cliente[n] = s.get("do_cliente") is not False
+        if MARCAS["lista"] and candidatos[n]["origem"] not in ("site", "anexo"):
+            do_cliente[n] = cita_marca(candidatos[n]["nome"] + " " + candidatos[n]["url"])
         if s.get("no_foco") is False:
             fora_do_foco.add(n)
     itens = itens[:alvo_pedido()]
     motivos = ler_descartes(escolha, candidatos, usados)
     completados = completar_ate_o_alvo(itens, candidatos, motivos, categorias)
     for n in completados:
-        do_cliente[n] = candidatos[n]["origem"] in ("site", "anexo")
+        do_cliente[n] = candidatos[n]["origem"] in ("site", "anexo") or (
+            bool(MARCAS["lista"]) and cita_marca(candidatos[n]["nome"] + " " + candidatos[n]["url"]))
         motivos.pop(n, None)
     descartes_modelo = [{"nome": candidatos[n]["nome"], "tipo": tipo, "motivo": f"modelo: {motivo}"}
                         for n, (tipo, motivo) in sorted(motivos.items())]
@@ -1956,6 +1964,86 @@ def termos_de_busca(cliente, segmento, categorias, nomes=(), foco=""):
     return saida[:5]
 
 
+MARCAS = {"lista": []}
+PAGINA_DE_MARCAS = re.compile(r"(?i)marcas|representad|parceir|fornecedor|nossos-clientes|clientes")
+NOME_NAO_E_MARCA = re.compile(r"(?i)^(img|image|imagem|foto|banner|fundo|icon|icone|whatsapp|instagram|facebook|"
+                              r"youtube|selo|mapa|bg|hero|slide|captura|screenshot)\b")
+
+
+def _compacto(texto):
+    return re.sub(r"[^a-z0-9]", "", sem_acento(texto))
+
+
+def cita_marca(texto, marcas=None):
+    """O texto cita uma das marcas? Compara palavra a palavra, juntando pares ("tech one" = "techone")."""
+    marcas = MARCAS["lista"] if marcas is None else marcas
+    if not marcas:
+        return True
+    palavras = re.findall(r"[a-z0-9]+", sem_acento(texto))
+    blocos = set(palavras) | {a + b for a, b in zip(palavras, palavras[1:])} \
+        | {a + b + c for a, b, c in zip(palavras, palavras[1:], palavras[2:])}
+    return any(_compacto(m) in blocos for m in marcas)
+
+
+def marcas_do_site(site, cliente=""):
+    """Distribuidor/representante: nomes das marcas que ele trabalha, lidos nas logos da página
+    de marcas do próprio site (allmor.com.br/nossos-clientes: Tech One, Svart, Code, Thork)."""
+    import requests
+    from urllib.parse import unquote
+    base = normalizar_site(site)
+    cabecalho = {"User-Agent": "Mozilla/5.0"}
+    try:
+        home = requests.get(base, headers=cabecalho, timeout=15).text
+    except Exception:
+        return []
+    host = (urlparse(base).hostname or "").replace("www.", "")
+    paginas = []
+    for href, rotulo in re.findall(r'<a[^>]+href="([^"#]+)"[^>]*>(.*?)</a>', home, re.I | re.S):
+        completo = urljoin(base, href).split("?")[0]
+        if (urlparse(completo).hostname or "").replace("www.", "") != host:
+            continue
+        rotulo = html.unescape(re.sub(r"<[^>]+>", " ", rotulo))
+        if PAGINA_DE_MARCAS.search(urlparse(completo).path) or re.search(r"(?i)\bmarcas\b", rotulo):
+            if completo not in paginas:
+                paginas.append(completo)
+    proprio = {_compacto(p) for p in palavras_chave(cliente) if len(p) >= 3} | {_compacto(cliente)}
+    for url in paginas[:3]:
+        try:
+            pagina = requests.get(url, headers=cabecalho, timeout=15).text
+        except Exception:
+            continue
+        texto = " ".join(html.unescape(re.sub(r"<[^>]+>", " ", re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", pagina))).split())
+        if not re.search(r"(?i)\bmarcas?\b", texto):
+            continue
+        nomes = []
+        for src in re.findall(r'(?:src|srcSet|srcset)="([^"]+)"', pagina):
+            for parte in src.split(","):
+                arquivo = unquote(parte.strip().split(" ")[0].split("?")[0].rsplit("/", 1)[-1])
+                if not re.search(r"(?i)\.(png|svg|webp|jpe?g|avif)$", arquivo) or "~mv2" in arquivo \
+                        or re.match(r"^[0-9a-f]{6}_", arquivo):
+                    continue
+                nome = re.sub(r"(?i)\.(png|svg|webp|jpe?g|avif)$", "", arquivo)
+                nome = re.sub(r"(?i)\b(logo|logotipo|marca|final|novo|nova|site|\d+x\d+)\b", " ", nome)
+                nome = " ".join(re.sub(r"[^A-Za-zÀ-ú0-9 ]", " ", nome.replace("_", " ").replace("-", " ")).split())
+                if not 3 <= len(nome) <= 25 or nome.isdigit() or NOME_NAO_E_MARCA.match(nome):
+                    continue
+                if _compacto(nome) in proprio or any(p and p in _compacto(nome) for p in proprio if len(p) >= 5):
+                    continue
+                for tamanho in (3, 2, 1):
+                    palavras = texto.split()
+                    achado = next((" ".join(palavras[i:i + tamanho]).strip(",.;:") for i in range(len(palavras) - tamanho + 1)
+                                   if _compacto(" ".join(palavras[i:i + tamanho])) == _compacto(nome)), None)
+                    if achado:
+                        nome = achado
+                        break
+                if _compacto(nome) not in [_compacto(n) for n in nomes]:
+                    nomes.append(nome)
+        if 2 <= len(nomes) <= 15:
+            evento("extracao", f"marcas que o cliente trabalha (página {url}): {', '.join(nomes)}")
+            return nomes
+    return []
+
+
 def relevante(nome, termo, cliente, url=""):
     """A página achada só vale se o nome do produto repete palavras do termo buscado;
     no termo com o nome do cliente, o nome ou o endereço tem que citar o cliente."""
@@ -2118,10 +2206,14 @@ def buscar_candidatos_web(cliente, segmento, categorias, site, nomes=(), limite=
     pares, vistos = [], set()
     termos = termos_de_busca(cliente, segmento, categorias, nomes, foco)
     tipos = tipos_uteis(tipos)
-    revenda = bool(tipos) and not foco
+    marcas = list(MARCAS["lista"])
+    revenda = bool(tipos) and not foco and not marcas
     if revenda:
         termos = list(dict.fromkeys([f"{t} comprar" for t in tipos[:4]]))
-    termos = termos[:4]
+    if marcas:
+        termos = [f"{m} {tipos[i % len(tipos)]}" if tipos else f"{m} comprar" for i, m in enumerate(marcas[:6])]
+        evento("extracao", "buscando só produtos das marcas que o cliente trabalha: " + ", ".join(marcas))
+    termos = termos[:6] if marcas else termos[:4]
     evento("extracao", "termos de busca (em paralelo): " + " · ".join(termos))
     resultados = [r or [] for r in em_paralelo(buscar_na_web, termos, len(termos) or 1, teto=75)]
     for termo, urls in zip(termos, resultados):
@@ -2131,6 +2223,9 @@ def buscar_candidatos_web(cliente, segmento, categorias, site, nomes=(), limite=
                 pares.append((url, termo))
     pares = pares[:limite]
     marca = [] if revenda else [p for p in palavras_chave(cliente) if len(p) >= 4]
+    if marcas:
+        marca = list(dict.fromkeys(v for m in marcas for v in (_compacto(m), "-".join(re.findall(r"[a-z0-9]+", sem_acento(m))))
+                                   if len(v) >= 4))
     if revenda:
         evento("extracao", "distribuidor sem marca própria: buscando produtos dos tipos que ele vende, de qualquer marca")
     achados, fora, lidas = [], 0, set()
@@ -2147,7 +2242,8 @@ def buscar_candidatos_web(cliente, segmento, categorias, site, nomes=(), limite=
             if not r:
                 continue
             chaves_termo = [c[:5] for c in palavras_chave(termo) if c not in ("comprar",) and len(c) >= 3]
-            aceito = (any(c in sem_acento(r["name"]) for c in chaves_termo) if frouxo
+            aceito = (cita_marca(r["name"] + " " + (r.get("url") or url), marcas) if marcas
+                      else any(c in sem_acento(r["name"]) for c in chaves_termo) if frouxo
                       else relevante(r["name"], termo, cliente, r.get("url") or url))
             if not aceito:
                 fora += 1

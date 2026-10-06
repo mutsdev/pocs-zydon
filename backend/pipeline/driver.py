@@ -796,6 +796,7 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
             evento("extracao", "produtos que a empresa vende, segundo o Google: " + ", ".join(tipos_da_empresa))
         if not segmento_informado and descoberta.get("segmento"):
             segmento_informado = descoberta["segmento"]
+    selecao.MARCAS["lista"] = selecao.marcas_do_site(site, cliente) if site and not entrada.get("anexo") else []
     coleta = {"site": selecao.normalizar_site(site) if site else "", "plataforma": "nenhuma"}
     pelo_barroso = False
     if entrada.get("barroso_tudo") and not entrada.get("anexo"):
@@ -922,6 +923,13 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
     if foco:
         casam = [v for v in validos if selecao.casa_com_foco(v, foco)]
         validos = casam + [v for v in validos if not selecao.casa_com_foco(v, foco)]
+    if selecao.MARCAS["lista"]:
+        antes = len(validos)
+        validos = [v for v in validos if v.get("origem") in ("site", "anexo")
+                   or selecao.cita_marca(v["nome"] + " " + (v.get("url") or ""))]
+        if antes > len(validos):
+            evento("extracao", f"{antes - len(validos)} candidatos de outras marcas descartados "
+                               f"(o cliente trabalha com {', '.join(selecao.MARCAS['lista'])})")
     validos = validos[:selecao.MAXIMO_CANDIDATOS]
 
     def conferir(lista):
