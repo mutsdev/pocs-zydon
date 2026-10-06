@@ -2199,7 +2199,7 @@ def banner(entrada):
     banners = restaurar_banners(entrada, pasta)
     portal_id = entrada.get("portal_id")
     if acao == "aplicar":
-        cor = cor_da_pasta(banners) if banners else None
+        cor = cor_da_pasta(banners) if banners and set(entrada.get("escolhas") or {}) != {MOBILE} else None
         try:
             relato = atendimento.aplicar_pecas(ORG, portal_id, entrada["escolhas"], cor=cor)
         except atendimento.GravacaoPelaMetade as erro:
@@ -2231,6 +2231,12 @@ def banner(entrada):
         nova, saida = atendimento.repintar_pecas(banners, entrada["cor"])
         if nova:
             _mobile_seguro(nova, None, entrada.get("cliente") or "")
+    elif acao == "mobile":
+        pecas = [MOBILE]
+        nova = banners
+        if not _mobile_seguro(nova, restaurar_logo(entrada, pasta), entrada.get("cliente") or ""):
+            raise RuntimeError("banner mobile reprovado em todos os modos")
+        saida = ""
     else:
         raise RuntimeError(f"ação de banner desconhecida: {acao}")
     if not nova:
