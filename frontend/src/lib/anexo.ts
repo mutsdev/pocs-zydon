@@ -1,12 +1,12 @@
 import { acionar, consultar, ErroApi } from './mitra-api'
 
 export const ACEITOS = '.pdf,.xlsx,.xls,.csv,.docx'
-export const LIMITE_BYTES = 15 * 1024 * 1024
+export const LIMITE_BYTES = 50 * 1024 * 1024
 const PARTE = 500000
 
 export function validarArquivo(arquivo: File): string | null {
   if (!/\.(pdf|xlsx|xls|csv|docx)$/i.test(arquivo.name)) return 'Envie PDF, planilha (xlsx, xls, csv) ou Word (docx).'
-  if (arquivo.size > LIMITE_BYTES) return 'O arquivo passa de 15 MB. Envie uma versão menor.'
+  if (arquivo.size > LIMITE_BYTES) return 'O arquivo passa de 50 MB. Envie uma versão menor.'
   return null
 }
 
