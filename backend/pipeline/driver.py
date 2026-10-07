@@ -926,7 +926,7 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
     if selecao.MARCAS["lista"]:
         antes = len(validos)
         validos = [v for v in validos if v.get("origem") in ("site", "anexo")
-                   or selecao.cita_marca(v["nome"] + " " + (v.get("url") or ""))]
+                   or selecao.cita_marca(v["nome"])]
         if antes > len(validos):
             evento("extracao", f"{antes - len(validos)} candidatos de outras marcas descartados "
                                f"(o cliente trabalha com {', '.join(selecao.MARCAS['lista'])})")

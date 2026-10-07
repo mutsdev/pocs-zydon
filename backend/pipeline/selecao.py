@@ -1208,8 +1208,9 @@ def selecionar(candidatos, cliente, site, segmento, foco="", licoes=None):
                                      total=len(candidatos), lista="\n".join(linhas))
     if MARCAS["lista"]:
         bloco = (f"Marcas que o cliente trabalha (lidas no site dele): {', '.join(MARCAS['lista'])}. "
-                 "Produto dessas marcas é do cliente (\"do_cliente\": true). Produto de QUALQUER outra marca "
-                 "nunca entra: descarte com tipo \"outra_marca\".")
+                 "Só entra produto cujo NOME cita uma dessas marcas (\"do_cliente\": true). "
+                 "Produto cujo nome não cita nenhuma delas nunca entra: descarte com tipo \"outra_marca\", "
+                 "mesmo que o link seja de uma vitrine da marca.")
         texto = texto.replace("\n\nCandidatos:\n", f"\n\n{bloco}\n\nCandidatos:\n", 1)
     if licoes:
         bloco = ("Lições das avaliações dos portais anteriores (feitas pelo time; siga-as, "
@@ -1303,7 +1304,7 @@ def montar_pela_selecao(coleta, candidatos, escolha, cliente, segmento, descrica
         itens.append((n, ci if 0 <= ci < 3 else 0))
         do_cliente[n] = s.get("do_cliente") is not False
         if MARCAS["lista"] and candidatos[n]["origem"] not in ("site", "anexo"):
-            do_cliente[n] = cita_marca(candidatos[n]["nome"] + " " + candidatos[n]["url"])
+            do_cliente[n] = cita_marca(candidatos[n]["nome"])
         if s.get("no_foco") is False:
             fora_do_foco.add(n)
     itens = itens[:alvo_pedido()]
@@ -1311,7 +1312,7 @@ def montar_pela_selecao(coleta, candidatos, escolha, cliente, segmento, descrica
     completados = completar_ate_o_alvo(itens, candidatos, motivos, categorias)
     for n in completados:
         do_cliente[n] = candidatos[n]["origem"] in ("site", "anexo") or (
-            bool(MARCAS["lista"]) and cita_marca(candidatos[n]["nome"] + " " + candidatos[n]["url"]))
+            bool(MARCAS["lista"]) and cita_marca(candidatos[n]["nome"]))
         motivos.pop(n, None)
     descartes_modelo = [{"nome": candidatos[n]["nome"], "tipo": tipo, "motivo": f"modelo: {motivo}"}
                         for n, (tipo, motivo) in sorted(motivos.items())]
@@ -2242,7 +2243,7 @@ def buscar_candidatos_web(cliente, segmento, categorias, site, nomes=(), limite=
             if not r:
                 continue
             chaves_termo = [c[:5] for c in palavras_chave(termo) if c not in ("comprar",) and len(c) >= 3]
-            aceito = (cita_marca(r["name"] + " " + (r.get("url") or url), marcas) if marcas
+            aceito = (cita_marca(r["name"], marcas) if marcas
                       else any(c in sem_acento(r["name"]) for c in chaves_termo) if frouxo
                       else relevante(r["name"], termo, cliente, r.get("url") or url))
             if not aceito:
