@@ -1,6 +1,6 @@
 {
   "_sobre": "Faixa de preço por segmento e categoria para produto SEM preço público. O valor de cada produto é sorteado dentro da faixa com semente no nome normalizado (sha256), então é sempre o mesmo. Quando algum produto escolhido tem preço público, vale a mediana deles (montar_poc.py). O modelo de IA nunca define preço.",
-  "versao": 2,
+  "versao": 3,
   "centavos": 0.9,
   "padrao": {
     "nome": "distribuição B2B",
@@ -262,12 +262,13 @@
         "hospital",
         "medic",
         "ecg",
-        "monitor",
         "oxim",
         "cirurg",
         "saude",
         "clinic",
-        "reanimad"
+        "reanimad",
+        "multiparam",
+        "hospitalar"
       ],
       "faixa": [
         40,
@@ -489,13 +490,108 @@
         "notebook",
         "computad",
         "tecnolog",
-        "impressor"
+        "impressor",
+        "mouse",
+        "teclad",
+        "monitor",
+        "webcam",
+        "microfon",
+        "perifer",
+        "eletron",
+        "headset",
+        "fone",
+        "gamer",
+        "ssd",
+        "tablet",
+        "celular",
+        "smartphone",
+        "roteador",
+        "hub",
+        "pendrive",
+        "caixa de som",
+        "projetor"
       ],
       "faixa": [
         45,
         1800
       ],
-      "categorias": []
+      "categorias": [
+        {
+          "nome": "notebooks e computadores",
+          "radicais": [
+            "notebook",
+            "computad",
+            "desktop",
+            "all in one",
+            "macbook"
+          ],
+          "faixa": [
+            2200,
+            7500
+          ]
+        },
+        {
+          "nome": "monitores e TVs",
+          "radicais": [
+            "monitor",
+            "smart tv",
+            "televis",
+            "projetor"
+          ],
+          "faixa": [
+            450,
+            2400
+          ]
+        },
+        {
+          "nome": "celulares e tablets",
+          "radicais": [
+            "celular",
+            "smartphone",
+            "tablet",
+            "iphone",
+            "galaxy"
+          ],
+          "faixa": [
+            900,
+            5500
+          ]
+        },
+        {
+          "nome": "áudio",
+          "radicais": [
+            "microfon",
+            "fone",
+            "headset",
+            "caixa",
+            "soundbar"
+          ],
+          "faixa": [
+            60,
+            900
+          ]
+        },
+        {
+          "nome": "periféricos",
+          "radicais": [
+            "mouse",
+            "teclad",
+            "webcam",
+            "hub",
+            "mousepad",
+            "suporte",
+            "cabo",
+            "adaptador",
+            "pendrive",
+            "ssd",
+            "roteador"
+          ],
+          "faixa": [
+            35,
+            450
+          ]
+        }
+      ]
     },
     {
       "nome": "segurança eletrônica",
