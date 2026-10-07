@@ -94,7 +94,15 @@ JS_LISTA = r"""() => {
       const t = card.querySelector('h1,h2,h3,h4,h5,[class*=name],[class*=nome],[class*=title],[class*=titulo]') || card;
       nome = ((t.innerText || '').split('\n').map(s => s.trim()).filter(s => s.length > 2)[0]) || '';
     }
-    const preco = ((card && card.innerText) || '').match(/R\$\s*[\d.]+,\d{2}/);
+    const textoCard = ((card && card.innerText) || '').replace(/\s+/g, ' ');
+    const valores = [];
+    for (const m of textoCard.matchAll(/R\$\s*([\d.]+,\d{2})/g)) {
+      const antes = textoCard.slice(Math.max(0, m.index - 14), m.index).toLowerCase();
+      if (/\d+\s*x\s*(de)?\s*$|parcela|sem juros\s*$/.test(antes)) continue;
+      valores.push([parseFloat(m[1].replace(/\./g, '').replace(',', '.')), m[0]]);
+    }
+    valores.sort((x, y) => x[0] - y[0]);
+    const preco = valores.length ? [valores[0][1]] : null;
     vistos.add(src);
     out.push({nome: nome.slice(0, 140), url: a ? a.href.split('#')[0] : '', imagem: src, preco: preco ? preco[0] : null});
   }

@@ -1397,7 +1397,7 @@ def montar_pela_selecao(coleta, candidatos, escolha, cliente, segmento, descrica
         if not req.get("_preco_estimado"):
             entrada.update(origem="publico", regra=("lido no anexo do cliente" if c["origem"] == "anexo"
                                                    else "lido na página do produto"))
-        elif publicos and mesmo_site:
+        elif len(publicos) >= 3 and mesmo_site:
             entrada.update(origem="estimado",
                            regra=f"mediana dos {len(publicos)} preços públicos do mesmo site")
         else:
@@ -1415,7 +1415,7 @@ def montar_pela_selecao(coleta, candidatos, escolha, cliente, segmento, descrica
     if regras:
         regra_preco = ("preço estimado por regra fixa, nunca pelo modelo: "
                        + "; ".join(sorted(regras))
-                       + (f" (tabela faixas_preco.json v{faixas.versao})" if not (publicos and mesmo_site) else ""))
+                       + (f" (tabela faixas_preco.json v{faixas.versao})" if not (len(publicos) >= 3 and mesmo_site) else ""))
     descartes_modelo.append({"_fora_do_foco": sum(1 for n, _ in itens if n in fora_do_foco)})
     return (catalogo, precos, situacao_preco(precos), not all(do_cliente[n] for n, _ in itens),
             regra_preco, descartes_modelo)
