@@ -1460,10 +1460,13 @@ class FaixasPreco:
         if segmento:
             faixa, origem = segmento["faixa"], f"faixa do segmento {segmento['nome']}"
             melhor, pontos = None, 0
-            for cat in segmento.get("categorias") or []:
-                p = self._pontos(contexto, cat["radicais"])
-                if p > pontos:
-                    melhor, pontos = cat, p
+            for texto in (nome, contexto):
+                for cat in segmento.get("categorias") or []:
+                    p = self._pontos(texto, cat["radicais"])
+                    if p > pontos:
+                        melhor, pontos = cat, p
+                if melhor:
+                    break
             if melhor:
                 faixa, origem = melhor["faixa"], f"faixa {segmento['nome']} / {melhor['nome']}"
         semente = int(hashlib.sha256(sem_acento(nome).encode("utf-8")).hexdigest()[:12], 16)
