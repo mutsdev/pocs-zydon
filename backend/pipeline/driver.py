@@ -1025,6 +1025,7 @@ def montar_catalogo(entrada, ao_ter_candidatos=None):
 
 
 TETO_SELECAO = 35
+ESPERA_EXTRA_SELECAO = 90
 
 
 def _selecionar_com_teto(validos, cliente, site, segmento, foco, licoes=None):
@@ -1042,9 +1043,18 @@ def _selecionar_com_teto(validos, cliente, site, segmento, foco, licoes=None):
     fio = threading.Thread(target=rodar, daemon=True)
     fio.start()
     fio.join(TETO_SELECAO)
+    if "ok" not in caixa and "erro" not in caixa:
+        evento("extracao", f"seleção pela IA ainda sem resposta em {TETO_SELECAO}s; esperando mais {ESPERA_EXTRA_SELECAO}s", "aviso")
+        fio.join(ESPERA_EXTRA_SELECAO)
+    if "erro" in caixa:
+        evento("extracao", f"seleção pela IA falhou ({caixa['erro']}); tentando de novo", "aviso")
+        caixa.clear()
+        fio = threading.Thread(target=rodar, daemon=True)
+        fio.start()
+        fio.join(ESPERA_EXTRA_SELECAO)
     if "ok" in caixa:
         return caixa["ok"]
-    motivo = f"falhou ({caixa['erro']})" if "erro" in caixa else f"não respondeu em {TETO_SELECAO}s"
+    motivo = f"falhou ({caixa['erro']})" if "erro" in caixa else f"não respondeu em {TETO_SELECAO + ESPERA_EXTRA_SELECAO}s"
     evento("extracao", f"seleção pela IA {motivo}; seguindo com os primeiros candidatos validados", "aviso")
     categorias = []
     for c in validos:

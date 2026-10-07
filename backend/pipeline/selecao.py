@@ -627,13 +627,43 @@ def _ler_pagina(url):
         return None
 
 
+URL_NAO_E_PRODUTO = re.compile(r"(/busca\b|/search\b|[?&](fq|q|s|busca|ft)=|/buscapagina)", re.I)
+ARQUIVO_BANNER = re.compile(r"(banner|topo|header|cabecalho|vitrine|campanha|promo)", re.I)
+
+
+def unquote_nome(url):
+    from urllib.parse import unquote
+    return unquote(url.split("?")[0].rsplit("/", 1)[-1])
+
+
+def nome_legivel(nome):
+    """'mouse-sem-fio-logitech-7-botoes-01' -> 'Mouse sem fio logitech 7 botoes'."""
+    nome = (nome or "").strip()
+    if " " in nome or nome.count("-") < 2:
+        return nome
+    partes = [p for p in re.split(r"-+", nome) if p]
+    while len(partes) > 2 and re.fullmatch(r"0?\d{1,2}", partes[-1]):
+        partes.pop()
+    texto = " ".join(partes)
+    return texto[:1].upper() + texto[1:]
+
+
 def filtrar_candidatos(candidatos):
     """(validos, descartes). Toda imagem restante passa pelo verificar_imagens.py."""
     import verificar_imagens
     descartes, vistos, antes = [], set(), []
     for c in candidatos:
         motivo = None
-        if not str(c.get("url") or "").startswith(("http://", "https://", "anexo:")):
+        if c.get("nome"):
+            c = dict(c, nome=nome_legivel(c["nome"]))
+        arquivo_img = unquote_nome(str(c.get("imagem") or ""))
+        if str(c.get("url") or "").startswith("http") and URL_NAO_E_PRODUTO.search(str(c.get("url"))):
+            motivo = "link é página de busca, não de um produto"
+        elif ARQUIVO_BANNER.search(arquivo_img):
+            motivo = "imagem é banner da página (nome do arquivo)"
+        if motivo:
+            pass
+        elif not str(c.get("url") or "").startswith(("http://", "https://", "anexo:")):
             motivo = "sem URL de origem"
         elif not str(c.get("imagem") or "").startswith(("http://", "https://")):
             motivo = "sem imagem da fonte"
