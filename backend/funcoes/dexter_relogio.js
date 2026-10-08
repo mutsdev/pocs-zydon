@@ -14,7 +14,7 @@ module.exports = async () => {
     AND portal_id IS NOT NULL AND loja_desativada_em IS NULL AND concluido_em < now() - interval '15 days'`, {})).rows || [])[0];
   try {
     await mitra.sql.executeDml([{ sql: `DELETE FROM pedido_arquivos WHERE tipo = 'banners' AND pedido_id IN (SELECT pedido_id FROM pedidos
-      WHERE status = 'concluido' AND banners_situacao = 'aplicado' AND concluido_em < now() - interval '7 days')`, parameters: {} }]);
+      WHERE status = 'concluido' AND banners_situacao = 'aplicado' AND (automatico OR concluido_em < now() - interval '7 days'))`, parameters: {} }]);
   } catch (e) { /* limpa no próximo ciclo */ }
   const n = Number((fila && fila.n) || 0), s = Number((semLink && semLink.n) || 0), v = Number((vencidos && vencidos.n) || 0);
   const lab = ((await mitra.sql.executeQuery(`SELECT count(*) AS n FROM banner_lab WHERE situacao = 'na_fila'`, {})).rows || [])[0];

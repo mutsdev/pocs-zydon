@@ -435,6 +435,10 @@ async function criar(ev, execucao) {
         await dml(`UPDATE pedidos SET banners_situacao = 'falhou', execucao_atual = NULL WHERE pedido_id = :p`, { p: pedidoId });
       }
     }
+    if (aplicacao && aplicacao.ok && (pedido.automatico === true || pedido.automatico === 't' || pedido.automatico === 'true')) {
+      await dml(`DELETE FROM pedido_arquivos WHERE pedido_id = :p AND tipo = 'banners'`, { p: pedidoId });
+      await registrar({ etapa: 'banners', mensagem: 'pacote de banners descartado (Dexter: peças já aplicadas no portal)' });
+    }
     return { ok: true, portal_id: res.portal_id, url: res.url, banners: aplicacao };
   } finally {
     await dml("UPDATE travas SET pedido_id = NULL, execucao_id = NULL WHERE nome = 'criacao_portal' AND pedido_id = :p",
