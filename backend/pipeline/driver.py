@@ -397,12 +397,24 @@ rede social, seta); for banner, foto de produto, selo ou logo de outra empresa.
 Aprove (ok=true) quando for a marca da empresa (símbolo e/ou nome) legível em pelo menos um dos fundos.
 Responda só JSON: {{"ok": true, "o_que_aparece": "nome Vitarella em vermelho", "motivo": ""}}"""
 
+INSTRUCAO_CONFERIR_LOGO_DO_SITE = """Você confere a LOGO que vai no cabeçalho de um portal B2B do cliente "{cliente}".
+Esta imagem foi tirada do cabeçalho do PRÓPRIO site do cliente: o nome escrito nela pode ser
+outro (nome fantasia, marca antiga, sigla, razão social diferente do cadastro) e isso NÃO é motivo
+para reprovar.
+A mesma imagem aparece sobre fundo branco e sobre fundo escuro.
+Reprove (ok=false) só se a imagem: estiver vazia ou transparente; for um retângulo ou bloco de cor
+chapada sem desenho; for ilegível, borrada ou cortada; for ícone genérico (lupa, carrinho, menu,
+rede social, seta); for banner, foto de produto ou selo.
+Aprove (ok=true) quando for uma marca (símbolo e/ou nome) legível em pelo menos um dos fundos.
+Responda só JSON: {{"ok": true, "o_que_aparece": "nome Vitarella em vermelho", "motivo": ""}}"""
 
-def conferir_logo_ia(caminho, cliente):
+
+def conferir_logo_ia(caminho, cliente, do_site=False):
     """(aprovada, motivo). Sem IA disponível a logo segue (a régua de pixels já passou)."""
     imagens = [("Logo sobre fundo branco:", _jpeg_sobre(caminho, (255, 255, 255))),
                ("Logo sobre fundo escuro:", _jpeg_sobre(caminho, (40, 40, 44)))]
-    resposta, ia = _ia_visao(INSTRUCAO_CONFERIR_LOGO.format(cliente=cliente or "cliente"), imagens)
+    instrucao = INSTRUCAO_CONFERIR_LOGO_DO_SITE if do_site else INSTRUCAO_CONFERIR_LOGO
+    resposta, ia = _ia_visao(instrucao.format(cliente=cliente or "cliente"), imagens)
     if resposta is None:
         evento("extracao", f"conferência visual da logo indisponível ({ia}); seguindo só com a régua de pixels", "aviso")
         return True, None
@@ -413,7 +425,7 @@ def conferir_logo_ia(caminho, cliente):
     return aprovada, resposta.get("motivo") or resposta.get("o_que_aparece") or "não parece a logo"
 
 
-def conferir_logo(logo, cliente=None):
+def conferir_logo(logo, cliente=None, do_site=False):
     """(logo_utilizavel, observacao). Toda logo passa pela régua do repo
     (logo.normalizar com a régua do portal); SVG vira PNG com alfa antes.
     Logo que não passa não segue calada: volta o motivo para as observações."""
@@ -446,7 +458,7 @@ def conferir_logo(logo, cliente=None):
             mod_logo.normalizar(caminho, regua_logo)
             evento("extracao", f"logo pequena (foto de perfil) ampliada para {img.width}x{img.height}")
         if cliente:
-            aprovada, motivo = conferir_logo_ia(caminho, cliente)
+            aprovada, motivo = conferir_logo_ia(caminho, cliente, do_site)
             if not aprovada:
                 return None, f"a logo achada ({Path(str(logo)).name}) foi reprovada na conferência visual: {motivo}"
         return str(caminho), None
@@ -738,9 +750,9 @@ def _logo_inicial(entrada):
         return None, None, None, None
     nav = entrada.get("_navegador") or {}
     if nav.get("logo_arquivo"):
-        logo, aviso_logo = conferir_logo(nav["logo_arquivo"], entrada.get("cliente"))
+        logo, aviso_logo = conferir_logo(nav["logo_arquivo"], entrada.get("cliente"), do_site=True)
         if not logo and nav.get("logo_recorte") and nav["logo_recorte"] != nav["logo_arquivo"]:
-            logo, aviso_logo = conferir_logo(nav["logo_recorte"], entrada.get("cliente"))
+            logo, aviso_logo = conferir_logo(nav["logo_recorte"], entrada.get("cliente"), do_site=True)
         if logo:
             evento("extracao", "logo do site encontrada pelo navegador (apontada pelo barroso-chat na captura)")
             return logo, nav.get("logo_url"), "navegador", aviso_logo
@@ -754,7 +766,7 @@ def _logo_inicial(entrada):
         logo_url = original
     prefixo = atendimento.prefixo(nome_arquivo(entrada.get("cliente"), entrada.get("pedido_id")))
     bruta = atendimento.baixar_logo(logo_url, prefixo)
-    logo, aviso_logo = conferir_logo(bruta, entrada.get("cliente"))
+    logo, aviso_logo = conferir_logo(bruta, entrada.get("cliente"), do_site=True)
     if logo:
         evento("extracao", "logo do site encontrada (em paralelo com a busca de produtos)")
         return logo, logo_url, "site", aviso_logo
@@ -1979,6 +1991,8 @@ def _fundo_onde_a_logo_aparece(logo, marca_hex, nome, paleta):
 
 INSTRUCAO_CONFERIR_PECAS = """Você confere os banners de um portal B2B da empresa "{cliente}" antes de irem ao ar.
 A primeira imagem é a logo correta da empresa; depois vêm as peças numeradas.
+A logo correta pode trazer um nome diferente de "{cliente}" (nome fantasia, marca, sigla): compare a logo do banner
+com a imagem da logo correta, NUNCA com o nome do cliente; nome diferente do cadastro não é motivo para reprovar.
 Para cada peça, reprove (ok=false) se: a logo da empresa não aparece, aparece como retângulo ou
 bloco de cor chapada, borrão ou silhueta irreconhecível; há caixa vazia, placeholder ou imagem quebrada;
 texto cortado, sobreposto ou ilegível sobre o fundo. Fundo simples sem foto é aceitável.
@@ -2908,6 +2922,8 @@ PESSOAS_DO_ZERO = ("uma mulher de meia-idade", "um jovem", "uma jovem", "um senh
 
 INSTRUCAO_CONFERIR_DO_ZERO = """Você confere um banner do portal B2B da empresa "{cliente}" antes de ir ao ar.
 A primeira imagem é a logo correta da empresa; a segunda é o banner.
+A logo correta pode trazer um nome diferente de "{cliente}" (nome fantasia, marca, sigla): compare a logo do banner
+com a imagem da logo correta, NUNCA com o nome do cliente; nome diferente do cadastro não é motivo para reprovar.
 Reprove (ok=false) se: a logo do banner estiver ausente ou diferente da correta (letras, símbolo ou cores trocados);
 houver texto com erro de português, letra trocada, palavra inventada ou texto ilegível; texto cortado na borda;
 houver outra marca ou logotipo de terceiros em destaque; houver BOTÃO desenhado (ex.: "Faça seu pedido", "Comprar");
@@ -3258,6 +3274,8 @@ def _montar_mobile(cabecalho, logo, marca_hex, modo, lado="direita", login=None)
 
 INSTRUCAO_CONFERIR_MOBILE = """Você confere o banner MOBILE (720x270) do portal B2B da empresa "{cliente}" antes de ir ao ar.
 A primeira imagem é a logo correta da empresa; a segunda é o banner.
+A logo correta pode trazer um nome diferente de "{cliente}" (nome fantasia, marca, sigla): compare a logo do banner
+com a imagem da logo correta, NUNCA com o nome do cliente; nome diferente do cadastro não é motivo para reprovar.
 Reprove (ok=false) se: a logo estiver ausente, deformada ou diferente da correta; houver texto com erro, ilegível ou
 cortado; aparecer QUALQUER pedaço de letra, palavra, botão ou logo cortado pela borda da foto ou da peça (sobra de
 outro banner recortado); houver marca de terceiros em destaque; houver caixa vazia ou imagem quebrada.
