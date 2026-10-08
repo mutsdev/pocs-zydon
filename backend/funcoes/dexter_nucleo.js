@@ -60,11 +60,19 @@ async function abrirLote(mitra, dono, empresas, opcoes = {}) {
   }
   if (!validas.length) return { ok: false, erro: 'NENHUMA_VALIDA', erros };
 
-  const nome = String(opcoes.nome || '').trim().slice(0, 120)
-    || `Lote ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'short', timeStyle: 'short' })}`;
-  const lote = await sql(`INSERT INTO lotes (nome, executivo_id, origem) VALUES (:n, CAST(:e AS INTEGER), :o) RETURNING id`,
-    { n: nome, e: String(dono.id), o: opcoes.origem || 'api' });
+  const pedidoNome = String(opcoes.nome || '').trim().slice(0, 120);
+  const porDia = (opcoes.origem || 'api') === 'api';
+  const dia = new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+  const nome = porDia ? `API · ${dia}`
+    : pedidoNome || `Lote ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'short', timeStyle: 'short' })}`;
+  const lote = porDia
+    ? await sql(`INSERT INTO lotes (nome, executivo_id, origem, chave_dia) VALUES (:n, CAST(:e AS INTEGER), 'api', :k)
+        ON CONFLICT (chave_dia) DO UPDATE SET nome = EXCLUDED.nome RETURNING id, (xmax = 0) AS novo`,
+      { n: nome, e: String(dono.id), k: `api:${dono.id}:${dia}` })
+    : await sql(`INSERT INTO lotes (nome, executivo_id, origem) VALUES (:n, CAST(:e AS INTEGER), :o) RETURNING id, true AS novo`,
+      { n: nome, e: String(dono.id), o: opcoes.origem || 'tela' });
   const loteId = lote[0].id;
+  const loteNovo = lote[0].novo === true || lote[0].novo === 't';
   const itens = [];
   for (const l of validas) {
     if (l.referencia) {
@@ -88,11 +96,12 @@ async function abrirLote(mitra, dono, empresas, opcoes = {}) {
       va: l.variacoes ? 'true' : 'false', l: String(loteId), r: l.referencia });
     await dml(`INSERT INTO pedido_eventos (pedido_id, etapa, mensagem) VALUES (:p, 'dexter', :m)`,
       { p: pedidoId, m: `na fila do ${nome} (${opcoes.origem === 'tela' ? 'pela tela' : 'pela API'}) · sem curadoria`
+        + (porDia && pedidoNome ? ` · lote enviado: ${pedidoNome}` : '')
         + (l.observacao ? ` · observação: ${l.observacao}` : '') + (l.variacoes ? ' · com variações' : '') });
     itens.push({ indice: l.indice, referencia: l.referencia || null, empresa: l.empresa, pedido_id: pedidoId, status: 'na_fila' });
   }
   if (!itens.some((i) => !i.duplicado)) {
-    await dml('DELETE FROM lotes WHERE id = CAST(:l AS INTEGER)', { l: String(loteId) });
+    if (loteNovo) await dml('DELETE FROM lotes WHERE id = CAST(:l AS INTEGER) AND NOT EXISTS (SELECT 1 FROM pedidos WHERE lote_id = CAST(:l AS INTEGER))', { l: String(loteId) });
     return { ok: true, lote_id: null, itens, erros, aviso: 'todas as empresas já tinham pedido com a mesma referência' };
   }
   const acordado = await acordarDespacho(mitra);
