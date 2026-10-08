@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Bot, Copy, ExternalLink, FileSpreadsheet, KeyRound, Loader2, RefreshCw, RotateCcw, Send, Star, XCircle } from 'lucide-react'
+import { Bot, ChevronDown, Copy, ExternalLink, FileSpreadsheet, KeyRound, Loader2, RefreshCw, RotateCcw, Send, Star, XCircle } from 'lucide-react'
 import { Card } from '../components/ui/Card'
 import Badge from '../components/ui/Badge'
 import Button from '../components/ui/Button'
@@ -76,6 +76,8 @@ export default function Dexter() {
   const [erro, setErro] = useState<string | null>(null)
   const [filtroStatus, setFiltroStatus] = useState('')
   const [filtroLote, setFiltroLote] = useState('')
+  const [lotesAbertos, setLotesAbertos] = useState(false)
+  const pedidosRef = useRef<HTMLDivElement>(null)
   const [fim, setFim] = useState(false)
   const [nomeLote, setNomeLote] = useState('')
   const [texto, setTexto] = useState('')
@@ -110,6 +112,13 @@ export default function Dexter() {
       setFim(r.length < limite)
     } catch { if (v === versao.current) setErro('Não foi possível carregar os pedidos do Dexter.') }
   }, [filtroStatus, filtroLote])
+
+  function abrirLote(id: string) {
+    setFiltroLote(id)
+    if (!id) return
+    setLotesAbertos(false)
+    requestAnimationFrame(() => pedidosRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+  }
 
   const carregarResumo = useCallback(async () => {
     const [t, l] = await Promise.allSettled([
@@ -386,8 +395,13 @@ export default function Dexter() {
       </div>
 
       <Card className="p-5 flex flex-col gap-3">
-        <h2 className="text-base font-semibold">Lotes</h2>
-        {lotes === null ? <Esqueleto linhas={3} /> : lotes.length === 0 ? (
+        <button type="button" className="flex items-center gap-2 cursor-pointer text-left" aria-expanded={lotesAbertos} onClick={() => setLotesAbertos((a) => !a)}>
+          <h2 className="text-base font-semibold mr-auto">Lotes</h2>
+          {lotes && lotes.length > 0 && <Badge variant="neutral">{lotes.length}</Badge>}
+          {filtroLote && lotes && <span className="text-sm truncate" style={{ color: 'var(--color-primary-text)' }}>{lotes.find((l) => String(l.id) === filtroLote)?.nome}</span>}
+          <ChevronDown size={16} className="ml-auto shrink-0 transition-transform" style={{ transform: lotesAbertos ? 'rotate(180deg)' : undefined, color: 'var(--color-text-secondary)' }} />
+        </button>
+        {!lotesAbertos ? null : lotes === null ? <Esqueleto linhas={3} /> : lotes.length === 0 ? (
           <Vazio titulo="Nenhum lote ainda" texto="Cole uma lista de empresas em Novo lote ou chame a API com um token." />
         ) : (
           <div className="overflow-x-auto"><table className="w-full"><thead><tr className="text-meta text-left" style={{ color: 'var(--color-text-secondary)' }}>
@@ -398,7 +412,7 @@ export default function Dexter() {
               const ativo = filtroLote === String(l.id)
               return (
                 <tr key={l.id} className="cursor-pointer transition-colors hover:bg-[var(--color-nav-hover)]" style={{ borderTop: '1px solid var(--color-border)', backgroundColor: ativo ? 'var(--color-primary-bg)' : undefined }}
-                  onClick={() => setFiltroLote(ativo ? '' : String(l.id))}>
+                  onClick={() => abrirLote(ativo ? '' : String(l.id))}>
                   <td className="px-3 py-3"><div className="leading-tight"><div className="font-medium">{l.nome}</div><div className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>{l.usuario} · {l.origem === 'tela' ? 'pela tela' : 'pela API'} · {dataHora(l.criado_em)}</div></div></td>
                   <td className="px-3 py-3 w-48">
                     <div className="flex items-center gap-2">
@@ -414,7 +428,7 @@ export default function Dexter() {
         )}
       </Card>
 
-      <Card className="p-5 flex flex-col gap-3">
+      <div ref={pedidosRef} className="scroll-mt-4"><Card className="p-5 flex flex-col gap-3">
         <div className="flex flex-wrap items-end gap-3">
           <h2 className="text-base font-semibold mr-auto">Pedidos do Dexter</h2>
           <div className="w-full sm:w-44">
@@ -464,7 +478,7 @@ export default function Dexter() {
             {!fim && <div className="flex justify-center pt-3"><Button variant="secondary" onClick={() => carregarPedidos(linhas.length)}><Bot size={16} /> Carregar mais</Button></div>}
           </div>
         )}
-      </Card>
+      </Card></div>
     </Pagina>
   )
 }
