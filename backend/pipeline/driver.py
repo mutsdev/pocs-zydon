@@ -2383,7 +2383,8 @@ def ativar_telufia(catalogo, cliente, segmento, portal_id):
     if (lido or {}).get("assistant_name") != "Telufia":
         return {"situacao": "falhou", "motivo": f"GET da Zoe não confirmou a Telufia (HTTP {conferencia.status_code})"}
     evento("telufia", "Telufia ativada e conferida no portal")
-    return {"situacao": "ativada", "caracteres": len(prompt), "custo": custo}
+    usado = lido.get("assistant_prompt") if isinstance(lido.get("assistant_prompt"), str) else prompt
+    return {"situacao": "ativada", "caracteres": len(prompt), "custo": custo, "prompt": usado}
 
 
 def telufia(entrada):
@@ -2417,6 +2418,186 @@ def telufia_portal(entrada):
 
 def url_portal(entrada):
     return {"url": url_pelo_portal_id(entrada["portal_id"])}
+
+
+APARENCIA_URL = "https://api.zydon.com.br/api/b2b/portals/appearance"
+MAXIMO_PRODUTOS_REUNIAO = 60
+
+INSTRUCAO_PERGUNTAS_REUNIAO = """Você prepara a demonstração do portal B2B da empresa "{cliente}" (segmento: {segmento}).
+Durante a reunião, o executivo de vendas vai digitar perguntas na consultora de IA do portal (a Telufia), que responde recomendando produtos do catálogo abaixo.
+Escreva de 5 a 8 perguntas que o executivo vai fazer À IA, como se fosse um comprador do cliente. Cada item tem:
+- "pergunta": o texto exato a digitar na IA, natural, em português, terminando com "?";
+- "objetivo": o que a resposta da IA mostra na demonstração (ex.: "mostra que a IA recomenda o item certo a partir de uma necessidade vaga");
+- "produto": o nome EXATO de um produto da lista que a resposta deve puxar, ou null se a pergunta for geral;
+- "dor": a situação do comprador que a pergunta resolve, curta, em minúsculas (ex.: "não sabe o que levar", "compra para presente", "precisa repor estoque rápido", "quer comparar opções").
+Regras: cada pergunta resolve uma dor diferente; pelo menos metade das perguntas com "produto" preenchido; use só produtos e categorias da lista; não invente preço, marca, prazo nem característica que não esteja no catálogo.
+Responda só JSON: {{"perguntas": [{{"pergunta": "...?", "objetivo": "...", "produto": null, "dor": "..."}}]}}
+
+Catálogo:
+{lista}"""
+
+
+def _token_do_portal(portal_id):
+    """(token, erro): login com solution_id = portal; só autentica, não muda nada no portal."""
+    import time
+    import requests
+    import credenciais
+    headers, _ = credenciais.carregar(ORG)
+    codigo = None
+    for tentativa in range(3):
+        login = requests.post(f"{credenciais.ACCOUNT_BASE_URL}/access-key/login", timeout=30,
+                              json={"code": headers["X-Zydon-Access-Key-Code"],
+                                    "token": headers["X-Zydon-Access-Key-Token"], "solution_id": portal_id})
+        codigo = login.status_code
+        if codigo == 200:
+            token = (login.json() or {}).get("accessToken")
+            return (token, None) if token else (None, "login no portal não devolveu accessToken")
+        if codigo < 500:
+            break
+        time.sleep(3)
+    return None, f"login no portal respondeu HTTP {codigo}"
+
+
+def ler_reuniao(entrada):
+    """Lê o portal para a reunião só com GET (Zoe e aparência). Nunca grava nada no portal."""
+    import requests
+    portal_id = str(entrada.get("portal_id") or "").strip()
+    saida = {"portal_id": portal_id, "assistant_prompt": None, "prompt_lido": False,
+             "is_open_to_public": None, "loja_lida": False, "erros": []}
+    if not portal_id:
+        saida["erros"].append("pedido sem portal_id")
+        return saida
+    try:
+        token, erro = _token_do_portal(portal_id)
+    except Exception as falha:
+        token, erro = None, f"login no portal falhou: {type(falha).__name__}: {falha}"[:300]
+    if not token:
+        saida["erros"].append(erro)
+        return saida
+    bearer = {"Authorization": "Bearer " + token}
+    for nome, url in (("Zoe", ZOE_URL), ("aparência", APARENCIA_URL)):
+        try:
+            resposta = requests.get(url, headers=bearer, timeout=30)
+        except requests.RequestException as falha:
+            saida["erros"].append(f"GET da {nome} falhou: {type(falha).__name__}")
+            continue
+        if resposta.status_code != 200:
+            saida["erros"].append(f"GET da {nome} respondeu HTTP {resposta.status_code}")
+            continue
+        try:
+            corpo = resposta.json() if resposta.text.strip() else {}
+        except ValueError:
+            saida["erros"].append(f"GET da {nome} não devolveu JSON")
+            continue
+        if not isinstance(corpo, dict):
+            saida["erros"].append(f"GET da {nome} devolveu formato inesperado")
+            continue
+        if nome == "Zoe":
+            prompt = corpo.get("assistant_prompt")
+            if prompt is not None and not isinstance(prompt, str):
+                saida["erros"].append("assistant_prompt da Zoe não é texto")
+                continue
+            saida["assistant_prompt"] = prompt if prompt and prompt.strip() else None
+            saida["prompt_lido"] = True
+        else:
+            aberta = corpo.get("is_open_to_public")
+            if not isinstance(aberta, bool):
+                saida["erros"].append("is_open_to_public ausente ou não booleano na aparência")
+                continue
+            saida["is_open_to_public"] = aberta
+            saida["loja_lida"] = True
+    evento("reuniao", "portal lido para a reunião" if not saida["erros"]
+           else "leitura do portal incompleta: " + " · ".join(saida["erros"]), "info" if not saida["erros"] else "aviso")
+    return saida
+
+
+def _chave_nome(texto):
+    return " ".join(_sem_acento(selecao.limpar_texto(texto)).split())
+
+
+def _produtos_reuniao(catalogo):
+    etapas = {e.get("endpoint"): e for e in catalogo.get("etapas") or []}
+    categorias = {f"{{{{{r.get('salvar_id_como')}}}}}": r["payload"].get("name")
+                  for r in (etapas.get("categories") or {}).get("requests") or [] if r.get("payload")}
+    produtos = []
+    for r in (etapas.get("products") or {}).get("requests") or []:
+        p = r.get("payload") or {}
+        nome = selecao.limpar_texto(p.get("name"))
+        if nome:
+            produtos.append({"nome": nome, "categoria": selecao.limpar_texto(categorias.get(p.get("category_id")) or "-"),
+                             "descricao": selecao.limpar_texto(p.get("description"))[:160]})
+    return produtos
+
+
+def _validar_perguntas_reuniao(dados, por_chave):
+    itens = dados.get("perguntas") if isinstance(dados, dict) else None
+    if not isinstance(itens, list):
+        raise ValueError("resposta sem a lista 'perguntas'")
+    if not 5 <= len(itens) <= 8:
+        raise ValueError(f"vieram {len(itens)} perguntas (esperado de 5 a 8)")
+    perguntas, vistas, dores = [], set(), set()
+    for n, item in enumerate(itens, 1):
+        if not isinstance(item, dict):
+            raise ValueError(f"pergunta {n} fora do formato")
+        texto = selecao.limpar_texto(item.get("pergunta"))
+        objetivo = selecao.limpar_texto(item.get("objetivo"))
+        dor = selecao.limpar_texto(item.get("dor")).strip().rstrip(".").lower()
+        if not 10 <= len(texto) <= 300 or not texto.endswith("?"):
+            raise ValueError(f"pergunta {n} vazia, longa demais ou sem '?'")
+        if not 10 <= len(objetivo) <= 300:
+            raise ValueError(f"pergunta {n} sem objetivo")
+        if not 3 <= len(dor) <= 120:
+            raise ValueError(f"pergunta {n} sem dor")
+        if _chave_nome(texto) in vistas:
+            raise ValueError(f"pergunta {n} repetida")
+        if _chave_nome(dor) in dores:
+            raise ValueError(f"pergunta {n} repete a dor {dor!r}")
+        vistas.add(_chave_nome(texto))
+        dores.add(_chave_nome(dor))
+        bruto = item.get("produto")
+        produto = None
+        if bruto not in (None, "", "null"):
+            produto = por_chave.get(_chave_nome(bruto))
+            if not produto:
+                raise ValueError(f"pergunta {n} cita produto fora do catálogo: {str(bruto)[:80]!r}")
+        perguntas.append({"pergunta": texto, "objetivo": objetivo, "produto": produto, "dor": dor})
+    if sum(1 for p in perguntas if p["produto"]) * 2 < len(perguntas):
+        raise ValueError("menos da metade das perguntas puxa um produto do catálogo")
+    return perguntas
+
+
+def gerar_perguntas_reuniao(entrada):
+    """5 a 8 perguntas de diagnóstico a partir do catálogo salvo no pedido. Sem fallback fixo:
+    se a IA não devolver perguntas válidas, a ação falha com o motivo."""
+    catalogo = entrada.get("catalogo")
+    if isinstance(catalogo, str):
+        catalogo = json.loads(catalogo)
+    if not isinstance(catalogo, dict):
+        raise ValueError("pedido sem catálogo salvo")
+    produtos = _produtos_reuniao(catalogo)
+    if not produtos:
+        raise ValueError("catálogo salvo sem produtos")
+    por_chave = {}
+    for p in produtos:
+        por_chave.setdefault(_chave_nome(p["nome"]), p["nome"])
+    lista = "\n".join(f"- {p['nome']} | categoria: {p['categoria']} | {p['descricao']}"
+                      for p in produtos[:MAXIMO_PRODUTOS_REUNIAO])
+    cliente = entrada.get("cliente") or catalogo.get("empresa") or "cliente"
+    mensagens = [{"role": "user", "content": INSTRUCAO_PERGUNTAS_REUNIAO.format(
+        cliente=cliente, segmento=entrada.get("segmento") or "comércio B2B", lista=lista)}]
+    motivos = []
+    for tentativa in range(2):
+        try:
+            dados, custo = selecao._chamar_openrouter(mensagens)
+            perguntas = _validar_perguntas_reuniao(dados, por_chave)
+        except ValueError as erro:
+            motivos.append(str(erro)[:200])
+            mensagens = mensagens[:1] + [{"role": "user", "content":
+                f"A resposta anterior foi recusada: {erro}. Refaça seguindo todas as regras e responda só o JSON."}]
+            continue
+        evento("reuniao", f"{len(perguntas)} perguntas de diagnóstico geradas")
+        return {"perguntas": perguntas, "custo": custo}
+    raise RuntimeError("IA não devolveu perguntas válidas: " + " · ".join(motivos))
 
 
 CAMPOS_APARENCIA = ("title", "billing_name", "fiscal_registration_number", "color", "brand_image",
@@ -3409,7 +3590,8 @@ def _mobile_seguro(pasta, logo=None, cliente="", so_se_faltar=False):
         return None
 
 
-ACOES = {"loja_publica": loja_publica, "url_portal": url_portal, "trocar_logo": trocar_logo, "miniaturas": miniaturas, "extrair": extrair, "avaliar": avaliar, "previa": previa, "criar": criar, "banner": banner, "telufia": telufia, "telufia_portal": telufia_portal, "lab_banner": lab_banner, "lab_aplicar": lab_aplicar}
+ACOES = {"loja_publica": loja_publica, "url_portal": url_portal, "trocar_logo": trocar_logo, "miniaturas": miniaturas, "extrair": extrair, "avaliar": avaliar, "previa": previa, "criar": criar, "banner": banner, "telufia": telufia, "telufia_portal": telufia_portal, "lab_banner": lab_banner, "lab_aplicar": lab_aplicar,
+         "ler_reuniao": ler_reuniao, "gerar_perguntas_reuniao": gerar_perguntas_reuniao}
 
 
 def _restaurar_cores_navegador(entrada):

@@ -561,6 +561,9 @@ async function gravarTelufia(pedidoId, t, registrar) {
   if (!t) return;
   const texto = t.situacao === 'ativada' ? 'ativada' : `falhou: ${t.motivo || 'sem motivo'}`;
   await dml('UPDATE pedidos SET telufia = :t, atualizado_em = now() WHERE pedido_id = :p', { p: pedidoId, t: texto.slice(0, 400) });
+  if (t.situacao === 'ativada' && typeof t.prompt === 'string' && t.prompt.trim()) {
+    await dml('UPDATE pedidos SET prompt_ia = :t WHERE pedido_id = :p', { p: pedidoId, t: t.prompt });
+  }
   await registrar({ etapa: 'telufia', mensagem: t.situacao === 'ativada'
     ? `Telufia (consultora de IA) ativada e conferida no portal · prompt com ${t.caracteres} caracteres`
     : `Telufia não ativada: ${t.motivo}`, nivel: t.situacao === 'ativada' ? 'info' : 'erro' });
@@ -685,9 +688,86 @@ async function lojaPublica(ev) {
   const saida = await rodarPython('loja_publica', { pedido_id: pedidoId, portal_id: pedido.portal_id, publico: ev.publico === true }, registrar);
   await registrar.fim();
   if (saida.ok && saida.situacao === 'ok') {
-    await dml(`UPDATE pedidos SET loja_desativada_em = ${ev.publico === true ? 'NULL' : 'now()'}, atualizado_em = now() WHERE pedido_id = :p`, { p: pedidoId });
+    await dml(`UPDATE pedidos SET loja_desativada_em = ${ev.publico === true ? 'NULL' : 'now()'}, loja_aberta = CAST(:l AS BOOLEAN),
+      portal_lido_em = now(), atualizado_em = now() WHERE pedido_id = :p`, { p: pedidoId, l: String(saida.depois === true) });
   }
   return { ok: !!saida.ok && saida.situacao === 'ok', ...saida, log: undefined };
+}
+
+const ACOES_REUNIAO = ['preparar_reuniao', 'backfill_reuniao'];
+const LOTE_REUNIAO = 3;
+const verdadeiro = (valor) => valor === true || valor === 't' || valor === 'true';
+
+async function lerPedidoReuniao(pedidoId) {
+  const linhas = await sql(`SELECT pedido_id, cliente, segmento, portal_id, CAST(catalogo AS TEXT) AS catalogo,
+      (perguntas_ia IS NOT NULL) AS tem_perguntas FROM pedidos WHERE pedido_id = :p`, { p: pedidoId });
+  if (!linhas.length) throw new Error(`pedido ${pedidoId} não existe`);
+  return linhas[0];
+}
+
+async function prepararReuniaoDoPedido(pedidoId, regerar = false) {
+  const pedido = await lerPedidoReuniao(pedidoId);
+  const log = (e) => console.log(pedidoId, e.etapa, e.mensagem);
+  const resultado = { pedido_id: pedidoId, perguntas: null, prompt_lido: false, loja_aberta: null, erros: [] };
+  const tarefas = [];
+  if (!pedido.catalogo) {
+    resultado.erros.push('perguntas: pedido sem catálogo salvo');
+  } else if (regerar || !verdadeiro(pedido.tem_perguntas)) {
+    tarefas.push(rodarPython('gerar_perguntas_reuniao', { catalogo: pedido.catalogo, cliente: pedido.cliente,
+      segmento: pedido.segmento || '' }, log).then(async (saida) => {
+      if (!saida.ok || !Array.isArray(saida.perguntas) || !saida.perguntas.length) {
+        resultado.erros.push(`perguntas: ${saida.erro || 'IA não devolveu perguntas'}`);
+        return;
+      }
+      await dml('UPDATE pedidos SET perguntas_ia = CAST(:q AS JSONB) WHERE pedido_id = :p',
+        { p: pedidoId, q: JSON.stringify(saida.perguntas) });
+      resultado.perguntas = saida.perguntas.length;
+    }));
+  }
+  if (pedido.portal_id) {
+    tarefas.push(rodarPython('ler_reuniao', { portal_id: pedido.portal_id }, log).then(async (saida) => {
+      if (!saida.ok) { resultado.erros.push(`portal: ${saida.erro || 'leitura falhou'}`); return; }
+      for (const erro of saida.erros || []) resultado.erros.push(`portal: ${erro}`);
+      if (!saida.prompt_lido && !saida.loja_lida) return;
+      await dml(`UPDATE pedidos SET portal_lido_em = now(),
+          prompt_ia = CASE WHEN :pl = 'true' THEN :t ELSE prompt_ia END,
+          loja_aberta = CASE WHEN :ll = 'true' THEN CAST(:l AS BOOLEAN) ELSE loja_aberta END
+        WHERE pedido_id = :p`, { p: pedidoId, pl: String(!!saida.prompt_lido), t: saida.assistant_prompt || null,
+        ll: String(!!saida.loja_lida), l: String(saida.is_open_to_public === true) });
+      resultado.prompt_lido = !!saida.prompt_lido;
+      resultado.loja_aberta = saida.loja_lida ? saida.is_open_to_public === true : null;
+    }));
+  }
+  await Promise.all(tarefas);
+  return resultado;
+}
+
+async function prepararReuniao(ev) {
+  const resultado = await prepararReuniaoDoPedido(ev.pedido_id, ev.regerar_perguntas === true);
+  return { ok: !resultado.erros.length, ...resultado };
+}
+
+async function backfillReuniao(ev) {
+  const apos = String(parseInt(ev.apos_id, 10) || 0);
+  const lote = await sql(`SELECT id, pedido_id FROM pedidos WHERE id > CAST(:a AS INTEGER)
+      AND ((portal_id IS NOT NULL AND portal_lido_em IS NULL) OR (catalogo IS NOT NULL AND perguntas_ia IS NULL))
+    ORDER BY id LIMIT ${LOTE_REUNIAO}`, { a: apos });
+  if (!lote.length) return { ok: true, fim: true, apos_id: Number(apos) };
+  const feitos = await Promise.allSettled(lote.map((linha) => prepararReuniaoDoPedido(linha.pedido_id)));
+  const pedidos = feitos.map((f, i) => (f.status === 'fulfilled' ? f.value
+    : { pedido_id: lote[i].pedido_id, erros: [String((f.reason && f.reason.message) || f.reason).slice(0, 300)] }));
+  const ultimo = Number(lote[lote.length - 1].id);
+  let proximo = null;
+  if (lote.length === LOTE_REUNIAO) {
+    const lista = await mitra.functionsAdmin.list({ size: 100 });
+    const pipeline = (lista.content || lista.items || []).find((f) => f.name === 'pipeline_poc');
+    if (pipeline) {
+      await mitra.functions.executeAsync(pipeline.id, { acao: 'backfill_reuniao', apos_id: ultimo, chave_interna: ev.chave_interna });
+      proximo = ultimo;
+    }
+  }
+  return { ok: true, fim: proximo === null, processados: pedidos.length,
+    com_erro: pedidos.filter((p) => p.erros && p.erros.length).length, proximo_apos_id: proximo, pedidos };
 }
 
 async function regrasDoLab() {
@@ -769,14 +849,15 @@ async function telufiaPortal(ev) {
     telufia: saida.telufia, erro: saida.erro };
 }
 
-const ACOES = { loja_publica: lojaPublica, url_portal: urlPortal, extrair, previa, criar, banner, avaliar, miniaturas, trocar_logo: trocarLogo, telufia, telufia_portal: telufiaPortal, despachar, auto, lab_despachar: labDespachar, lab_aplicar: labAplicar };
-const ACOES_INTERNAS = ['telufia_portal', 'despachar', 'auto', 'url_portal', 'loja_publica', 'lab_despachar', 'lab_aplicar'];
+const ACOES = { loja_publica: lojaPublica, url_portal: urlPortal, extrair, previa, criar, banner, avaliar, miniaturas, trocar_logo: trocarLogo, telufia, telufia_portal: telufiaPortal, despachar, auto, lab_despachar: labDespachar, lab_aplicar: labAplicar,
+  preparar_reuniao: prepararReuniao, backfill_reuniao: backfillReuniao };
+const ACOES_INTERNAS = ['telufia_portal', 'despachar', 'auto', 'url_portal', 'loja_publica', 'lab_despachar', 'lab_aplicar', ...ACOES_REUNIAO];
 
 module.exports = async (event, context) => {
   const ev = (event && event.input) ? event.input : (event || {});
   const acao = ev.acao;
   if (!ACOES[acao]) return { ok: false, erro: `ação desconhecida: ${acao}` };
-  if (!['avaliar', 'despachar', 'lab_despachar', 'telufia_portal'].includes(acao) && !ev.pedido_id) return { ok: false, erro: 'CAMPOS_FALTANDO', faltando: ['pedido_id'] };
+  if (!['avaliar', 'despachar', 'lab_despachar', 'telufia_portal', 'backfill_reuniao'].includes(acao) && !ev.pedido_id) return { ok: false, erro: 'CAMPOS_FALTANDO', faltando: ['pedido_id'] };
   const faltando = SEGREDOS.filter((nome) => !process.env[nome]);
   mitra = createClient();
   await mitra.init();
@@ -809,7 +890,7 @@ module.exports = async (event, context) => {
     return { ...resultado, commit: COMMIT, segredos_faltando: faltando };
   } catch (erro) {
     const texto = `${erro.name || 'Erro'}: ${erro.message}`;
-    if (ev.pedido_id) {
+    if (ev.pedido_id && !ACOES_REUNIAO.includes(acao)) {
       try {
         if (acao === 'previa' || acao === 'banner' || acao === 'trocar_logo') {
           await registrador(ev.pedido_id)({ etapa: 'banners', mensagem: texto, nivel: 'erro' });
