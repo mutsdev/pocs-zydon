@@ -34,7 +34,7 @@ const moeda = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL
 export const reais = (v: number | null | undefined) => (v === null || v === undefined ? '—' : moeda.format(v))
 
 export const dolares = (v: number | string | null | undefined) =>
-  v === null || v === undefined ? '—' : `US$ ${Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 4, maximumFractionDigits: 4 })}`
+  v === null || v === undefined ? '—' : `US$ ${Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
 export function duracao(segundos: number | null | undefined) {
   if (segundos === null || segundos === undefined) return '—'
