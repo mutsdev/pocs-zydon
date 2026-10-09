@@ -2580,6 +2580,8 @@ def gerar_perguntas_reuniao(entrada):
     por_chave = {}
     for p in produtos:
         por_chave.setdefault(_chave_nome(p["nome"]), p["nome"])
+        if " | " in p["nome"]:
+            por_chave.setdefault(_chave_nome(p["nome"].split(" | ")[0]), p["nome"])
     lista = "\n".join(f"- {p['nome']} | categoria: {p['categoria']} | {p['descricao']}"
                       for p in produtos[:MAXIMO_PRODUTOS_REUNIAO])
     cliente = entrada.get("cliente") or catalogo.get("empresa") or "cliente"
