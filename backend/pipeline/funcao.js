@@ -439,6 +439,17 @@ async function criar(ev, execucao) {
       await dml(`DELETE FROM pedido_arquivos WHERE pedido_id = :p AND tipo = 'banners'`, { p: pedidoId });
       await registrar({ etapa: 'banners', mensagem: 'pacote de banners descartado (Dexter: peças já aplicadas no portal)' });
     }
+    try {
+      const chave = ((await sql("SELECT valor FROM configuracao WHERE chave = 'chave_interna'", {}))[0] || {}).valor || '';
+      const lista = await mitra.functionsAdmin.list({ size: 100 });
+      const pipeline = (lista.content || lista.items || []).find((f) => f.name === 'pipeline_poc');
+      if (pipeline && chave) {
+        await mitra.functions.executeAsync(pipeline.id, { acao: 'preparar_reuniao', pedido_id: pedidoId, chave_interna: chave });
+        await registrar({ etapa: 'reuniao', mensagem: 'preparação da reunião disparada: perguntas para a IA do portal' });
+      }
+    } catch (erro) {
+      await registrar({ etapa: 'reuniao', mensagem: `preparação da reunião não disparada: ${erro.message}`, nivel: 'aviso' });
+    }
     return { ok: true, portal_id: res.portal_id, url: res.url, banners: aplicacao };
   } finally {
     await dml("UPDATE travas SET pedido_id = NULL, execucao_id = NULL WHERE nome = 'criacao_portal' AND pedido_id = :p",
