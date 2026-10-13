@@ -2261,19 +2261,35 @@ def _categoria_repetida(saida):
 
 
 def _renomear_categoria(catalogo, rotulo, cliente, tentativa):
-    etapas = [e for e in catalogo.get("etapas") or [] if e.get("endpoint") in ("categories", "products")]
-    for req in [r for e in etapas for r in (e.get("requests") or [])]:
-        payload = req.get("payload") or {}
-        if rotulo not in (req.get("label"), payload.get("name")):
+    """Endereço em uso: renomeia de uma vez toda a etapa (categorias ou produtos) onde o nome bateu,
+    porque um portal antigo do mesmo cliente na org repete quase todos os nomes."""
+    sufixo = " ".join(str(cliente).split()) or "POC"
+    for etapa in catalogo.get("etapas") or []:
+        if etapa.get("endpoint") not in ("categories", "products"):
             continue
-        if payload.get("slug"):
+        reqs = etapa.get("requests") or []
+        alvo = next((r for r in reqs if rotulo in (r.get("label"), (r.get("payload") or {}).get("name"))), None)
+        if not alvo:
+            continue
+        vez = etapa["_renomeios"] = int(etapa.get("_renomeios") or 0) + 1
+        if vez > 3:
+            return None
+        marca = sufixo if vez == 1 else f"{sufixo} {vez}"
+        novo_alvo = None
+        for req in reqs:
+            payload = req.get("payload") or {}
+            if not payload.get("name"):
+                continue
             payload.pop("slug", None)
-        original = req.setdefault("_nome_original", str(payload.get("name") or rotulo))
-        sufixo = " ".join(str(cliente).split()) or "POC"
-        novo = f"{original} - {sufixo}" if tentativa == 0 else f"{original} - {sufixo} {tentativa + 1}"
-        payload["name"] = novo
-        req["label"] = novo
-        return novo
+            anterior = str(payload["name"])
+            original = req.setdefault("_nome_original", anterior)
+            novo = f"{original} - {marca}"
+            payload["name"] = novo
+            if req.get("label") in (None, anterior):
+                req["label"] = novo
+            if req is alvo:
+                novo_alvo = novo
+        return novo_alvo
     return None
 
 
@@ -2302,7 +2318,7 @@ def criar(entrada):
         if isinstance(entrada["catalogo"], str):
             entrada["catalogo"] = json.loads(entrada["catalogo"])
         novo_nome = _renomear_categoria(entrada["catalogo"], repetida, entrada.get("cliente") or "", renomeadas)
-        if not novo_nome or renomeadas >= 3:
+        if not novo_nome or renomeadas >= 8:
             resultado = dict(resultado, observacoes=(f"'{repetida}' já existe em outro portal da org pocs "
                                                      f"(mesmo endereço) e não deu para criar com outro nome"))
             break
