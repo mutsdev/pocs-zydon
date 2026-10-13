@@ -2224,6 +2224,47 @@ def url_pelo_portal_id(portal_id):
         return None
 
 
+_SLUG_EM_USO = re.compile(r'\[FALHA\] (.+?): 400 - .*?"field":\s*"slug".*?j\u00e1 est\u00e1 em uso')
+
+
+def _atender_capturando(atendimento, caminho, logo, pedido_id, simular):
+    capturado = {"saida": ""}
+    original = atendimento.executar
+
+    def executar(*args, **kwargs):
+        codigo, saida = original(*args, **kwargs)
+        capturado["saida"] = str(saida or "")
+        return codigo, saida
+
+    atendimento.executar = executar
+    try:
+        resultado = atendimento.atender(caminho, logo, ORG, True, pedido_id=pedido_id,
+                                        origem_id=pedido_id, simular=simular)
+    finally:
+        atendimento.executar = original
+    return resultado, capturado["saida"]
+
+
+def _categoria_repetida(saida):
+    achado = _SLUG_EM_USO.search(saida or "")
+    return achado.group(1).strip() if achado else None
+
+
+def _renomear_categoria(catalogo, rotulo, cliente, tentativa):
+    etapa = next((e for e in catalogo.get("etapas") or [] if e.get("endpoint") == "categories"), None)
+    for req in (etapa or {}).get("requests") or []:
+        payload = req.get("payload") or {}
+        if rotulo not in (req.get("label"), payload.get("name")):
+            continue
+        original = req.setdefault("_nome_original", str(payload.get("name") or rotulo))
+        sufixo = " ".join(str(cliente).split()) or "POC"
+        novo = f"{original} - {sufixo}" if tentativa == 0 else f"{original} - {sufixo} {tentativa + 1}"
+        payload["name"] = novo
+        req["label"] = novo
+        return novo
+    return None
+
+
 def criar(entrada):
     import atendimento
     pedido_id = entrada["pedido_id"]
@@ -2240,8 +2281,22 @@ def criar(entrada):
     caminho = gravar_catalogo(entrada["catalogo"], pedido_id)
     simular = bool(entrada.get("simular"))
     evento("criacao", "simulação: valida sem criar nada" if simular else "criando o portal na org pocs")
-    resultado = atendimento.atender(caminho, logo, ORG, True, pedido_id=pedido_id,
-                                    origem_id=pedido_id, simular=simular)
+    renomeadas = 0
+    while True:
+        resultado, saida_execucao = _atender_capturando(atendimento, caminho, logo, pedido_id, simular)
+        repetida = _categoria_repetida(saida_execucao)
+        if simular or resultado.get("status") != "falhou" or not repetida:
+            break
+        if isinstance(entrada["catalogo"], str):
+            entrada["catalogo"] = json.loads(entrada["catalogo"])
+        novo_nome = _renomear_categoria(entrada["catalogo"], repetida, entrada.get("cliente") or "", renomeadas)
+        if not novo_nome or renomeadas >= 3:
+            resultado = dict(resultado, observacoes=(f"a categoria '{repetida}' já existe em outro portal da org pocs "
+                                                     f"(mesmo endereço) e não deu para criar com outro nome"))
+            break
+        evento("criacao", f"a categoria '{repetida}' já existe em outro portal da org; criando como '{novo_nome}'", "aviso")
+        caminho = gravar_catalogo(entrada["catalogo"], pedido_id)
+        renomeadas += 1
     if not simular and resultado.get("portal_id"):
         url = url_pelo_portal_id(resultado["portal_id"])
         if url and url.rstrip("/") != (resultado.get("url") or "").rstrip("/"):
