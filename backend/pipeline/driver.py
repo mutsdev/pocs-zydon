@@ -1317,7 +1317,7 @@ def extrair(entrada):
         evento("extracao", "produtos prontos para a curadoria; o banner termina em seguida")
         print("PARCIAL " + json.dumps(saida, ensure_ascii=False), flush=True)
     if banner.get("fio"):
-        banner["fio"].join(timeout=max(5, 240 - (time.monotonic() - banner["inicio"])))
+        banner["fio"].join(timeout=max(5, PRAZO_BANNER_SEGUNDOS + 90 - (time.monotonic() - banner["inicio"])))
         pronto = banner.get("saida")
         if pronto and logo and Path(pronto.pop("logo")).resolve() == Path(logo).resolve():
             saida["banner"] = pronto
@@ -2064,8 +2064,13 @@ def conferir_pecas_ia(pasta, logo, cliente):
 def gerar_com_identidade(entrada, caminho, logo, variar=False, anterior=None, texto=""):
     """Peças base conferidas; fora do laboratório, login e cabeçalho viram o banner do zero guiado
     (se a Images API falhar ou reprovar, ficam as peças base)."""
+    import time
+    iniciar_prazo_banner(None if LAB_ATIVO else PRAZO_BANNER_SEGUNDOS)
+    comeco = time.monotonic()
     nova, saida, paleta = _gerar_base_conferida(entrada, caminho, logo, variar, anterior, texto)
-    if nova and logo and not LAB_ATIVO:
+    if nova and logo and not LAB_ATIVO and resta_banner() < 100:
+        evento("banners", f"sem tempo para o banner do zero (faltam {max(0, int(resta_banner()))} s do prazo); ficaram as peças padrão", "aviso")
+    elif nova and logo and not LAB_ATIVO:
         try:
             import subir_banners
             pecas, _ = subir_banners.pecas_da_pasta(nova)
@@ -2075,6 +2080,7 @@ def gerar_com_identidade(entrada, caminho, logo, variar=False, anterior=None, te
             evento("banners", f"banner do zero falhou ({type(erro).__name__}: {str(erro)[:160]}); ficaram as peças padrão", "aviso")
     if nova and not LAB_ATIVO:
         _mobile_seguro(nova, logo, entrada.get("cliente") or "")
+        evento("banners", f"peças prontas em {int(time.monotonic() - comeco)} s (prazo {PRAZO_BANNER_SEGUNDOS} s)")
     return nova, saida, paleta
 
 
@@ -2091,6 +2097,10 @@ def _gerar_base_conferida(entrada, caminho, logo, variar=False, anterior=None, t
         reprovadas = []
     if not reprovadas:
         return nova, saida, paleta
+    if resta_banner() < 60:
+        motivo = "banners reprovados na conferência visual e sem tempo para refazer: " + "; ".join(reprovadas)
+        evento("banners", motivo + " · os banners não vão para o portal", "erro")
+        return None, motivo, paleta
     marca = _rgb(paleta.get("destaque") or paleta["principal"])
     fundo = _misturar(marca, (255, 255, 255), 0.9)
     clara = {"principal": _hex(fundo), "destaque": _hex(marca if _contraste(marca, fundo) >= 3 else _legivel_sobre(marca, fundo)),
@@ -2251,11 +2261,13 @@ def _categoria_repetida(saida):
 
 
 def _renomear_categoria(catalogo, rotulo, cliente, tentativa):
-    etapa = next((e for e in catalogo.get("etapas") or [] if e.get("endpoint") == "categories"), None)
-    for req in (etapa or {}).get("requests") or []:
+    etapas = [e for e in catalogo.get("etapas") or [] if e.get("endpoint") in ("categories", "products")]
+    for req in [r for e in etapas for r in (e.get("requests") or [])]:
         payload = req.get("payload") or {}
         if rotulo not in (req.get("label"), payload.get("name")):
             continue
+        if payload.get("slug"):
+            payload.pop("slug", None)
         original = req.setdefault("_nome_original", str(payload.get("name") or rotulo))
         sufixo = " ".join(str(cliente).split()) or "POC"
         novo = f"{original} - {sufixo}" if tentativa == 0 else f"{original} - {sufixo} {tentativa + 1}"
@@ -2291,10 +2303,10 @@ def criar(entrada):
             entrada["catalogo"] = json.loads(entrada["catalogo"])
         novo_nome = _renomear_categoria(entrada["catalogo"], repetida, entrada.get("cliente") or "", renomeadas)
         if not novo_nome or renomeadas >= 3:
-            resultado = dict(resultado, observacoes=(f"a categoria '{repetida}' já existe em outro portal da org pocs "
+            resultado = dict(resultado, observacoes=(f"'{repetida}' já existe em outro portal da org pocs "
                                                      f"(mesmo endereço) e não deu para criar com outro nome"))
             break
-        evento("criacao", f"a categoria '{repetida}' já existe em outro portal da org; criando como '{novo_nome}'", "aviso")
+        evento("criacao", f"'{repetida}' já existe em outro portal da org (mesmo endereço); criando como '{novo_nome}'", "aviso")
         caminho = gravar_catalogo(entrada["catalogo"], pedido_id)
         renomeadas += 1
     if not simular and resultado.get("portal_id"):
@@ -2305,6 +2317,7 @@ def criar(entrada):
                              observacoes=resultado.get("observacoes") if resultado.get("status") == "concluido" else "")
     saida = {"resultado": resultado}
     if resultado.get("status") == "concluido" and banners:
+        iniciar_prazo_banner(120)
         _mobile_seguro(banners, logo, entrada.get("cliente") or "", so_se_faltar=True)
         try:
             evento("banners", "publicando as peças no portal (ainda não aplicadas)")
@@ -2753,6 +2766,19 @@ MODELOS_LAB = ("diagonal", "vitrine", "em_uso", "padrao_marca", "trio", "destaqu
 INICIO_LIVRE = {"login": 0.58, "cabecalho": 0.50}
 PINTAR_DE = {"login": 0.58, "cabecalho": 0.45}
 LAB_ATIVO = False
+PRAZO_BANNER_SEGUNDOS = 300
+_PRAZO_BANNER = {"fim": None}
+
+
+def iniciar_prazo_banner(segundos=PRAZO_BANNER_SEGUNDOS):
+    import time
+    _PRAZO_BANNER["fim"] = time.monotonic() + segundos if segundos else None
+
+
+def resta_banner():
+    import time
+    fim = _PRAZO_BANNER["fim"]
+    return float("inf") if fim is None else fim - time.monotonic()
 IMAGES_URL = ("https://dhsseifv2j3ti.cloudfront.net/legacy/public/serverFunction/"
               "b0320b4b-8957-4ce4-ad7d-afa12c6c87df/2b57e9c5-cf8e-4686-ab1a-a86b9e8eeaa8/execute")
 PALETA_WORDPRESS = {"#000000", "#FFFFFF", "#ABB8C3", "#F78DA7", "#CF2E2E", "#FF6900", "#FCB900", "#7BDCB5",
@@ -2866,9 +2892,12 @@ def _editar_imagem(foto, prompt, espera=300, lado=1024):
         buf = io.BytesIO()
         img.save(buf, "JPEG", quality=92)
         uri = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
-        limite_fila = time.time() + 480
+        limite_fila = time.time() + min(480, max(0, resta_banner() - 60))
         tentativa = 0
         while tentativa < 4:
+            if resta_banner() < 45:
+                evento("banners", "API de imagem: sem tempo no prazo do banner; desisti desta peça", "aviso")
+                return None
             if tentativa:
                 time.sleep(15 * tentativa + random.uniform(0, 10))
             res = _images_api("editar_imagem", {"prompt": prompt, "imagem": uri, "formato": "jpeg"})
@@ -2883,7 +2912,7 @@ def _editar_imagem(foto, prompt, espera=300, lado=1024):
                 dado = next((c.get("data") for c in res.get("content") or [] if c.get("type") == "image" and c.get("data")), None)
                 if dado:
                     return Image.open(io.BytesIO(base64.b64decode(dado))).convert("RGB")
-                if sc.get("status") == "processando" and sc.get("id") and time.time() - inicio <= espera:
+                if sc.get("status") == "processando" and sc.get("id") and time.time() - inicio <= min(espera, resta_banner() - 10):
                     time.sleep(max(6, min(20, float(sc.get("retryAfterSeconds") or 10))))
                     res = _images_api("consultar_imagem", {"id": sc["id"]})
                     continue
@@ -3326,9 +3355,13 @@ def _lab_do_zero(pecas, logo_arq, entrada, paleta, minimo=False, pedido=""):
     alvos = [c for c in ("login", "cabecalho") if c in pecas]
 
     def uma(chave):
-        tentativas = ([("livre", lambda: _banner_livre(chave, logo, cliente, vende, pedido, marca))] * 2 if minimo else []) + \
-                     [("guiado", lambda: _banner_guiado(chave, logo, cliente, vende, marca, cena, pedido))] * 2
+        vezes = 2 if resta_banner() == float("inf") else 1
+        tentativas = ([("livre", lambda: _banner_livre(chave, logo, cliente, vende, pedido, marca))] * vezes if minimo else []) + \
+                     [("guiado", lambda: _banner_guiado(chave, logo, cliente, vende, marca, cena, pedido))] * vezes
         for modo, gerar in tentativas:
+            if resta_banner() < 90:
+                evento("banners", f"banner do zero ({chave}): sem tempo no prazo para outra tentativa", "aviso")
+                break
             img = gerar()
             if img is None:
                 continue
@@ -3654,6 +3687,15 @@ def peca_mobile(pasta, logo=None, cliente="", so_se_faltar=False):
     login_img = Image.open(arq_login).convert("RGB") if arq_login and arq_login.exists() else None
     motivos = []
     for modo, lado in _ordem_mobile(cabecalho, login_img is not None, _borda_opaca(logo_img) is not None):
+        resta = resta_banner()
+        if modo == "ia" and resta < 150:
+            continue
+        if modo == "cena" and resta < 40:
+            continue
+        if modo == "marca" and resta < 25:
+            img = _montar_mobile(cabecalho, logo_img, marca, modo, lado, login_img)
+            evento("banners", "banner mobile: sem tempo para conferir; ficou a versão só com a marca", "aviso")
+            break
         if modo == "ia":
             img = _mobile_ia(cabecalho, cliente)
             if img is None:
