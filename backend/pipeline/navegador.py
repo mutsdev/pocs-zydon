@@ -228,7 +228,67 @@ def _baixar_logo(url, pasta):
         return None
 
 
-def explorar(site, cliente, pasta, evento, ia_barroso):
+def _ler_home_por_decisao(cliente, site, pasta, home, recortes, medidas, decidir, evidencia):
+    """Decisões tipadas apontam a logo (qual recorte), as páginas de produtos (quais links) e a cor
+    principal entre as medidas na página. Mesmo formato da resposta do chat; None se não deu."""
+    imagens = [("Captura do topo da página:", "image/jpeg",
+                base64.b64encode((pasta / "topo.jpg").read_bytes()).decode())]
+    imagens += [(f"Recorte r{c['n']}:", "image/png", base64.b64encode(Path(c["recorte"]).read_bytes()).decode())
+                for c in recortes]
+    links = home["links"][:80]
+    entrada = evidencia(f'Página inicial do site do cliente "{cliente}" ({site}), aberta num navegador: '
+                        "captura do topo e recortes numerados dos elementos do cabeçalho.", imagens)
+    perguntas = []
+    if recortes:
+        perguntas.append({"type": "choice", "name": "logo",
+                          "instructions": f'Qual recorte é a logo da empresa "{cliente}" no cabeçalho (não banner, '
+                                          "selo, ícone de rede social nem logo de parceiro)?",
+                          "choices": [{"value": f"r{c['n']}", "description": f"{c['tipo']} alt=\"{c['alt'][:40]}\" "
+                                       f"em x={c['x']} y={c['y']} {c['w']}x{c['h']}"} for c in recortes]
+                          + [{"value": "nenhum", "description": "nenhum recorte é a logo"}]})
+    if links:
+        perguntas.append({"type": "choice", "name": "produtos",
+                          "instructions": "Qual link leva ao CATÁLOGO de produtos (lista de produtos, linhas, "
+                                          "categorias de produto)? Nunca receitas, blog, notícias, institucional, "
+                                          "contato, trabalhe conosco, login ou carrinho.",
+                          "choices": [{"value": f"l{i}", "description": f"{l['texto']} -> {l['href']}"[:160]}
+                                      for i, l in enumerate(links)]
+                          + [{"value": "nenhum", "description": "nenhum link leva aos produtos"}]})
+    if len(medidas) >= 2:
+        perguntas.append({"type": "choice", "name": "cor",
+                          "instructions": "Qual destas cores medidas na página é a cor principal da marca "
+                                          "(logo, botões, cabeçalho)? Ignore branco, preto e cinza.",
+                          "choices": [{"value": c} for c in medidas[:12]]})
+    if not perguntas:
+        return None
+    respostas = decidir(entrada, perguntas, prazo=30)
+    if not respostas:
+        return None
+    resposta = {"logo": None, "paginas_produtos": [], "o_que_vende": ""}
+    escolha = str((respostas.get("logo") or {}).get("choice") or "")
+    if escolha.startswith("r"):
+        resposta["logo"] = escolha[1:]
+    opcoes = sorted((o for o in (respostas.get("produtos") or {}).get("probabilities") or [] if isinstance(o, dict)),
+                    key=lambda o: -(o.get("probability") or 0))
+    for o in opcoes:
+        valor = str(o.get("value") or "")
+        if valor.startswith("l") and (o.get("probability") or 0) >= 0.1 and len(resposta["paginas_produtos"]) < MAXIMO_PAGINAS:
+            try:
+                resposta["paginas_produtos"].append(links[int(valor[1:])]["href"])
+            except (ValueError, IndexError):
+                continue
+    cores = sorted((o for o in (respostas.get("cor") or {}).get("probabilities") or [] if isinstance(o, dict)),
+                   key=lambda o: -(o.get("probability") or 0))
+    if cores:
+        resposta["cor_principal"] = cores[0].get("value")
+    if len(cores) > 1 and (cores[1].get("probability") or 0) >= 0.1:
+        resposta["cor_apoio"] = cores[1].get("value")
+    if medidas and not cores:
+        resposta["cor_principal"] = medidas[0]
+    return resposta
+
+
+def explorar(site, cliente, pasta, evento, ia_barroso, decidir=None, evidencia=None):
     """{logo_arquivo, logo_url, cores: [#hex], paginas, candidatos, o_que_vende}."""
     import time
     pasta = Path(pasta) / "navegador"
@@ -254,8 +314,18 @@ def explorar(site, cliente, pasta, evento, ia_barroso):
         conteudo += [{"type": "text", "text": f"Recorte {c['n']}:"}, {"type": "image_url", "image_url": {"url": chave}}]
         baixadas[chave] = ("image/png", base64.b64encode(Path(c["recorte"]).read_bytes()).decode())
     t_ia = time.monotonic()
-    resposta, custo = ia_barroso([{"role": "user", "content": conteudo}], baixadas)
-    evento("navegador", f"barroso-chat leu a captura em {time.monotonic() - t_ia:.1f}s: logo = recorte "
+    medidas = list(dict.fromkeys(medidas))
+    resposta, custo, leitor = None, {}, "barroso-chat"
+    if decidir and evidencia:
+        try:
+            resposta = _ler_home_por_decisao(cliente, site, pasta, home, recortes, medidas, decidir, evidencia)
+        except Exception as erro:
+            evento("navegador", f"decisões não leram a captura ({type(erro).__name__}); usando o chat", "aviso")
+        if resposta is not None:
+            leitor = "decisões"
+    if resposta is None:
+        resposta, custo = ia_barroso([{"role": "user", "content": conteudo}], baixadas)
+    evento("navegador", f"{leitor} leu a captura em {time.monotonic() - t_ia:.1f}s: logo = recorte "
                         f"{resposta.get('logo')}, cores {resposta.get('cor_principal')} / {resposta.get('cor_apoio')}, "
                         f"páginas de produtos: {', '.join(resposta.get('paginas_produtos') or []) or 'nenhuma'}")
     saida = {"custo": custo, "o_que_vende": resposta.get("o_que_vende") or "", "cores": [], "candidatos": [],

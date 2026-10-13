@@ -1136,7 +1136,147 @@ def _segunda_opiniao(lote, cliente, resposta, custo_lote):
     return outra, soma
 
 
+DECISOES_URL = "https://keys.barroso.tec.br/v1/decisions"
+MODELO_DECISAO = "barroso-decision"
+LIMIAR_RECUSA_FOTO = 0.35
+DECISOES_FORA = {"sim": False}
+
+
+def evidencia(texto, imagens=()):
+    """Entrada das decisões: texto e imagens [(rotulo, mime, base64)] em data URL, único formato aceito."""
+    partes = [{"type": "input_text", "text": texto}]
+    for rotulo, mime, dados in imagens:
+        if rotulo:
+            partes.append({"type": "input_text", "text": rotulo})
+        partes.append({"type": "input_image", "image_url": f"data:{mime};base64,{dados}"})
+    return [{"role": "user", "content": partes}]
+
+
+def decidir(entrada, perguntas, prazo=25):
+    """Decisões tipadas do gateway Barroso (/v1/decisions): {name: resposta} ou None.
+    None quando não há chave, o gateway está fora ou alguma pergunta ficou sem resposta;
+    quem chamou segue pela fila de chat."""
+    import time
+    import requests
+    chave = os.environ.get("BARROSO_API_KEY", "").strip()
+    if not chave or DECISOES_FORA["sim"]:
+        return None
+    pedido = {"model": MODELO_DECISAO, "input": entrada, "questions": perguntas}
+    r = None
+    for tentativa in range(2):
+        try:
+            r = requests.post(DECISOES_URL, json=pedido, headers={"Authorization": "Bearer " + chave}, timeout=prazo)
+        except requests.RequestException:
+            return None
+        if r.status_code != 429 or tentativa:
+            break
+        try:
+            espera = float(r.headers.get("retry-after") or 2)
+        except ValueError:
+            espera = 2
+        time.sleep(max(0.5, min(5, espera)))
+    if r.status_code in (401, 403):
+        DECISOES_FORA["sim"] = True
+        evento("extracao", f"decisões do gateway recusadas (HTTP {r.status_code}); usando o chat até o fim deste pedido", "aviso")
+        return None
+    if r.status_code != 200:
+        return None
+    try:
+        corpo = r.json() or {}
+    except ValueError:
+        return None
+    respostas = {a.get("name"): a for a in corpo.get("answers") or [] if isinstance(a, dict)}
+    if any(q["name"] not in respostas for q in perguntas):
+        return None
+    registrar_modelo(MODELO_DECISAO + ":" + (r.headers.get("x-decisions-served-by") or "?"))
+    return respostas
+
+
+def probabilidade(resposta):
+    valor = (resposta or {}).get("probability")
+    return float(valor) if isinstance(valor, (int, float)) else None
+
+
+def opcoes_provaveis(resposta, minimo=0.0):
+    """Valores de uma pergunta choice, do mais provável ao menos, acima do mínimo."""
+    opcoes = [o for o in (resposta or {}).get("probabilities") or [] if isinstance(o, dict)]
+    opcoes.sort(key=lambda o: -(o.get("probability") or 0))
+    return [o.get("value") for o in opcoes if (o.get("probability") or 0) >= minimo]
+
+
+FOTO_O_QUE_E = [
+    {"value": "o_produto_do_nome", "description": "o mesmo tipo de item do nome (embalagem do produto vale)"},
+    {"value": "outro_produto", "description": "produto de outro tipo, sabor ou variação claramente diferente"},
+    {"value": "logo_ou_icone", "description": "logo, ícone, seta ou selo"},
+    {"value": "banner_ou_slide", "description": "banner, slide de carrossel ou arte promocional"},
+    {"value": "pessoas_ou_loja", "description": "pessoas, loja, fachada ou ambiente"},
+    {"value": "texto_sem_produto", "description": "texto ou imagem sem produto"},
+]
+
+
+def _conferir_por_decisao(c, cliente):
+    """Laudo {confere, o_que_aparece} de uma foto pelas decisões; None se não deu."""
+    imagem = _imagem_inline(c["imagem"]) if str(c.get("imagem") or "").startswith("http") else None
+    if not imagem:
+        return None
+    nome = c["nome"][:110]
+    entrada = evidencia(f'Catálogo B2B do cliente "{cliente}". Nome anunciado do produto: "{nome}". Foto anunciada:',
+                        [("", imagem[0], imagem[1])])
+    respostas = decidir(entrada, [
+        {"type": "predicate", "name": "confere",
+         "instructions": f'A foto mostra o produto "{nome}" (o mesmo tipo de item; a embalagem do produto vale)? '
+                         "Diferença de peso, tamanho, gramatura ou texto da embalagem não importa. Logo, banner, "
+                         "slide, ícone, foto de loja ou pessoas, texto sem produto, produto de outro tipo ou sabor "
+                         "claramente diferente do nome não conferem."},
+        {"type": "choice", "name": "o_que_e", "instructions": "O que a foto mostra principalmente?",
+         "choices": FOTO_O_QUE_E},
+    ])
+    if not respostas:
+        return None
+    prob = probabilidade(respostas["confere"])
+    if prob is None:
+        return None
+    o_que_e = str(respostas["o_que_e"].get("choice") or "").replace("_", " ")
+    return {"confere": prob >= LIMIAR_RECUSA_FOTO, "o_que_aparece": f"{o_que_e} (p={prob:.2f})"}
+
+
 def conferir_fotos(candidatos, cliente, por_chamada=CONFERENCIA_POR_CHAMADA, teto=None):
+    """Decisões primeiro (uma pergunta sim/não por foto, todas em paralelo); a foto que as
+    decisões não responderem segue para a conferência por chat em lotes."""
+    import time
+    aprovados, descartes = [], []
+    custo = {"custo_usd": 0.0, "tokens_entrada": 0, "tokens_saida": 0}
+    if not candidatos:
+        return aprovados, descartes, custo
+    inicio = time.monotonic()
+    prazo = TETO_CONFERENCIA if teto is None else max(10, teto)
+    laudos = [None] * len(candidatos)
+    if os.environ.get("BARROSO_API_KEY", "").strip() and not DECISOES_FORA["sim"]:
+        laudos = em_paralelo(lambda c: _conferir_por_decisao(c, cliente), candidatos,
+                             trabalhadores=12, teto=min(30, prazo))
+    sobra = []
+    for c, laudo in zip(candidatos, laudos):
+        if laudo is None:
+            sobra.append(c)
+        elif laudo["confere"]:
+            aprovados.append(dict(c, foto_conferida=True, foto_mostra=laudo["o_que_aparece"][:120]))
+        else:
+            descartes.append({"nome": c["nome"], "tipo": "foto_errada",
+                              "motivo": "a foto não mostra o produto: " + laudo["o_que_aparece"][:120]})
+    decididas = len(candidatos) - len(sobra)
+    if decididas:
+        evento("extracao", f"decisões ({MODELO_DECISAO}) conferiram {decididas} fotos em "
+                           f"{time.monotonic() - inicio:.1f}s: {len(aprovados)} aprovadas, {len(descartes)} recusadas"
+               + (f"; {len(sobra)} seguem para o chat" if sobra else ""))
+    if sobra:
+        mais_aprovados, mais_descartes, custo = _conferir_fotos_chat(
+            sobra, cliente, por_chamada=por_chamada, teto=max(10, prazo - (time.monotonic() - inicio)))
+        aprovados += mais_aprovados
+        descartes += mais_descartes
+    return aprovados, descartes, custo
+
+
+def _conferir_fotos_chat(candidatos, cliente, por_chamada=CONFERENCIA_POR_CHAMADA, teto=None):
     """(aprovados, descartes, custo). O modelo olha cada foto e diz se é o produto do nome.
     Os lotes vão ao mesmo tempo e com prazo curto: lote que não volta até o teto passa sem
     conferência (a conferência nunca inventa nem apaga em silêncio)."""

@@ -409,10 +409,49 @@ Aprove (ok=true) quando for uma marca (símbolo e/ou nome) legível em pelo meno
 Responda só JSON: {{"ok": true, "o_que_aparece": "nome Vitarella em vermelho", "motivo": ""}}"""
 
 
+LIMIAR_LOGO = 0.5
+LOGO_O_QUE_E = [
+    {"value": "logo_da_empresa", "description": "marca da empresa (símbolo e/ou nome) legível"},
+    {"value": "logo_de_outra_empresa", "description": "marca de parceiro, fornecedor ou outra empresa"},
+    {"value": "icone_generico", "description": "lupa, carrinho, menu, rede social, seta"},
+    {"value": "banner_ou_foto", "description": "banner, foto de produto ou selo"},
+    {"value": "vazia_ou_ilegivel", "description": "vazia, transparente, bloco de cor chapada, borrada ou cortada"},
+]
+
+
+def _conferir_logo_decisao(imagens, cliente, do_site):
+    """(aprovada, motivo) pelas decisões tipadas; None quando elas não responderem."""
+    if do_site:
+        pergunta = ("A imagem, tirada do cabeçalho do próprio site do cliente, é uma marca (símbolo e/ou nome) "
+                    "legível em pelo menos um dos fundos? O nome escrito pode ser outro (nome fantasia, sigla, "
+                    "razão social) e isso não reprova.")
+    else:
+        pergunta = (f'A imagem é a logo da empresa "{cliente}" (símbolo e/ou nome) legível em pelo menos um '
+                    "dos fundos, e não um banner, foto de produto, selo, ícone genérico ou logo de outra empresa?")
+    entrada = selecao.evidencia(f'Logo para o cabeçalho do portal B2B do cliente "{cliente}". '
+                                "A mesma imagem aparece sobre fundo branco e sobre fundo escuro.",
+                                [(rotulo, "image/jpeg", dados) for rotulo, dados in imagens])
+    respostas = selecao.decidir(entrada, [
+        {"type": "predicate", "name": "logo_ok", "instructions": pergunta},
+        {"type": "choice", "name": "o_que_e", "instructions": "O que a imagem mostra?", "choices": LOGO_O_QUE_E},
+    ])
+    prob = selecao.probabilidade((respostas or {}).get("logo_ok"))
+    if prob is None:
+        return None
+    o_que_e = str(respostas["o_que_e"].get("choice") or "").replace("_", " ")
+    aprovada = prob >= LIMIAR_LOGO
+    evento("extracao", f"conferência da logo por decisão: {'aprovada' if aprovada else 'REPROVADA'} · "
+                       f"{o_que_e} (p={prob:.2f})", "info" if aprovada else "aviso")
+    return aprovada, f"{o_que_e} (p={prob:.2f})"
+
+
 def conferir_logo_ia(caminho, cliente, do_site=False):
-    """(aprovada, motivo). Sem IA disponível a logo segue (a régua de pixels já passou)."""
+    """(aprovada, motivo). Decisões primeiro, chat de reserva; sem IA a logo segue (a régua de pixels já passou)."""
     imagens = [("Logo sobre fundo branco:", _jpeg_sobre(caminho, (255, 255, 255))),
                ("Logo sobre fundo escuro:", _jpeg_sobre(caminho, (40, 40, 44)))]
+    decidida = _conferir_logo_decisao(imagens, cliente or "cliente", do_site)
+    if decidida is not None:
+        return decidida
     instrucao = INSTRUCAO_CONFERIR_LOGO_DO_SITE if do_site else INSTRUCAO_CONFERIR_LOGO
     resposta, ia = _ia_visao(instrucao.format(cliente=cliente or "cliente"), imagens)
     if resposta is None:
@@ -1125,7 +1164,7 @@ def _explorar_no_navegador(entrada):
     site = selecao.normalizar_site(entrada["site"])
     try:
         nav = navegador.explorar(site, entrada.get("cliente") or "", pasta_pedido(entrada["pedido_id"]),
-                                 evento, selecao._ia_barroso)
+                                 evento, selecao._ia_barroso, selecao.decidir, selecao.evidencia)
     except Exception as erro:
         evento("navegador", f"navegador falhou ({type(erro).__name__}: {str(erro)[:200]}); "
                             "seguindo com a leitura do código da página", "aviso")
