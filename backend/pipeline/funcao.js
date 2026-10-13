@@ -220,6 +220,7 @@ async function extrair(ev, execucao) {
     site: pedido.site || '', segmento: '', foco: pedido.foco || '', variacoes: pedido.variacoes === true || pedido.variacoes === 't' || pedido.variacoes === 'true',
     executivo: pedido.executivo, automatico: pedido.automatico === true || pedido.automatico === 't' || pedido.automatico === 'true', cena_ia: await comCenaIa(pedidoId),
     barroso_tudo: (await sql(`SELECT valor FROM configuracao WHERE chave = 'busca_barroso_tudo'`, {})).some((l) => l.valor === 'sim'),
+    decisoes: !(await sql(`SELECT valor FROM configuracao WHERE chave = 'busca_decisoes'`, {})).some((l) => l.valor === 'nao'),
     preferencias: await preferenciasDoExecutivo(pedido.executivo_id),
     licoes: await licoesDasAvaliacoes(pedido.segmento).catch(() => []),
     anexo: conteudoAnexo ? { nome: pedido.anexo_nome, conteudo_base64: conteudoAnexo } : null };

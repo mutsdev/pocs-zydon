@@ -1183,6 +1183,9 @@ def extrair(entrada):
     import atendimento
     pedido_id = entrada["pedido_id"]
     observacoes = []
+    if entrada.get("decisoes") is False:
+        selecao.DECISOES_FORA["sim"] = True
+        evento("extracao", "decisões desligadas (configuração busca_decisoes = nao): leitura e conferências pelo chat")
     if entrada.get("navegador") and entrada.get("site"):
         entrada["_navegador"] = _explorar_no_navegador(entrada)
     from concurrent.futures import ThreadPoolExecutor
