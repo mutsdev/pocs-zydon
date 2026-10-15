@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { ExternalLink, PlusCircle, RefreshCw, Search, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, Copy, ExternalLink, MessageCircleQuestion, PlusCircle, RefreshCw, Search, Trash2 } from 'lucide-react'
 import { Card } from '../components/ui/Card'
 import Badge from '../components/ui/Badge'
 import Button from '../components/ui/Button'
@@ -13,7 +13,7 @@ import BarraFiltros from '../components/app/Filtros'
 import { Aviso, Esqueleto, Pagina, Vazio } from '../components/app/Pagina'
 import { useApoio } from '../hooks/useApoio'
 import { acionar, consultar, ErroApi, FILTROS_VAZIOS } from '../lib/mitra-api'
-import type { PedidoLinha } from '../lib/mitra-api'
+import type { PedidoLinha, PerguntaTelufia } from '../lib/mitra-api'
 import { dataHora, FONTE, PRECO, STATUS } from '../lib/formatos'
 import { intervalo } from '../lib/periodo'
 
@@ -34,6 +34,8 @@ export default function Pedidos() {
   const [carregando, setCarregando] = useState(false)
   const [erro, setErro] = useState<string | null>(null)
   const versao = useRef(0)
+  const [aberto, setAberto] = useState<string | null>(null)
+  const [perguntas, setPerguntas] = useState<Record<string, PerguntaTelufia[] | 'erro' | undefined>>({})
   const sentinela = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -91,6 +93,28 @@ export default function Pedidos() {
     return () => obs.disconnect()
   }, [carregar, carregando, fim, linhas])
 
+  async function alternarPerguntas(pedidoId: string) {
+    if (aberto === pedidoId) { setAberto(null); return }
+    setAberto(pedidoId)
+    if (Array.isArray(perguntas[pedidoId])) return
+    setPerguntas((atual) => ({ ...atual, [pedidoId]: undefined }))
+    try {
+      const r = await consultar<PerguntaTelufia>('pedido_perguntas', { pedido_id: pedidoId })
+      setPerguntas((atual) => ({ ...atual, [pedidoId]: r }))
+    } catch {
+      setPerguntas((atual) => ({ ...atual, [pedidoId]: 'erro' }))
+    }
+  }
+
+  async function copiarPerguntas(lista: PerguntaTelufia[]) {
+    try {
+      await navigator.clipboard.writeText(lista.map((q) => `${q.ordem}. ${q.pergunta}`).join('\n'))
+      addToast('success', 'Perguntas copiadas.')
+    } catch {
+      addToast('error', 'Não foi possível copiar as perguntas.')
+    }
+  }
+
   async function confirmarExclusao() {
     if (!apagar) return
     setApagando(true)
@@ -144,12 +168,19 @@ export default function Pedidos() {
               </thead>
               <tbody>
                 {linhas.map((p) => (
-                  <tr key={p.pedido_id} className="cursor-pointer transition-colors hover:bg-[var(--color-nav-hover)]"
+                  <Fragment key={p.pedido_id}>
+                  <tr className="cursor-pointer transition-colors hover:bg-[var(--color-nav-hover)]"
                     style={{ borderTop: '1px solid var(--color-border)' }} onClick={() => navegar(`/pedidos/${p.pedido_id}`)}>
                     <td className="px-3 py-3">
                       <div className="leading-tight">
                         <div className="font-medium" style={{ color: 'var(--color-text)' }}>{p.cliente}</div>
                         <div className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>{p.pedido_id} · {dataHora(p.criado_em)}</div>
+                        <button type="button" aria-expanded={aberto === p.pedido_id}
+                          onClick={(e) => { e.stopPropagation(); alternarPerguntas(p.pedido_id) }}
+                          className="mt-1 inline-flex items-center gap-1 text-sm cursor-pointer rounded-md hover:underline"
+                          style={{ color: 'var(--color-primary-text)' }}>
+                          {aberto === p.pedido_id ? <ChevronDown size={14} /> : <ChevronRight size={14} />} Perguntas para a Telufia
+                        </button>
                       </div>
                     </td>
                     <td className="px-3 py-3 whitespace-nowrap">{p.executivo}</td>
@@ -186,6 +217,14 @@ export default function Pedidos() {
                       </td>
                     )}
                   </tr>
+                  {aberto === p.pedido_id && (
+                    <tr style={{ background: 'var(--color-surface-alt, var(--color-nav-hover))' }}>
+                      <td colSpan={admin ? 8 : 7} className="px-3 py-3">
+                        <ListaPerguntas estado={perguntas[p.pedido_id]} copiar={copiarPerguntas} />
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
@@ -195,5 +234,36 @@ export default function Pedidos() {
         )}
       </Card>
     </Pagina>
+  )
+}
+
+function ListaPerguntas({ estado, copiar }: { estado: PerguntaTelufia[] | 'erro' | undefined; copiar: (lista: PerguntaTelufia[]) => void }) {
+  const secundario = { color: 'var(--color-text-secondary)' }
+  if (estado === undefined) return <div className="text-sm" style={secundario}>Carregando perguntas…</div>
+  if (estado === 'erro') return <div className="text-sm" style={{ color: 'var(--color-danger)' }}>Não foi possível carregar as perguntas.</div>
+  if (estado.length === 0) return <div className="text-sm" style={secundario}>Este pedido ainda não tem perguntas geradas.</div>
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <MessageCircleQuestion size={16} style={{ color: 'var(--color-primary-text)' }} />
+        <span className="font-medium" style={{ color: 'var(--color-text)' }}>{estado.length} perguntas para fazer à Telufia</span>
+        <Button variant="secondary" className="ml-auto" onClick={() => copiar(estado)}><Copy size={16} /> Copiar</Button>
+      </div>
+      <ol className="flex flex-col gap-3">
+        {estado.map((q) => (
+          <li key={q.ordem} className="flex gap-2">
+            <span className="tabular-nums font-medium" style={secundario}>{q.ordem}.</span>
+            <div className="leading-tight flex flex-col gap-1">
+              <div style={{ color: 'var(--color-text)' }}>{q.pergunta}</div>
+              {q.objetivo && <div className="text-sm" style={secundario}>Objetivo: {q.objetivo}</div>}
+              <div className="flex flex-wrap gap-2">
+                {q.dor && <Badge variant="warning">{q.dor}</Badge>}
+                {q.produto && <Badge variant="info">{q.produto}</Badge>}
+              </div>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </div>
   )
 }

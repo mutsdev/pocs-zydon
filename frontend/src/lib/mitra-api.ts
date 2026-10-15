@@ -110,6 +110,10 @@ export interface PedidoLinha {
   execucao_acao: string | null; em_execucao: boolean
 }
 
+export interface PerguntaTelufia {
+  ordem: number; pergunta: string; objetivo: string | null; dor: string | null; produto: string | null
+}
+
 export interface Pedido extends PedidoLinha {
   executivo_id: number; commit_codigo: string; categorias: number | null; logo_url: string | null
   catalogo: string | null; resumo: string | null; portal_id: string | null; banner_cor: string | null

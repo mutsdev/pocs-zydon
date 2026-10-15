@@ -22,6 +22,7 @@ export const SF = {
   pedido_eventos: '09b33f93-24f3-4886-a981-39d563ad43ee',
   pedido_excluir: '4923e2fd-136e-4b63-8b63-9b8d8dddaa75',
   pedido_ler: '8bbd20ec-6cab-4df9-b435-41ee125d6794',
+  pedido_perguntas: '9b26405b-1716-47f4-a01f-bd611c21f638',
   pedido_pecas: 'cc655493-6be9-4aeb-9a88-c760182f5c9a',
   pedidos_listar: '82a7ceb8-6096-4f2c-be44-e1bf8f7fce3f',
   relatorio_pocs: '1f40e96c-252d-48cc-8e30-bedc3569ab56',
