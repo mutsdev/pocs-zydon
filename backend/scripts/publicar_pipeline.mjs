@@ -12,7 +12,7 @@ execFileSync('python3', [`${backend}scripts/checar_pipeline.py`], { stdio: 'inhe
 const code = execFileSync('node', [`${backend}pipeline/montar_funcao.mjs`], { encoding: 'utf-8', maxBuffer: 1 << 26 });
 const { getMitra } = await import('../mitra.js');
 const mitra = await getMitra();
-const secrets = ['ZYDON_POCS_CODE', 'ZYDON_POCS_TOKEN', 'CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_TOKEN', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'NVIDIA_API_KEY', 'BARROSO_API_KEY', 'IMAGES_API_KEY'];
+const secrets = ['ZYDON_POCS_CODE', 'ZYDON_POCS_TOKEN', 'CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_TOKEN', 'NVIDIA_API_KEY', 'BARROSO_API_KEY', 'IMAGES_API_KEY'];
 const lista = await mitra.functionsAdmin.list({ size: 100 });
 const existente = (lista.content || lista.items || []).find((f) => f.name === 'pipeline_poc');
 const descricao = 'Pipeline das POCs em segundo plano (extrair, previa, criar, banner, avaliar). Repositório zydon-criar-pocs fixado em 7b3d073.';
