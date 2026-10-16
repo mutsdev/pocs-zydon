@@ -331,7 +331,7 @@ async function comNavegador() {
 }
 
 async function comCenaIa() {
-  return false;
+  return true;
 }
 
 async function previa(ev, execucao) {
